@@ -13,7 +13,11 @@
     "worker:chase": "JOBS=chase npm run worker",
     "worker:enrich": "JOBS=enrich_agent npm run worker",
     "worker:bofa": "JOBS=bofa npm run worker",
-    "run-all": "npm run api & npm run worker"
+    "run-all": "npm run api & npm run worker",
+    "render-build": "echo 'Skipping build step for Render API service'",
+    "render-start": "npm run start",
+    "start:prod": "AUTOMATION_WORKER=0 node server.js",
+    "worker:prod": "AUTOMATION_WORKER=1 node server.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -48,6 +52,7 @@
   "devDependencies": {
     "nodemon": "^3.1.10"
   },
+  "packageManager": "npm@10",
   "overrides": {
     "puppeteer-core": "24.11.2"
   },

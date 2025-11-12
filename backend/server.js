@@ -159,6 +159,8 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 const envOrigins = [
+  process.env.CORS_ORIGIN,
+  ...(process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : []),
   process.env.FRONTEND_URL,
   ...(process.env.FRONTEND_URLS ? process.env.FRONTEND_URLS.split(',') : []),
 ]
@@ -168,12 +170,11 @@ const envOrigins = [
 const whitelist = [
   ...envOrigins,                               // env-based (single or comma-separated)
   'https://deal-finder-six-green.vercel.app', // your prod Vercel domain
-  /\.vercel\.app$/,                           // allow preview deploys
+  /\.vercel\.app$/,                           // allow preview deploys (any *.vercel.app)
+  /.onrender\.com$/,                          // render domains (api + previews)
   'http://localhost:3000',                    // local dev
-  /.vercel\.app$/,                           // allow preview deploys
-  /.onrender\.com$/,                         // render domains (api + previews)
-  /^http:\/\/localhost:\d+$/,               // any localhost port
-  /^http:\/\/127\.0\.0\.1:\d+$/,          // loopback variants
+  /^http:\/\/localhost:\d+$/,                 // any localhost port
+  /^http:\/\/127\.0\.0\.1:\d+$/,              // loopback variants
 ];
 
 const corsOptions = {
@@ -218,6 +219,11 @@ app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 // Simple health check (no DB dependency to be fast)
 app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
+// Root health for platforms that probe "/"
+app.get('/', (_req, res) => {
+  res.status(200).json({ ok: true, service: 'deal-finder-api', ts: Date.now() });
+});
+
 const apiRoutes = express.Router();
 
 // Mount sub-routers on apiRoutes FIRST (clear grouping)
@@ -241,7 +247,7 @@ app.use('/api/dashboard', dashboardRoutes);
 if (!IS_WORKER) {
   const start = async (boundPort) => {
     httpServer = app
-      .listen(boundPort, async () => {
+      .listen(boundPort, '0.0.0.0', async () => {
         L.start('Booting API server', { port: boundPort });
 
         try {
