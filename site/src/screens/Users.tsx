@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Box, Button, Container, Dialog, DialogActions, DialogContent, DialogTitle,
   TextField, Typography, Chip, IconButton, Table, TableHead, TableRow, TableCell,
@@ -165,7 +165,6 @@ export default function Users(): JSX.Element {
     await load();
   };
 
-  const stateOptions = useMemo(() => STATES.map(s => ({ code: s.code, name: s.name })), []);
 
   return (
     <Container sx={{ mt: 4 }}>

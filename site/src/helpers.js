@@ -291,7 +291,7 @@ export async function deleteUser(id) {
 }
 
 // Convenience export bundle (optional)
-export default {
+const helpers = {
   apiFetch,
   getToken,
   setToken,
@@ -314,3 +314,5 @@ export default {
   cancelOtpRequest,
   getOtpState,
 };
+
+export default helpers;

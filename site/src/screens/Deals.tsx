@@ -8,8 +8,6 @@ import {
   FormControl, InputLabel, Select, MenuItem, Checkbox, ListItemText
 } from '@mui/material';
 
-import IconButton from '@mui/material/IconButton';
-import SendIcon from '@mui/icons-material/Send';
 
 const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const onlyDigits = (s: string) => (s || '').replace(/\D+/g, '');
@@ -384,10 +382,6 @@ console.debug('[Deals:onSaveAgentOnly] fallback UI values', { finalName, finalPh
   } as const;
   const tfLabelProps = { shrink: true } as const;
 
-  const parseMoney = (v: any): number | null => {
-    return toNum(v);
-  };
-
   const getLP = (r: any): number | null => {
     // Accept more backend aliases for listing price
     const direct = pickFirstNumber(
@@ -650,7 +644,7 @@ console.debug('[Deals:onSaveAgentOnly] fallback UI values', { finalName, finalPh
     };
     const id = window.setInterval(tick, REFRESH_MS);
     return () => window.clearInterval(id);
-  }, [loadDeals, loadSummary]);
+  }, [loadDeals, loadSummary, REFRESH_MS]);
 
   // refresh once when window regains focus
   useEffect(() => {
@@ -1005,8 +999,8 @@ console.debug('[Deals:onSaveAgentOnly] fallback UI values', { finalName, finalPh
                     amv40Display,
                     amv30Display
                   });
-                } catch (e) {
-                  // ignore
+                } catch {
+                  /* ignore */
                 }
               }
 
