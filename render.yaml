@@ -37,9 +37,7 @@ envVarGroups:
 
       # ===== CORE =====
       - key: MONGO_URI
-        value: mongodb+srv://mioymapp_db_user:sUdtApk9gnylGAV7@cluster0.ldjcoor.mongodb.net/deal_finder?retryWrites=true&w=majority
       - key: JWT_SECRET
-        value: supersecretkey123!@#
       - key: AUTOMATION_LOCK_FILE
         value: /tmp/automation.worker.lock
       - key: NODE_OPTIONS
@@ -47,9 +45,7 @@ envVarGroups:
 
       # ===== PRIVY =====
       - key: PRIVY_EMAIL
-        value: Kimberly@mioym.com
       - key: PRIVY_PASSWORD
-        value: Mioym@2900#
       - key: PRIVY_HEADLESS
         value: "true"
       - key: PRIVY_MAX_TABS
@@ -131,9 +127,7 @@ envVarGroups:
       - key: DECODO_COUNTRY
         value: us
       - key: DECODO_USER
-        value: spsty1qtz2
       - key: DECODO_PASS
-        value: czwI_rZ3p2npZ76nvH
       - key: PROXY_FORCE_PAID_ONLY
         value: on
       - key: PROXY_WARM_MIN_HEALTHY
@@ -159,9 +153,7 @@ envVarGroups:
 
       # (Optional lists)
       - key: PAID_PROXIES
-        value: gate.decodo.com:10011:user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH,gate.decodo.com:10012:user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH,gate.decodo.com:10013:user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH,gate.decodo.com:10014:user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH,gate.decodo.com:10015:user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH,gate.decodo.com:10016:user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH,gate.decodo.com:10017:user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH,gate.decodo.com:10018:user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH,gate.decodo.com:10019:user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH,gate.decodo.com:10020:user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH
       - key: DECODO_PROXY_URL
-        value: http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@gate.decodo.com:10011
 
       # ===== BOFA =====
       - key: BOFA_USE_PAID
@@ -262,7 +254,6 @@ envVarGroups:
       #   value: "1" # optional
 
       - key: PAID_PROXIES_BOFA
-        value: http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10001,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10002,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10003,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10004,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10005,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10006,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10007,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10008,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10009,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10010,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10011,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10012,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10013,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10014,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10015,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10016,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10017,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10018,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10019,http://user-spsty1qtz2-sessionduration-30:czwI_rZ3p2npZ76nvH@us.decodo.com:10020
 
       # ===== FRONTEND / EMAIL =====
       - key: PUBLIC_BASE_URL
@@ -274,11 +265,8 @@ envVarGroups:
       - key: SMTP_SECURE
         value: "false"
       - key: SMTP_USER
-        value: apikey
       - key: SMTP_PASS
-        value: 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
       - key: SMTP_FROM
-        value: "MIOYM <mcox@mioym.com>"
       - key: EMAIL_DRY_RUN
         value: "0"
 
@@ -286,11 +274,8 @@ envVarGroups:
       - key: SEARCH_PROVIDER
         value: none
       - key: SERPAPI_API_KEY
-        value: 3c26b14eaa6fcf2e0f531a83e9addc88a6aff66260bcef0143634aeab0654b1a
       - key: GOOGLE_MAPS_API_KEY
-        value: AIzaSyBztQ8hJ8nt9HfMZhzRe6bMkVdiYqhtrH4
       - key: OPENAI_API_KEY
-        value: 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
       - key: ENRICH_AGENT_MODE
         value: openai
       - key: ENRICH_AGENT_CONCURRENCY
@@ -302,9 +287,7 @@ envVarGroups:
 
       # ===== ADMIN / BOOTSTRAP =====
       - key: MASTER_ADMIN_EMAIL
-        value: mcox@mioym.com
       - key: MASTER_ADMIN_PASSWORD
-        value: Mioym@2900
       - key: MASTER_ADMIN_USER_ID
         value: admin-root
       - key: MASTER_ADMIN_NAME
@@ -349,7 +332,6 @@ envVarGroups:
         value: current_listings
 
       - key: CRAWLBASE_TOKEN
-        value: 35t8NdZ5AxVCBwQjNOjvvA
       - key: SCRAPE_MODE
         value: sitemap
       - key: CONCURRENCY
@@ -387,7 +369,6 @@ envVarGroups:
 
       # ===== GEMINI =====
       - key: GEMINI_API_KEY
-        value: AIzaSyD_7tdFB5s6exwqgW_eiieRvOu-t4aAx2I
       - key: GEMINI_MODEL
         value: gemini-1.5-flash
 
@@ -397,9 +378,7 @@ envVarGroups:
       - key: PROXY_PORT
         value: "8080"
       - key: PROXY_USERNAME
-        value: user-spsty1qtz2-sessionduration-30
       - key: PROXY_PASSWORD
-        value: your_password
 
       # ===== MOVOTO/ZILLOW PRICE SYNC =====
       - key: MOVOTO_ENABLED
@@ -411,9 +390,7 @@ envVarGroups:
       - key: PRICE_SYNC_PROXY_GATEWAY
         value: gate.decodo.com
       - key: PRICE_SYNC_PROXY_USER
-        value: user-spsty1qtz2-sessionduration-30
       - key: PRICE_SYNC_PROXY_PASS
-        value: czwI_rZ3p2npZ76nvH
       - key: PRICE_SYNC_PROXY_PORTS
         value: 10011,10012,10013,10014,10015,10016,10017,10018,10019,10020
       - key: PRICE_SYNC_CONCURRENT_LIMIT
@@ -431,7 +408,6 @@ envVarGroups:
       - key: PRICE_SYNC_NAV_TIMEOUT_MS
         value: "90000"
       - key: DECODO_API_KEY
-        value: VTAwMDAzMjA2OTE6UFdfMTg1YzVmMTQ5ZDUxZjNlMmNjMzVmOThkYjNiMDdkNTQw
       - key: PRICE_SYNC_BATCH_SIZE
         value: "10"
       - key: PRICE_SYNC_DELAY_MIN_MS
