@@ -330,13 +330,13 @@ async function clickAny(page, selectorsOrXPaths) {
   const frames = [page, ...page.frames()];
   for (const f of frames) {
     for (const s of selectorsOrXPaths.filter(x => !x.startsWith('//'))) {
-      try { const el = await f.$(s); if (el) { await el.click({ delay: 50 }); return true; } } catch {}
+      try { const el = await f.$(s); if (el) { await el.click({ delay: 50 }); return s; } } catch {}
     }
     for (const xp of selectorsOrXPaths.filter(x => x.startsWith('//'))) {
-      try { const els = await f.$x(xp); if (els && els[0]) { await els[0].click({ delay: 50 }); return true; } } catch {}
+      try { const els = await f.$x(xp); if (els && els[0]) { await els[0].click({ delay: 50 }); return xp; } } catch {}
     }
   }
-  return false;
+  return null;
 }
 
 // Click any button or anchor whose text contains one of the provided phrases (case-insensitive)
@@ -633,13 +633,92 @@ export async function loginToPrivy(page) {
 
         await randomWait(500, 800);
 
+        // Check for CAPTCHA before attempting to submit
+        const captchaDetected = await page.evaluate(() => {
+          // Check for reCAPTCHA
+          if (document.querySelector('iframe[src*="recaptcha"]')) return 'reCAPTCHA iframe';
+          if (document.querySelector('.g-recaptcha')) return 'reCAPTCHA widget';
+          if (document.querySelector('[data-sitekey]')) return 'reCAPTCHA sitekey';
+          // Check for hCaptcha
+          if (document.querySelector('iframe[src*="hcaptcha"]')) return 'hCaptcha iframe';
+          if (document.querySelector('.h-captcha')) return 'hCaptcha widget';
+          // Check for Cloudflare Turnstile
+          if (document.querySelector('iframe[src*="turnstile"]')) return 'Cloudflare Turnstile';
+          if (document.querySelector('.cf-turnstile')) return 'Cloudflare Turnstile widget';
+          // Check for generic CAPTCHA elements
+          if (document.querySelector('[class*="captcha" i]')) return 'Generic CAPTCHA class';
+          if (document.querySelector('[id*="captcha" i]')) return 'Generic CAPTCHA id';
+          return null;
+        });
+
+        if (captchaDetected) {
+          L.error('CAPTCHA detected on login page - automated login blocked', { type: captchaDetected });
+          try {
+            await page.screenshot({ path: `/var/data/privy-captcha-${Date.now()}.png`, fullPage: true });
+            L.info('CAPTCHA screenshot saved');
+          } catch (ssErr) {
+            L.warn('Failed to save CAPTCHA screenshot', { error: ssErr?.message });
+          }
+        }
+
         // Submit the form
         const submitted = await clickAny(page, SUBMIT_SELECTORS);
+        L.info('Submit button click result', { clicked: !!submitted, usedSelector: submitted || 'none' });
         if (!submitted) {
+          L.warn('No submit button found, pressing Enter key as fallback');
           await page.keyboard.press('Enter');
         }
         L.info('Form submitted');
+
+        // Wait a moment and check if URL changed immediately (indicates form worked)
+        await randomWait(2000, 3000);
+        const urlAfterSubmit = page.url();
+        L.info('URL immediately after submit', { url: urlAfterSubmit, stillOnSignIn: /sign_in/i.test(urlAfterSubmit) });
         await randomWait(1000, 2000);
+
+        // Check for login error messages displayed on the page
+        const loginError = await page.evaluate(() => {
+          const errorSelectors = [
+            '.alert-danger', '.alert-error', '.error-message', '.flash-error',
+            '.invalid-feedback', '.form-error', '.login-error', '[data-error]',
+            '.notice--error', '.field_with_errors', '.error', '.errors',
+            '[role="alert"]', '.alert:not(.alert-success):not(.alert-info)'
+          ];
+          for (const sel of errorSelectors) {
+            const el = document.querySelector(sel);
+            if (el && el.textContent.trim()) {
+              const text = el.textContent.trim();
+              // Filter out non-error content
+              if (text.length > 0 && text.length < 500) return text;
+            }
+          }
+          // Also check for common error text patterns
+          const bodyText = document.body?.innerText || '';
+          const errorPatterns = [
+            /invalid (email|password|credentials)/i,
+            /incorrect (email|password)/i,
+            /wrong (email|password)/i,
+            /authentication failed/i,
+            /login failed/i,
+            /account (locked|disabled|suspended)/i,
+            /too many (attempts|tries)/i
+          ];
+          for (const pattern of errorPatterns) {
+            const match = bodyText.match(pattern);
+            if (match) return match[0];
+          }
+          return null;
+        });
+
+        if (loginError) {
+          L.error('Login error detected on page', { error: loginError });
+          try {
+            await page.screenshot({ path: `/var/data/privy-login-error-${Date.now()}.png`, fullPage: true });
+            L.info('Screenshot saved for login error');
+          } catch (ssErr) {
+            L.warn('Failed to save login error screenshot', { error: ssErr?.message });
+          }
+        }
       }
 
       // Post-submit: wait for dashboard, OTP markers, or sessions/* interstitials
@@ -651,6 +730,22 @@ export async function loginToPrivy(page) {
         ]);
       } catch (e) {
         L.warn('Post-submit wait did not resolve to dashboard or OTP in time', { error: e?.message || String(e) });
+        // Capture screenshot for debugging when login times out
+        const timeoutUrl = page.url();
+        if (/\/users\/sign_in/i.test(timeoutUrl)) {
+          L.error('Still on sign_in page after 60s timeout - login likely failed', { url: timeoutUrl });
+          try {
+            await page.screenshot({ path: `/var/data/privy-login-timeout-${Date.now()}.png`, fullPage: true });
+            L.info('Timeout screenshot saved for debugging');
+          } catch (ssErr) {
+            L.warn('Failed to save timeout screenshot', { error: ssErr?.message });
+          }
+          // Capture page HTML for debugging
+          try {
+            const pageContent = await page.evaluate(() => document.body?.innerHTML?.substring(0, 5000) || '');
+            L.debug('Page content snippet at timeout', { html: pageContent.substring(0, 1000) });
+          } catch {}
+        }
       }
     }
 
