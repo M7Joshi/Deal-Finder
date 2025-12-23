@@ -1,0 +1,1422 @@
+// Live scraping endpoint - fetches addresses directly from Privy.pro
+// NO DATABASE - just returns raw scraped data for validation
+
+import express from 'express';
+import { requireAuth } from '../middleware/authMiddleware.js';
+import { log } from '../utils/logger.js';
+import PrivyBot from '../vendors/privy/privyBot.js';
+import * as sessionStore from '../vendors/privy/auth/sessionStore.js';
+import {
+  propertyListContainerSelector,
+  propertyContentSelector,
+  addressLine1Selector,
+  addressLine2Selector,
+  priceSelector,
+  propertyStatsSelector,
+} from '../vendors/privy/config/selection.js';
+
+const router = express.Router();
+const L = log.child('live-scrape');
+
+// Singleton PrivyBot instance to maintain session across requests
+let sharedPrivyBot = null;
+let botInitializing = false;
+
+/**
+ * Generate mock properties for testing when Redfin API fails
+ */
+/**
+ * Generate mock properties WITH hardcoded filters applied:
+ * - Price: $50K - $500K
+ * - Beds: 3+
+ * - Sqft: 1000+
+ * - Home Type: House (Single Family)
+ * - No HOA
+ */
+function generateMockProperties(stateCode, stateName, limit = 10, cityFilter = '') {
+  const cities = {
+    'NJ': ['Newark', 'Jersey City', 'Paterson', 'Elizabeth', 'Edison', 'Woodbridge'],
+    'NC': ['Charlotte', 'Raleigh', 'Greensboro', 'Durham', 'Winston-Salem', 'Fayetteville'],
+    'CA': ['Los Angeles', 'San Diego', 'San Jose', 'San Francisco', 'Fresno', 'Sacramento'],
+    'TX': ['Houston', 'San Antonio', 'Dallas', 'Austin', 'Fort Worth', 'El Paso'],
+    'FL': ['Jacksonville', 'Miami', 'Tampa', 'Orlando', 'St. Petersburg', 'Hialeah'],
+    'NY': ['New York', 'Buffalo', 'Rochester', 'Yonkers', 'Syracuse', 'Albany']
+  };
+
+  const streets = ['Main St', 'Oak Ave', 'Maple Dr', 'Pine Rd', 'Cedar Ln', 'Elm St', 'Park Ave', 'Lake Dr', 'Hill St', 'Valley Rd'];
+  const stateCities = cities[stateCode] || ['Downtown', 'Midtown', 'Uptown', 'Westside', 'Eastside', 'Northside'];
+
+  const properties = [];
+  for (let i = 0; i < limit; i++) {
+    const streetNum = 100 + Math.floor(Math.random() * 9900);
+    const street = streets[i % streets.length];
+    // Use cityFilter if provided, otherwise random city from state
+    const city = cityFilter || stateCities[Math.floor(Math.random() * stateCities.length)];
+    const zip = 10000 + Math.floor(Math.random() * 89999);
+
+    // APPLY FILTERS:
+    // Price: $50K - $500K
+    const price = 50000 + Math.floor(Math.random() * 450000);
+    // Beds: 3+ (3, 4, or 5)
+    const beds = 3 + Math.floor(Math.random() * 3);
+    // Baths: Any
+    const baths = 1 + Math.floor(Math.random() * 3) + (Math.random() > 0.5 ? 0.5 : 0);
+    // Sqft: 1000+
+    const sqft = 1000 + Math.floor(Math.random() * 2000);
+
+    properties.push({
+      fullAddress: `${streetNum} ${street}, ${city}, ${stateCode} ${zip}`,
+      vendor: 'redfin',
+      extractedAt: new Date().toISOString(),
+      sourceIndex: i,
+      url: `https://www.redfin.com/${stateCode.toLowerCase()}/${city.toLowerCase().replace(/\s+/g, '-')}/mock-property-${i}`,
+      state: stateCode,
+      city: city,
+      price: price,
+      priceText: `$${price.toLocaleString()}`,
+      beds: beds,
+      bedsText: `${beds} bed${beds !== 1 ? 's' : ''}`,
+      baths: baths,
+      bathsText: `${baths} bath${baths !== 1 ? 's' : ''}`,
+      sqft: sqft,
+      sqftText: `${sqft.toLocaleString()} sqft`,
+      // Home Type: House only
+      propertyType: 'Single Family',
+      // No HOA
+      hoa: 'No',
+      hoaText: 'No HOA',
+      listingId: `MOCK${Date.now()}${i}`,
+      mlsId: `MLS${Math.floor(Math.random() * 1000000)}`,
+      yearBuilt: 1950 + Math.floor(Math.random() * 74),
+      daysOnMarket: Math.floor(Math.random() * 90),
+      status: 'active',
+      latitude: 35 + Math.random() * 10,
+      longitude: -120 + Math.random() * 30
+    });
+  }
+
+  return properties;
+}
+
+// Default cities per state for Privy searches (matches Redfin's city list)
+const PRIVY_STATE_CITIES = {
+  'AL': ['Birmingham', 'Huntsville', 'Montgomery', 'Mobile'],
+  'AK': ['Anchorage', 'Fairbanks', 'Juneau'],
+  'AZ': ['Phoenix', 'Tucson', 'Mesa', 'Scottsdale'],
+  'AR': ['Little Rock', 'Fort Smith', 'Fayetteville'],
+  'CA': ['Los Angeles', 'San Diego', 'San Jose', 'San Francisco', 'Fresno'],
+  'CO': ['Denver', 'Colorado Springs', 'Aurora', 'Fort Collins'],
+  'CT': ['Hartford', 'New Haven', 'Stamford', 'Bridgeport'],
+  'DE': ['Wilmington', 'Dover', 'Newark'],
+  'FL': ['Miami', 'Orlando', 'Tampa', 'Jacksonville', 'Fort Lauderdale'],
+  'GA': ['Atlanta', 'Savannah', 'Augusta', 'Columbus'],
+  'HI': ['Honolulu'],
+  'ID': ['Boise', 'Meridian', 'Nampa'],
+  'IL': ['Chicago', 'Aurora', 'Naperville', 'Rockford'],
+  'IN': ['Indianapolis', 'Fort Wayne', 'Evansville', 'South Bend'],
+  'IA': ['Des Moines', 'Cedar Rapids', 'Davenport'],
+  'KS': ['Wichita', 'Overland Park', 'Kansas City', 'Topeka'],
+  'KY': ['Louisville', 'Lexington', 'Bowling Green'],
+  'LA': ['New Orleans', 'Baton Rouge', 'Shreveport'],
+  'ME': ['Portland', 'Lewiston', 'Bangor'],
+  'MD': ['Baltimore', 'Columbia', 'Germantown', 'Silver Spring'],
+  'MA': ['Boston', 'Worcester', 'Springfield', 'Cambridge'],
+  'MI': ['Detroit', 'Grand Rapids', 'Warren', 'Ann Arbor'],
+  'MN': ['Minneapolis', 'Saint Paul', 'Rochester', 'Duluth'],
+  'MS': ['Jackson', 'Gulfport', 'Hattiesburg'],
+  'MO': ['Kansas City', 'Saint Louis', 'Springfield', 'Columbia'],
+  'MT': ['Billings', 'Missoula', 'Great Falls'],
+  'NE': ['Omaha', 'Lincoln', 'Bellevue'],
+  'NV': ['Las Vegas', 'Henderson', 'Reno', 'North Las Vegas'],
+  'NH': ['Manchester', 'Nashua', 'Concord'],
+  'NJ': ['Newark', 'Jersey City', 'Paterson', 'Elizabeth', 'Trenton'],
+  'NM': ['Albuquerque', 'Las Cruces', 'Rio Rancho', 'Santa Fe'],
+  'NY': ['New York', 'Buffalo', 'Rochester', 'Syracuse', 'Albany'],
+  'NC': ['Charlotte', 'Raleigh', 'Greensboro', 'Durham', 'Winston-Salem', 'Fayetteville'],
+  'ND': ['Fargo', 'Bismarck', 'Grand Forks'],
+  'OH': ['Columbus', 'Cleveland', 'Cincinnati', 'Toledo', 'Akron'],
+  'OK': ['Oklahoma City', 'Tulsa', 'Norman', 'Broken Arrow'],
+  'OR': ['Portland', 'Salem', 'Eugene', 'Gresham'],
+  'PA': ['Philadelphia', 'Pittsburgh', 'Allentown', 'Reading'],
+  'RI': ['Providence', 'Warwick', 'Cranston'],
+  'SC': ['Charleston', 'Columbia', 'Greenville', 'Myrtle Beach'],
+  'SD': ['Sioux Falls', 'Rapid City'],
+  'TN': ['Nashville', 'Memphis', 'Knoxville', 'Chattanooga'],
+  'TX': ['Houston', 'San Antonio', 'Dallas', 'Austin', 'Fort Worth', 'El Paso'],
+  'UT': ['Salt Lake City', 'West Valley City', 'Provo', 'Ogden'],
+  'VT': ['Burlington', 'South Burlington'],
+  'VA': ['Virginia Beach', 'Norfolk', 'Chesapeake', 'Richmond', 'Arlington'],
+  'WA': ['Seattle', 'Spokane', 'Tacoma', 'Vancouver', 'Bellevue'],
+  'WV': ['Charleston', 'Huntington', 'Morgantown'],
+  'WI': ['Milwaukee', 'Madison', 'Green Bay', 'Kenosha'],
+  'WY': ['Cheyenne', 'Casper', 'Laramie']
+};
+
+// Build Privy URL for a city (using the same format as cities-to-urls.js - CITY LEVEL)
+function buildPrivyUrl(city, stateCode) {
+  const base = 'https://app.privy.pro/dashboard';
+  const params = new URLSearchParams({
+    search_text: `${city}, ${stateCode}`,
+    location_type: 'city',
+    project_type: 'buy_hold',
+    spread_type: 'arv',
+    spread: '50',
+    list_price_from: '20000',
+    list_price_to: '600000',
+    beds_from: '3',
+    sqft_from: '1000',
+    hoa: 'no',
+    include_detached: 'true',
+    include_active: 'true',
+    date_range: 'all',
+    source: 'Any',
+    sort_by: 'days-on-market',
+    sort_dir: 'asc'
+  });
+  return `${base}?${params.toString()}`;
+}
+
+/**
+ * GET /api/live-scrape/privy
+ *
+ * Scrapes addresses LIVE from Privy.pro using CITY-level search
+ * Uses the same URL format as the working v1 scraper
+ *
+ * Query params:
+ *   - state: State code (e.g., CA, NY) - REQUIRED
+ *   - city: City name (optional - defaults to largest city in state)
+ *   - limit: Max total addresses to return (default: 100)
+ */
+router.get('/privy', requireAuth, async (req, res) => {
+  try {
+    const { state, city = '', limit = 100 } = req.query;
+
+    if (!state) {
+      return res.status(400).json({ ok: false, error: 'State parameter is required (e.g., state=NJ)' });
+    }
+
+    const stateUpper = state.toUpperCase();
+
+    // Get city - use provided city or default to first city in state
+    const stateCities = PRIVY_STATE_CITIES[stateUpper] || [];
+    const cityToUse = city.trim() || stateCities[0] || '';
+
+    if (!cityToUse) {
+      return res.status(400).json({ ok: false, error: `No default city for state ${stateUpper}. Please provide a city parameter.` });
+    }
+
+    L.info('Starting live Privy scrape', { state: stateUpper, city: cityToUse, limit });
+
+    // Build city-level URL with filters (same format as v1 scraper)
+    const privyUrl = buildPrivyUrl(cityToUse, stateUpper);
+
+    // Use shared bot instance to maintain session
+    if (!sharedPrivyBot && !botInitializing) {
+      botInitializing = true;
+      L.info('Creating new PrivyBot instance...');
+      sharedPrivyBot = new PrivyBot();
+      await sharedPrivyBot.init();
+
+      const hasFreshSession = sessionStore.hasFreshPrivySession(24 * 60 * 60 * 1000);
+      if (hasFreshSession) {
+        L.info('Found fresh session, checking validity...');
+        try {
+          await sharedPrivyBot.page.goto('https://app.privy.pro/dashboard', {
+            waitUntil: 'networkidle2',
+            timeout: 60000
+          });
+          const currentUrl = sharedPrivyBot.page.url();
+          if (currentUrl.includes('sign_in')) {
+            L.info('Session expired, need to login again');
+            await sharedPrivyBot.login();
+          } else {
+            L.info('Session is still valid!');
+          }
+        } catch (navErr) {
+          L.warn('Navigation failed, attempting full login', { error: navErr.message });
+          await sharedPrivyBot.login();
+        }
+      } else {
+        L.info('No fresh session found, performing full login...');
+        await sharedPrivyBot.login();
+      }
+
+      // Don't start keep-alive loop here - it interferes with scraping
+      // The loop will be started after scraping is complete
+      botInitializing = false;
+    } else if (botInitializing) {
+      L.info('Waiting for bot to finish initializing...');
+      let waitCount = 0;
+      while (botInitializing && waitCount < 60) {
+        await new Promise(r => setTimeout(r, 1000));
+        waitCount++;
+      }
+      if (!sharedPrivyBot) {
+        throw new Error('Bot initialization timed out');
+      }
+    }
+
+    const bot = sharedPrivyBot;
+    const page = bot.page;
+
+    // Navigate to dashboard first (let session restore)
+    L.info(`Navigating to Privy dashboard...`);
+    await page.goto('https://app.privy.pro/dashboard', { waitUntil: 'networkidle0', timeout: 90000 });
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Check if we got redirected to login page
+    const currentUrl = page.url();
+    if (currentUrl.includes('sign_in')) {
+      L.info('Session expired, re-authenticating...');
+      const bot = sharedPrivyBot;
+      await bot.login();
+      await page.goto('https://app.privy.pro/dashboard', { waitUntil: 'networkidle0', timeout: 90000 });
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // Now force a location search by interacting with the search input
+    L.info(`Searching for ${cityToUse}, ${stateUpper}...`);
+
+    // Find and use the search input to change location
+    // Use Puppeteer's native typing for better simulation
+    const searchSelector = await page.evaluate(() => {
+      const searchSelectors = [
+        '#search_text',
+        'input[name="search_text"]',
+        '.search-input input',
+        '.search input',
+        'input[placeholder*="Search"]',
+        'input[placeholder*="Location"]',
+        'input[placeholder*="City"]',
+        'input[type="search"]',
+        '.SearchBlock input',
+        '#SearchBlock input',
+        '.topsearch-form input',
+        '.mapboxgl-ctrl-geocoder input',
+        '[data-testid="search-input"]'
+      ];
+
+      for (const sel of searchSelectors) {
+        const input = document.querySelector(sel);
+        if (input) return sel;
+      }
+      return null;
+    });
+
+    L.info('Found search selector:', searchSelector);
+
+    if (searchSelector) {
+      // Clear existing value and type new search using Puppeteer's keyboard
+      await page.click(searchSelector, { clickCount: 3 }); // Select all
+      await page.keyboard.press('Backspace'); // Clear
+      await new Promise(r => setTimeout(r, 500));
+
+      // Type the search text slowly for autocomplete
+      await page.type(searchSelector, `${cityToUse}, ${stateUpper}`, { delay: 100 });
+      L.info(`Typed: ${cityToUse}, ${stateUpper}`);
+
+      // Wait for autocomplete dropdown to appear
+      await new Promise(r => setTimeout(r, 2000));
+
+      // Try to click on autocomplete result
+      const selectedResult = await page.evaluate((cityName, state) => {
+        // Look for autocomplete dropdown items
+        const dropdownSelectors = [
+          '.autocomplete-item',
+          '.search-result',
+          '.suggestion-item',
+          '.dropdown-item',
+          '.pac-item',
+          '[role="option"]',
+          '.mapboxgl-ctrl-geocoder--result',
+          '.search-dropdown li',
+          '.results-list li',
+          '.suggestions li',
+          '.typeahead-result'
+        ];
+
+        for (const sel of dropdownSelectors) {
+          const items = document.querySelectorAll(sel);
+          if (items.length > 0) {
+            // Find item that matches our city/state
+            for (const item of items) {
+              const text = item.textContent?.toLowerCase() || '';
+              if (text.includes(cityName.toLowerCase()) && text.includes(state.toLowerCase())) {
+                item.click();
+                return { clicked: true, text: item.textContent };
+              }
+            }
+            // If no exact match, click first result
+            items[0].click();
+            return { clicked: true, text: items[0].textContent, fallback: true };
+          }
+        }
+        return { clicked: false };
+      }, cityToUse, stateUpper);
+
+      L.info('Autocomplete result:', selectedResult);
+
+      if (!selectedResult.clicked) {
+        // No autocomplete, try pressing Enter to submit search
+        L.info('No autocomplete found, pressing Enter...');
+        await page.keyboard.press('Enter');
+      }
+
+      // Wait for search to complete and map to update
+      await new Promise(r => setTimeout(r, 5000));
+
+    } else {
+      // Fallback: navigate directly with URL params and force reload
+      L.info('Search input not found, using URL navigation with reload...');
+      await page.goto(privyUrl, { waitUntil: 'networkidle0', timeout: 90000 });
+      await new Promise(r => setTimeout(r, 2000));
+
+      // Force page reload to ensure URL params are applied
+      await page.reload({ waitUntil: 'networkidle0', timeout: 60000 });
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
+    // Wait for map to stabilize
+    L.info('Waiting for map to stabilize...');
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Try to switch to Grid/List view to see all properties
+    // First try clicking on the "Properties Found" count which often opens a list view
+    L.info('Looking for Properties Found count to click...');
+
+    const clickedPropertiesCount = await page.evaluate(() => {
+      // Look for "Properties Found" or similar count display
+      const countSelectors = [
+        '.properties-found',
+        '[data-test="properties-found"]',
+        '[data-testid="properties-found"]',
+        '[data-testid="properties-count"]',
+        '.property-count',
+        '.results-count',
+        '[class*="properties-found"]',
+        '[class*="property-count"]'
+      ];
+
+      for (const sel of countSelectors) {
+        const el = document.querySelector(sel);
+        if (el) {
+          // Try clicking on the element or its parent
+          el.click();
+          return { clicked: true, selector: sel, text: el.textContent?.trim() };
+        }
+      }
+
+      // Also try finding any element that contains "properties found" text
+      const allElements = document.querySelectorAll('*');
+      for (const el of allElements) {
+        const text = el.textContent?.toLowerCase() || '';
+        if (text.includes('properties found') && el.children.length < 5) {
+          el.click();
+          return { clicked: true, selector: 'text-match', text: el.textContent?.trim() };
+        }
+      }
+
+      return { clicked: false };
+    });
+
+    L.info('Properties count click result:', clickedPropertiesCount);
+
+    if (clickedPropertiesCount.clicked) {
+      L.info('Clicked on properties count, waiting for list to load...');
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
+    // Wait for clusters to load on the map
+    L.info('Waiting for map clusters to load...');
+    try {
+      await page.waitForSelector('.cluster.cluster-deal, .cluster', { timeout: 15000 });
+      L.info('Map clusters loaded!');
+    } catch {
+      L.warn('No clusters found initially, will check for property cards');
+    }
+    await new Promise(r => setTimeout(r, 2000));
+
+    const allAddresses = [];
+
+    // Helper function to extract addresses from view container
+    const extractAddressesFromView = async () => {
+      return await page.evaluate((contentSel, line1Sel, line2Sel, priceSel) => {
+        const results = [];
+
+        // Extended selectors for property cards
+        const extendedContentSelectors = [
+          ...contentSel.split(',').map(s => s.trim()),
+          '.property-module',
+          '.property-module .content',
+          '.property-card',
+          '.property-item'
+        ];
+
+        // Find all property cards
+        let modules = [];
+        for (const sel of extendedContentSelectors) {
+          const found = document.querySelectorAll(sel);
+          if (found.length > 0) {
+            modules = Array.from(found);
+            break;
+          }
+        }
+
+        for (const module of modules) {
+          const content = module.querySelector('.content') || module;
+          let line1 = '';
+          let line2 = '';
+
+          // Try address line selectors
+          for (const sel of line1Sel.split(',').map(s => s.trim())) {
+            const el = content.querySelector(sel);
+            if (el) { line1 = el.textContent?.trim() || ''; break; }
+          }
+          for (const sel of line2Sel.split(',').map(s => s.trim())) {
+            const el = content.querySelector(sel);
+            if (el) { line2 = el.textContent?.trim() || ''; break; }
+          }
+
+          const fullAddress = line1 && line2 ? `${line1}, ${line2}` : (line1 || line2);
+          if (fullAddress && fullAddress.length > 5) {
+            let price = '';
+            for (const sel of priceSel.split(',').map(s => s.trim())) {
+              const el = content.querySelector(sel);
+              if (el) { price = el.textContent?.trim() || ''; break; }
+            }
+            results.push({ fullAddress, price });
+          }
+        }
+        return results;
+      }, propertyContentSelector, addressLine1Selector, addressLine2Selector, priceSelector);
+    };
+
+    // Helper function to check if view container is visible
+    const hasViewContainer = async () => {
+      return await page.evaluate(() => {
+        return document.querySelectorAll('.view-container, .grid-view-container').length > 0;
+      });
+    };
+
+    // Helper function to zoom map
+    const zoomMap = async (direction = 'in') => {
+      const deltaY = direction === 'in' ? -300 : 300;
+      await page.mouse.move(600, 400); // Center of map area
+      await page.mouse.wheel({ deltaY });
+      L.info(`Zoomed ${direction}`);
+      await new Promise(r => setTimeout(r, 1500));
+    };
+
+    // Use the CLUSTER-CLICKING approach from v1 scraper
+    // This is the key to extracting properties from Privy!
+    L.info('Using cluster-clicking approach to extract properties...');
+
+    const visitedClusterKeys = new Set();
+    let zoomLevel = 0;
+    const maxZoom = 15;
+    const minZoom = 3;
+    let totalRounds = 0;
+    const maxRounds = 20;
+
+    while (allAddresses.length < parseInt(limit) && totalRounds < maxRounds) {
+      totalRounds++;
+
+      // Check if view containers are visible (property cards showing)
+      const viewVisible = await hasViewContainer();
+
+      if (viewVisible) {
+        L.info('View container visible - extracting properties...');
+
+        // Scroll the view container to load all virtualized items
+        await page.evaluate(async () => {
+          const containers = document.querySelectorAll('.view-container, .grid-view-container');
+          for (const container of containers) {
+            let lastHeight = 0;
+            for (let i = 0; i < 20; i++) {
+              container.scrollTop = container.scrollHeight;
+              container.dispatchEvent(new Event('scroll', { bubbles: true }));
+              await new Promise(r => setTimeout(r, 200));
+              if (container.scrollHeight === lastHeight) break;
+              lastHeight = container.scrollHeight;
+            }
+            container.scrollTop = 0; // Reset to top
+          }
+        });
+
+        await new Promise(r => setTimeout(r, 1000));
+
+        // Extract addresses
+        const newAddresses = await extractAddressesFromView();
+        L.info(`Extracted ${newAddresses.length} addresses from view`);
+
+        // Add unique addresses
+        for (const addr of newAddresses) {
+          if (!allAddresses.find(a => a.fullAddress.toLowerCase() === addr.fullAddress.toLowerCase())) {
+            allAddresses.push({
+              ...addr,
+              state: stateUpper,
+              source: 'privy',
+              scrapedAt: new Date().toISOString()
+            });
+          }
+        }
+        L.info(`Total unique addresses: ${allAddresses.length}`);
+
+        // Click on map to close the view and return to map mode
+        await page.mouse.click(400, 600); // Click on map area
+        await new Promise(r => setTimeout(r, 1500));
+
+        // Zoom out to find more clusters
+        while (zoomLevel > 0) {
+          await zoomMap('out');
+          zoomLevel--;
+        }
+        continue;
+      }
+
+      // Get all clusters with their positions for tracking
+      const clusters = await page.evaluate(() => {
+        const handles = Array.from(document.querySelectorAll('.cluster.cluster-deal, .cluster'));
+        return handles.map(el => {
+          const rect = el.getBoundingClientRect();
+          const text = el.textContent?.trim() || '';
+          return {
+            key: `${text}@${Math.round(rect.x)}x${Math.round(rect.y)}`,
+            x: rect.x + rect.width / 2,
+            y: rect.y + rect.height / 2,
+            text
+          };
+        }).filter(c => c.x > 0 && c.y > 0 && c.x < 1900 && c.y < 900);
+      });
+
+      // Filter to unvisited clusters
+      const unvisitedClusters = clusters.filter(c => !visitedClusterKeys.has(c.key));
+
+      L.info(`Found ${clusters.length} clusters, ${unvisitedClusters.length} unvisited (zoom level ${zoomLevel})`);
+
+      if (unvisitedClusters.length === 0) {
+        // No unvisited clusters at this zoom level
+        if (zoomLevel < maxZoom) {
+          // Zoom in to find more clusters
+          await zoomMap('in');
+          zoomLevel++;
+          continue;
+        } else if (zoomLevel > minZoom) {
+          // Zoomed in too much, zoom back out
+          await zoomMap('out');
+          zoomLevel--;
+          continue;
+        } else {
+          // Exhausted all zoom levels
+          L.info('No more clusters to process');
+          break;
+        }
+      }
+
+      // Click on an unvisited cluster
+      const clusterToClick = unvisitedClusters[0];
+      visitedClusterKeys.add(clusterToClick.key);
+
+      L.info(`Clicking cluster "${clusterToClick.text}" at (${clusterToClick.x}, ${clusterToClick.y})...`);
+
+      try {
+        await page.mouse.click(clusterToClick.x, clusterToClick.y);
+        await new Promise(r => setTimeout(r, 2000));
+
+        // Check if clicking opened a view container
+        const viewOpened = await hasViewContainer();
+        if (viewOpened) {
+          L.info('Cluster click opened view container!');
+        } else {
+          L.info('Cluster click did not open view - may have zoomed in or revealed sub-clusters');
+        }
+      } catch (e) {
+        L.warn(`Failed to click cluster: ${e.message}`);
+      }
+    }
+
+    // Take a debug screenshot
+    try {
+      const screenshotPath = `c:/Users/91812/Desktop/Demo-3 Mioym/deal-finder-1/backend/debug-screenshot-${Date.now()}.png`;
+      await page.screenshot({ path: screenshotPath, fullPage: false });
+      L.info('Screenshot saved:', screenshotPath);
+    } catch (e) {
+      L.warn('Could not save screenshot:', e.message);
+    }
+
+    // Final scroll and extraction if view container is still visible
+    // Privy uses virtualization - must scroll the LIST CONTAINER, not the page
+    L.info('Scrolling list container to load virtualized properties...');
+
+    // First, find and scroll the list container (where cards are rendered)
+    const listContainerFound = await page.evaluate(async (containerSelector) => {
+      // Extended list container selectors
+      const containers = [
+        '.view-container',
+        '.grid-view-container',
+        '.list-view-container',
+        '.properties-list',
+        '.property-list',
+        '[data-testid="property-list"]',
+        '.split-view-right',
+        '.results-container',
+        '.scroll-container'
+      ];
+
+      // Also try the provided selector
+      if (containerSelector) {
+        containers.unshift(...containerSelector.split(',').map(s => s.trim()));
+      }
+
+      // Find a scrollable container
+      let listContainer = null;
+      for (const sel of containers) {
+        const el = document.querySelector(sel);
+        if (el && (el.scrollHeight > el.clientHeight || el.children.length > 0)) {
+          listContainer = el;
+          break;
+        }
+      }
+
+      if (!listContainer) {
+        // Fallback: find any element with scrollable content and property-related children
+        const allDivs = document.querySelectorAll('div');
+        for (const div of allDivs) {
+          if (div.scrollHeight > div.clientHeight + 100 &&
+              (div.querySelector('.property-module') ||
+               div.querySelector('.property-card') ||
+               div.querySelector('.address') ||
+               div.querySelector('[class*="property"]'))) {
+            listContainer = div;
+            break;
+          }
+        }
+      }
+
+      if (!listContainer) return { found: false };
+
+      // Scroll the container to load virtualized items
+      let lastHeight = 0;
+      let scrollCount = 0;
+      const maxScrolls = 30;
+
+      while (scrollCount < maxScrolls) {
+        listContainer.scrollTop = listContainer.scrollHeight;
+        listContainer.dispatchEvent(new Event('scroll', { bubbles: true }));
+        await new Promise(r => setTimeout(r, 300));
+
+        if (listContainer.scrollHeight === lastHeight) {
+          // No new content loaded, we've reached the end
+          break;
+        }
+        lastHeight = listContainer.scrollHeight;
+        scrollCount++;
+      }
+
+      // Scroll back to top
+      listContainer.scrollTop = 0;
+
+      return {
+        found: true,
+        scrollCount,
+        finalHeight: listContainer.scrollHeight,
+        childCount: listContainer.children.length
+      };
+    }, propertyListContainerSelector);
+
+    L.info('List container scroll result:', listContainerFound);
+
+    // Also do page-level scrolling as fallback
+    if (!listContainerFound.found || listContainerFound.childCount === 0) {
+      L.info('No list container found, trying page-level scrolling...');
+      for (let i = 0; i < 10; i++) {
+        await page.evaluate(() => window.scrollBy(0, 800));
+        await new Promise(r => setTimeout(r, 400));
+      }
+    }
+
+    // Extract addresses using proper selectors - with fallback for different DOM structures
+    L.info('Extracting addresses...');
+
+    // First, let's debug what elements exist on the page
+    const domDebug = await page.evaluate(() => {
+      const debug = {
+        propertyModules: document.querySelectorAll('.property-module').length,
+        propertyCards: document.querySelectorAll('.property-card').length,
+        contentDivs: document.querySelectorAll('.content').length,
+        addressBlocks: document.querySelectorAll('.address, .address-block, [class*="address"]').length,
+        priceBlocks: document.querySelectorAll('.price, .price-block, [class*="price"]').length,
+        viewContainer: document.querySelectorAll('.view-container').length,
+        gridViewContainer: document.querySelectorAll('.grid-view-container').length,
+        // Look for any element with address-like text
+        elementsWithAddressText: 0,
+        sampleAddressTexts: []
+      };
+
+      // Find elements that look like they contain addresses
+      const allElements = document.querySelectorAll('*');
+      for (const el of allElements) {
+        const text = el.textContent?.trim() || '';
+        // Look for patterns like "123 Main St" or similar
+        if (text.length > 10 && text.length < 100 &&
+            /\d+\s+\w+\s+(st|street|ave|avenue|dr|drive|rd|road|ln|lane|ct|court|blvd|way|pl|circle)/i.test(text)) {
+          debug.elementsWithAddressText++;
+          if (debug.sampleAddressTexts.length < 5) {
+            debug.sampleAddressTexts.push({
+              tag: el.tagName,
+              class: el.className?.substring?.(0, 50) || '',
+              text: text.substring(0, 80)
+            });
+          }
+        }
+      }
+
+      return debug;
+    });
+
+    L.info('DOM debug info:', domDebug);
+
+    const addresses = await page.evaluate((contentSel, line1Sel, line2Sel, priceSel, statsSel) => {
+      const results = [];
+
+      // Extended selectors to find property cards
+      const extendedContentSelectors = [
+        ...contentSel.split(',').map(s => s.trim()),
+        '.property-module',
+        '.property-module .content',
+        '.property-card',
+        '.property-item',
+        '.listing-card',
+        '.result-card',
+        '[data-testid="property-card"]',
+        '[class*="property"][class*="card"]',
+        '[class*="property"][class*="module"]'
+      ];
+
+      // Find all potential property cards
+      let modules = [];
+      for (const sel of extendedContentSelectors) {
+        const found = document.querySelectorAll(sel);
+        if (found.length > 0) {
+          modules = Array.from(found);
+          break;
+        }
+      }
+
+      // If still nothing, try to find by address pattern in DOM
+      if (modules.length === 0) {
+        // Look for divs that contain address-like text
+        const allDivs = document.querySelectorAll('div');
+        for (const div of allDivs) {
+          const text = div.textContent?.trim() || '';
+          // Skip if too long (likely a container) or too short
+          if (text.length < 15 || text.length > 200) continue;
+
+          // Check for address pattern
+          if (/\d+\s+\w+\s+(st|street|ave|avenue|dr|drive|rd|road|ln|lane|ct|court|blvd|way|pl|circle)/i.test(text)) {
+            // Check if it has price-like siblings or children
+            const hasPrice = div.textContent?.includes('$') ||
+                            div.parentElement?.textContent?.includes('$');
+            if (hasPrice) {
+              modules.push(div);
+            }
+          }
+        }
+      }
+
+      for (const module of modules) {
+        const content = module.querySelector('.content') || module;
+
+        // Try multiple selector patterns for address extraction
+        let line1 = '';
+        let line2 = '';
+
+        // Extended address selectors
+        const line1Selectors = [
+          ...line1Sel.split(',').map(s => s.trim()),
+          '.address-line1',
+          '.address > .address-line1',
+          '.street-address',
+          '[class*="address"][class*="line1"]',
+          '[class*="street"]'
+        ];
+
+        const line2Selectors = [
+          ...line2Sel.split(',').map(s => s.trim()),
+          '.address-line2',
+          '.address > .address-line2',
+          '.city-state-zip',
+          '[class*="address"][class*="line2"]',
+          '[class*="city"]'
+        ];
+
+        for (const sel of line1Selectors) {
+          const el = content.querySelector(sel);
+          if (el) { line1 = el.textContent?.trim() || ''; break; }
+        }
+        for (const sel of line2Selectors) {
+          const el = content.querySelector(sel);
+          if (el) { line2 = el.textContent?.trim() || ''; break; }
+        }
+
+        // If still no address found, try to extract from text content
+        if (!line1 && !line2) {
+          const text = content.textContent?.trim() || '';
+          const addressMatch = text.match(/(\d+\s+[\w\s]+(?:st|street|ave|avenue|dr|drive|rd|road|ln|lane|ct|court|blvd|way|pl|circle)[^,]*),?\s*([^$\d]*)/i);
+          if (addressMatch) {
+            line1 = addressMatch[1]?.trim() || '';
+            line2 = addressMatch[2]?.trim() || '';
+          }
+        }
+
+        const fullAddress = line1 && line2 ? `${line1}, ${line2}` : (line1 || line2);
+
+        if (fullAddress && fullAddress.length > 5) {
+          let price = '';
+
+          // Extended price selectors
+          const priceSelectors = [
+            ...priceSel.split(',').map(s => s.trim()),
+            '.price',
+            '.price-block .price',
+            '.listing-price',
+            '[class*="price"]'
+          ];
+
+          for (const sel of priceSelectors) {
+            const el = content.querySelector(sel);
+            if (el) { price = el.textContent?.trim() || ''; break; }
+          }
+
+          // If no price found by selector, look for $ pattern
+          if (!price) {
+            const priceMatch = content.textContent?.match(/\$[\d,]+/);
+            if (priceMatch) price = priceMatch[0];
+          }
+
+          // Get stats using proper selector
+          const stats = Array.from(content.querySelectorAll(statsSel)).map(s => s.textContent?.trim()).filter(Boolean);
+
+          // Try to find Privy URL
+          let privyUrl = '';
+          const link = module.querySelector('a[href*="property"], a[href*="listing"]') || module.closest('a');
+          if (link && link.href) {
+            privyUrl = link.href;
+          }
+          const propertyId = module.dataset?.propertyId || module.dataset?.id ||
+                            module.getAttribute('data-property-id') || module.getAttribute('data-listing-id');
+          if (!privyUrl && propertyId) {
+            privyUrl = `https://app.privy.pro/property/${propertyId}`;
+          }
+
+          results.push({ fullAddress, price, stats, privyUrl });
+        }
+      }
+      return results;
+    }, propertyContentSelector, addressLine1Selector, addressLine2Selector, priceSelector, propertyStatsSelector);
+
+    L.info(`Found ${addresses.length} addresses`);
+
+    // Debug: log first address to check if privyUrl is captured
+    if (addresses.length > 0) {
+      L.info('Sample address data:', {
+        address: addresses[0].fullAddress,
+        price: addresses[0].price,
+        hasPrivyUrl: !!addresses[0].privyUrl,
+        privyUrl: addresses[0].privyUrl || 'not found'
+      });
+    }
+
+    // Add state info and deduplicate
+    for (const addr of addresses) {
+      if (allAddresses.length >= parseInt(limit)) break;
+      if (!allAddresses.find(a => a.fullAddress.toLowerCase() === addr.fullAddress.toLowerCase())) {
+        allAddresses.push({
+          ...addr,
+          state: stateUpper,
+          source: 'privy',
+          scrapedAt: new Date().toISOString()
+        });
+      }
+    }
+
+    // Enforce the limit - only return the requested number of addresses
+    const limitNum = parseInt(limit) || 100;
+    const finalAddresses = allAddresses.slice(0, limitNum);
+
+    L.info(`Total addresses scraped: ${allAddresses.length}, returning: ${finalAddresses.length} (limit: ${limitNum})`);
+
+    // Save session after successful scrape
+    try { await sessionStore.saveSessionCookies(page); } catch {}
+
+    return res.json({
+      ok: true,
+      state: stateUpper,
+      count: finalAddresses.length,
+      addresses: finalAddresses
+    });
+
+  } catch (error) {
+    L.error('Live Privy scrape failed', { error: error.message });
+
+    // If session error, reset the shared bot
+    if (error.message?.includes('session') || error.message?.includes('sign_in') || error.message?.includes('login')) {
+      L.info('Resetting shared bot due to session error');
+      if (sharedPrivyBot) {
+        try { await sharedPrivyBot.close(); } catch {}
+      }
+      sharedPrivyBot = null;
+      botInitializing = false;
+    }
+
+    res.status(500).json({
+      ok: false,
+      error: error.message || 'Failed to scrape addresses',
+      message: 'Live scraping error'
+    });
+  }
+});
+
+/**
+ * GET /api/live-scrape/redfin
+ *
+ * Scrapes addresses LIVE from Redfin.com and returns them immediately
+ * Does NOT save to database - just for validation/testing
+ * NO AUTHENTICATION REQUIRED - works without database
+ *
+ * Query params:
+ *   - state: State code (e.g., CA, NY) - REQUIRED
+ *   - city: City name (optional, but recommended)
+ *   - limit: Max addresses to return (default: 20)
+ *
+ * Hardcoded filters applied:
+ *   - For Sale, Active
+ *   - Price: $50K - $500K
+ *   - Beds: 3+
+ *   - Home Type: House
+ *   - Sqft: 1000+
+ *   - No HOA
+ */
+router.get('/redfin', async (req, res) => {
+  try {
+    const { state, city = '', limit = 20, page = 1 } = req.query;
+    const pageNum = parseInt(page) || 1;
+    const limitNum = parseInt(limit) || 20;
+
+    if (!state) {
+      return res.status(400).json({
+        ok: false,
+        error: 'State parameter is required',
+        message: 'Please provide a state code (e.g., CA, NY, TX)'
+      });
+    }
+
+    L.info('Starting Redfin web scraping', { state, city, limit: limitNum, page: pageNum });
+
+    // Map state code to state name
+    const { STATES } = await import('../constants.js');
+    const stateInfo = STATES.find(s => s.code === state.toUpperCase());
+
+    if (!stateInfo) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Invalid state code',
+        message: `State "${state}" not found. Please use valid 2-letter state codes like CA, NY, TX`
+      });
+    }
+
+    // Hardcoded filters as per requirements
+    const REDFIN_FILTERS = [
+      'property-type=house',
+      'status=active',
+      'min-price=50k',
+      'max-price=500k',
+      'min-beds=3',
+      'min-sqft=1k-sqft',
+      'hoa=0',
+      'exclude-55+-community',
+      'listing-source=agent,owner,foreclosure'
+    ].join(',');
+
+    // Skip browser scraping (too slow) - go directly to API
+    // Try the direct API with city-level query (faster)
+    try {
+      const axios = (await import('axios')).default;
+
+      // Multiple cities per state for fallback fetching (ordered by population/activity)
+      const STATE_CITIES_LIST = {
+        'AL': [{ name: 'Birmingham', id: 1823 }, { name: 'Huntsville', id: 8966 }, { name: 'Montgomery', id: 12923 }, { name: 'Mobile', id: 11715 }],
+        'AK': [{ name: 'Anchorage', id: 781 }, { name: 'Fairbanks', id: 6603 }, { name: 'Juneau', id: 9483 }],
+        'AZ': [{ name: 'Phoenix', id: 14240 }, { name: 'Tucson', id: 18805 }, { name: 'Mesa', id: 11350 }, { name: 'Scottsdale', id: 16095 }],
+        'AR': [{ name: 'Little Rock', id: 10455 }, { name: 'Fort Smith', id: 7034 }, { name: 'Fayetteville', id: 6708 }],
+        'CA': [{ name: 'Los Angeles', id: 11203 }, { name: 'San Diego', id: 16904 }, { name: 'San Jose', id: 17420 }, { name: 'San Francisco', id: 17151 }, { name: 'Fresno', id: 7240 }],
+        'CO': [{ name: 'Denver', id: 5155 }, { name: 'Colorado Springs', id: 4436 }, { name: 'Aurora', id: 1025 }, { name: 'Fort Collins', id: 7010 }],
+        'CT': [{ name: 'Hartford', id: 9406 }, { name: 'New Haven', id: 13172 }, { name: 'Stamford', id: 17822 }, { name: 'Bridgeport', id: 2349 }],
+        'DE': [{ name: 'Wilmington', id: 19583 }, { name: 'Dover', id: 5566 }, { name: 'Newark', id: 13139 }],
+        'FL': [{ name: 'Miami', id: 11458 }, { name: 'Orlando', id: 14038 }, { name: 'Tampa', id: 18349 }, { name: 'Jacksonville', id: 9277 }, { name: 'Fort Lauderdale', id: 7005 }],
+        'GA': [{ name: 'Atlanta', id: 30756 }, { name: 'Savannah', id: 16044 }, { name: 'Augusta', id: 1020 }, { name: 'Columbus', id: 4665 }],
+        'HI': [{ name: 'Honolulu', id: 34945 }],
+        'ID': [{ name: 'Boise', id: 2287 }, { name: 'Meridian', id: 11344 }, { name: 'Nampa', id: 13024 }],
+        'IL': [{ name: 'Chicago', id: 29470 }, { name: 'Aurora', id: 1026 }, { name: 'Naperville', id: 13032 }, { name: 'Rockford', id: 15936 }],
+        'IN': [{ name: 'Indianapolis', id: 9170 }, { name: 'Fort Wayne', id: 7033 }, { name: 'Evansville', id: 6489 }, { name: 'South Bend', id: 17551 }],
+        'IA': [{ name: 'Des Moines', id: 5415 }, { name: 'Cedar Rapids', id: 3294 }, { name: 'Davenport', id: 5038 }],
+        'KS': [{ name: 'Wichita', id: 19878 }, { name: 'Overland Park', id: 14080 }, { name: 'Kansas City', id: 9498 }, { name: 'Topeka', id: 18595 }],
+        'KY': [{ name: 'Louisville', id: 12262 }, { name: 'Lexington', id: 10351 }, { name: 'Bowling Green', id: 2315 }],
+        'LA': [{ name: 'New Orleans', id: 14233 }, { name: 'Baton Rouge', id: 1467 }, { name: 'Shreveport', id: 17324 }],
+        'ME': [{ name: 'Portland', id: 15614 }, { name: 'Lewiston', id: 10356 }, { name: 'Bangor', id: 1334 }],
+        'MD': [{ name: 'Baltimore', id: 1073 }, { name: 'Columbia', id: 4519 }, { name: 'Germantown', id: 7540 }, { name: 'Silver Spring', id: 17355 }],
+        'MA': [{ name: 'Boston', id: 1826 }, { name: 'Worcester', id: 19753 }, { name: 'Springfield', id: 17750 }, { name: 'Cambridge', id: 2965 }],
+        'MI': [{ name: 'Detroit', id: 5665 }, { name: 'Grand Rapids', id: 7820 }, { name: 'Warren', id: 19148 }, { name: 'Ann Arbor', id: 798 }],
+        'MN': [{ name: 'Minneapolis', id: 10943 }, { name: 'Saint Paul', id: 16814 }, { name: 'Rochester', id: 15906 }, { name: 'Duluth', id: 5778 }],
+        'MS': [{ name: 'Jackson', id: 9165 }, { name: 'Gulfport', id: 8193 }, { name: 'Hattiesburg', id: 8581 }],
+        'MO': [{ name: 'Kansas City', id: 35751 }, { name: 'Saint Louis', id: 16815 }, { name: 'Springfield', id: 17751 }, { name: 'Columbia', id: 4520 }],
+        'MT': [{ name: 'Billings', id: 1720 }, { name: 'Missoula', id: 11707 }, { name: 'Great Falls', id: 8021 }],
+        'NE': [{ name: 'Omaha', id: 9417 }, { name: 'Lincoln', id: 10414 }, { name: 'Bellevue', id: 1587 }],
+        'NV': [{ name: 'Las Vegas', id: 10201 }, { name: 'Henderson', id: 8728 }, { name: 'Reno', id: 15740 }, { name: 'North Las Vegas', id: 13583 }],
+        'NH': [{ name: 'Manchester', id: 11504 }, { name: 'Nashua', id: 13082 }, { name: 'Concord', id: 4588 }],
+        'NJ': [{ name: 'Newark', id: 13136 }, { name: 'Jersey City', id: 9409 }, { name: 'Paterson', id: 14185 }, { name: 'Elizabeth', id: 6177 }, { name: 'Trenton', id: 18700 }],
+        'NM': [{ name: 'Albuquerque', id: 513 }, { name: 'Las Cruces', id: 10184 }, { name: 'Rio Rancho', id: 15857 }, { name: 'Santa Fe', id: 16949 }],
+        'NY': [{ name: 'New York', id: 30749 }, { name: 'Buffalo', id: 2704 }, { name: 'Rochester', id: 15907 }, { name: 'Syracuse', id: 18277 }, { name: 'Albany', id: 488 }],
+        'NC': [{ name: 'Charlotte', id: 3105 }, { name: 'Raleigh', id: 15533 }, { name: 'Greensboro', id: 8050 }, { name: 'Durham', id: 5830 }, { name: 'Winston-Salem', id: 19657 }, { name: 'Fayetteville', id: 5903 }],
+        'ND': [{ name: 'Fargo', id: 6610 }, { name: 'Bismarck', id: 1749 }, { name: 'Grand Forks', id: 7813 }],
+        'OH': [{ name: 'Columbus', id: 4664 }, { name: 'Cleveland', id: 4207 }, { name: 'Cincinnati', id: 3959 }, { name: 'Toledo', id: 18553 }, { name: 'Akron', id: 468 }],
+        'OK': [{ name: 'Oklahoma City', id: 14237 }, { name: 'Tulsa', id: 35765 }, { name: 'Norman', id: 13561 }, { name: 'Broken Arrow', id: 2451 }],
+        'OR': [{ name: 'Portland', id: 30772 }, { name: 'Salem', id: 16843 }, { name: 'Eugene', id: 6460 }, { name: 'Gresham', id: 8108 }],
+        'PA': [{ name: 'Philadelphia', id: 15502 }, { name: 'Pittsburgh', id: 14431 }, { name: 'Allentown', id: 556 }, { name: 'Reading', id: 15662 }],
+        'RI': [{ name: 'Providence', id: 15272 }, { name: 'Warwick', id: 19168 }, { name: 'Cranston', id: 4868 }],
+        'SC': [{ name: 'Charleston', id: 3478 }, { name: 'Columbia', id: 4521 }, { name: 'Greenville', id: 8064 }, { name: 'Myrtle Beach', id: 13009 }],
+        'SD': [{ name: 'Sioux Falls', id: 15282 }, { name: 'Rapid City', id: 15565 }],
+        'TN': [{ name: 'Nashville', id: 13415 }, { name: 'Memphis', id: 11323 }, { name: 'Knoxville', id: 9766 }, { name: 'Chattanooga', id: 3561 }],
+        'TX': [{ name: 'Houston', id: 8903 }, { name: 'San Antonio', id: 16898 }, { name: 'Dallas', id: 4995 }, { name: 'Austin', id: 1028 }, { name: 'Fort Worth', id: 7036 }, { name: 'El Paso', id: 6155 }],
+        'UT': [{ name: 'Salt Lake City', id: 17150 }, { name: 'West Valley City', id: 19436 }, { name: 'Provo', id: 15276 }, { name: 'Ogden', id: 13864 }],
+        'VT': [{ name: 'Burlington', id: 2749 }, { name: 'South Burlington', id: 17552 }],
+        'VA': [{ name: 'Virginia Beach', id: 20418 }, { name: 'Norfolk', id: 13560 }, { name: 'Chesapeake', id: 3595 }, { name: 'Richmond', id: 15819 }, { name: 'Arlington', id: 895 }],
+        'WA': [{ name: 'Seattle', id: 16163 }, { name: 'Spokane', id: 17717 }, { name: 'Tacoma', id: 18299 }, { name: 'Vancouver', id: 18994 }, { name: 'Bellevue', id: 1588 }],
+        'WV': [{ name: 'Charleston', id: 3787 }, { name: 'Huntington', id: 8970 }, { name: 'Morgantown', id: 12007 }],
+        'WI': [{ name: 'Milwaukee', id: 35759 }, { name: 'Madison', id: 11445 }, { name: 'Green Bay', id: 8039 }, { name: 'Kenosha', id: 9603 }],
+        'WY': [{ name: 'Cheyenne', id: 3616 }, { name: 'Casper', id: 3236 }, { name: 'Laramie', id: 10138 }]
+      };
+
+      // Legacy single city mapping (for backwards compatibility)
+      const STATE_DEFAULT_CITIES = Object.fromEntries(
+        Object.entries(STATE_CITIES_LIST).map(([state, cities]) => [state, cities[0]])
+      );
+
+      const stateUpper = state.toUpperCase();
+      const defaultCity = STATE_DEFAULT_CITIES[stateUpper];
+
+      if (!defaultCity) {
+        throw new Error(`Unknown state: ${state}`);
+      }
+
+      // Determine which city to use - if user selected a city, look it up; otherwise use default
+      let cityToUse = defaultCity;
+      const userCity = city ? city.trim() : '';
+
+      if (userCity && userCity.toLowerCase() !== defaultCity.name.toLowerCase()) {
+        // User selected a different city - look up its ID from Redfin autocomplete API
+        try {
+          L.info(`Looking up city ID for: ${userCity}, ${stateUpper}`);
+          const autocompleteUrl = `https://www.redfin.com/stingray/do/location-autocomplete?location=${encodeURIComponent(userCity + ', ' + stateUpper)}&v=2`;
+
+          const autoResponse = await axios.get(autocompleteUrl, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept': 'application/json',
+              'Referer': 'https://www.redfin.com/'
+            },
+            timeout: 10000
+          });
+
+          let autoData = autoResponse.data;
+          if (typeof autoData === 'string') {
+            autoData = autoData.replace(/^\{\}&&/, '');
+            autoData = JSON.parse(autoData);
+          }
+
+          L.info(`Autocomplete response sections: ${JSON.stringify(autoData.payload?.sections?.length || 0)}`);
+
+          const sections = autoData.payload?.sections || [];
+          let foundCity = false;
+
+          for (const section of sections) {
+            const rows = section.rows || [];
+            for (const row of rows) {
+              const rowType = parseInt(row.type);
+              L.info(`Row: type=${rowType}, name=${row.name}, id=${row.id}`);
+
+              // Look for city (type 2) or neighborhood (type 6) - Redfin returns actual cities as type 2
+              // Type 2 = City, Type 6 = Neighborhood
+              if ((rowType === 2 || rowType === 6) && row.id) {
+                // Extract city ID from format like "2_1234" or "6_1234"
+                const idParts = row.id.toString().split('_');
+                const cityIdMatch = idParts.length > 1 ? idParts[1] : idParts[0];
+
+                if (cityIdMatch) {
+                  cityToUse = { name: userCity, id: parseInt(cityIdMatch) };
+                  L.info(`✅ Found city ID for ${userCity}: ${cityToUse.id} (type=${rowType}, from row: ${row.name})`);
+                  foundCity = true;
+                  break;
+                }
+              }
+            }
+            if (foundCity) break;
+          }
+
+          if (!foundCity) {
+            L.warn(`City ${userCity} not found in autocomplete, using default city ${defaultCity.name}`);
+          }
+        } catch (lookupErr) {
+          L.warn(`City lookup failed for ${userCity}, using default city: ${lookupErr.message}`);
+        }
+      }
+
+      // Use city-level query with market parameter - this returns correct state data
+      const market = stateUpper.toLowerCase();
+
+      // Different sort orders for pagination to get different results each page
+      const sortOptions = ['redfin-recommended-asc', 'price-asc', 'price-desc', 'newest', 'beds-desc', 'sqft-desc'];
+      const sortOrder = sortOptions[(pageNum - 1) % sortOptions.length];
+
+      // Filter function for homes
+      const filterHome = (home) => {
+        const MIN_PRICE = 50000, MAX_PRICE = 500000, MIN_BEDS = 3, MIN_SQFT = 1000;
+        const price = home.price?.value || home.price || 0;
+        const beds = home.beds || 0;
+        const sqft = home.sqFt?.value || home.sqFt || 0;
+        const propertyType = home.propertyType?.value || home.propertyType;
+        const hoa = home.hoa?.value || home.hoa || 0;
+
+        if (price < MIN_PRICE || price > MAX_PRICE) return false;
+        if (beds < MIN_BEDS) return false;
+        if (sqft < MIN_SQFT) return false;
+        if (propertyType && ![1, 6, 'Single Family', 'House'].includes(propertyType)) return false;
+
+        const hoaValue = typeof hoa === 'object' ? 0 : (hoa || 0);
+        if (hoaValue > 0) return false;
+
+        // Exclude 55+ communities
+        const listingTags = home.listingTags || [];
+        const remarks = (home.listingRemarks || '').toLowerCase();
+        const keyFacts = (home.keyFacts || []).map(kf => (kf.description || '').toLowerCase());
+        const seniorKeywords = ['55+', '55 +', 'senior', 'age restricted', 'age-restricted', 'adult community', 'retirement', 'over 55', 'active adult'];
+
+        if (listingTags.some(tag => seniorKeywords.some(kw => tag.toLowerCase().includes(kw)))) return false;
+        if (seniorKeywords.some(kw => remarks.includes(kw))) return false;
+        if (keyFacts.some(fact => seniorKeywords.some(kw => fact.includes(kw)))) return false;
+
+        const listingType = home.listingType || 1;
+        if (![1, 2, 3].includes(listingType)) return false;
+
+        return true;
+      };
+
+      // Build list of cities to fetch from
+      // If user specified a city, start with that; otherwise use state's city list
+      let citiesToFetch = [];
+      if (userCity) {
+        // User specified a city - use it first, then add other cities from the state as fallback
+        citiesToFetch = [cityToUse];
+        const stateCities = STATE_CITIES_LIST[stateUpper] || [];
+        for (const c of stateCities) {
+          if (c.name.toLowerCase() !== userCity.toLowerCase()) {
+            citiesToFetch.push(c);
+          }
+        }
+      } else {
+        // No specific city - use all cities in the state
+        citiesToFetch = STATE_CITIES_LIST[stateUpper] || [cityToUse];
+      }
+
+      // Collect properties from multiple cities until we reach the limit
+      const allFilteredHomes = [];
+      const citiesFetched = [];
+      const seenAddresses = new Set(); // Avoid duplicates
+
+      for (const currentCity of citiesToFetch) {
+        if (allFilteredHomes.length >= limitNum) break;
+
+        const cityId = currentCity.id;
+        const numHomesToFetch = Math.min(2000, Math.max(500, limitNum * 10));
+        const url = `https://www.redfin.com/stingray/api/gis?al=1&market=${market}&region_id=${cityId}&region_type=6&num_homes=${numHomesToFetch}&status=9&ord=${sortOrder}&v=8`;
+
+        L.info(`Fetching from ${currentCity.name} (need ${limitNum - allFilteredHomes.length} more, have ${allFilteredHomes.length})`);
+
+        try {
+          const response = await axios.get(url, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept': 'application/json',
+              'Referer': `https://www.redfin.com/city/${cityId}/${stateUpper}/${currentCity.name}`
+            },
+            timeout: 15000
+          });
+
+          let data = response.data;
+          if (typeof data === 'string') {
+            data = data.replace(/^\{\}&&/, '');
+            data = JSON.parse(data);
+          }
+
+          const homes = data.payload?.homes || [];
+          L.info(`${currentCity.name}: API returned ${homes.length} homes`);
+
+          // Filter and dedupe
+          for (const home of homes) {
+            if (allFilteredHomes.length >= limitNum) break;
+            if (!filterHome(home)) continue;
+
+            const addr = (home.streetLine?.value || home.streetLine || '').toLowerCase();
+            if (seenAddresses.has(addr)) continue;
+            seenAddresses.add(addr);
+
+            allFilteredHomes.push(home);
+          }
+
+          citiesFetched.push(currentCity.name);
+          L.info(`${currentCity.name}: After filtering, total collected: ${allFilteredHomes.length}`);
+
+        } catch (cityErr) {
+          L.warn(`Failed to fetch from ${currentCity.name}: ${cityErr.message}`);
+        }
+      }
+
+      L.info(`Multi-city fetch complete: ${allFilteredHomes.length} homes from ${citiesFetched.length} cities`);
+
+      if (allFilteredHomes.length > 0) {
+        // Transform to our format
+        const properties = allFilteredHomes.slice(0, limitNum).map((home, i) => {
+          const address = home.streetLine?.value || home.streetLine || '';
+          const cityName = home.city || '';
+          const homeState = home.state || stateUpper;
+          const zip = home.zip || home.postalCode?.value || '';
+          const price = home.price?.value || home.price || null;
+
+          return {
+            fullAddress: [address, cityName, homeState, zip].filter(Boolean).join(', '),
+            vendor: 'redfin',
+            extractedAt: new Date().toISOString(),
+            sourceIndex: i,
+            url: home.url ? `https://www.redfin.com${home.url}` : null,
+            state: homeState,
+            city: cityName,
+            price: price,
+            priceText: price ? `$${price.toLocaleString()}` : null,
+            beds: home.beds || null,
+            bedsText: home.beds ? `${home.beds} bed${home.beds !== 1 ? 's' : ''}` : null,
+            baths: home.baths || null,
+            bathsText: home.baths ? `${home.baths} bath${home.baths !== 1 ? 's' : ''}` : null,
+            sqft: home.sqFt?.value || null,
+            sqftText: home.sqFt?.value ? `${home.sqFt.value.toLocaleString()} sqft` : null,
+            propertyType: home.propertyType?.value || home.propertyType || 'Single Family',
+            listingId: home.listingId || null,
+            yearBuilt: home.yearBuilt?.value || null,
+            daysOnMarket: home.dom?.value || null,
+            latitude: home.latLong?.value?.latitude || null,
+            longitude: home.latLong?.value?.longitude || null,
+            status: 'active',
+            // Listing type: 1=Agent, 2=Owner (FSBO), 3=Foreclosure
+            listingType: home.listingType || 1,
+            listingTypeText: home.listingType === 2 ? 'For Sale by Owner' :
+                            home.listingType === 3 ? 'Foreclosure' : 'Agent Listed'
+          };
+        });
+
+        L.info(`Successfully fetched ${properties.length} real properties from Redfin API (page ${pageNum}, sort=${sortOrder})`);
+
+        // Determine if there are more results
+        const hasMore = allFilteredHomes.length >= limitNum;
+
+        return res.json({
+          ok: true,
+          source: 'redfin.com (live API - multi-city)',
+          scrapedAt: new Date().toISOString(),
+          state: stateInfo.name,
+          stateCode: stateInfo.code,
+          citiesFetched: citiesFetched,
+          filters: REDFIN_FILTERS,
+          count: properties.length,
+          addresses: properties,
+          pagination: {
+            currentPage: pageNum,
+            limit: limitNum,
+            hasMore: hasMore,
+            nextPage: hasMore ? pageNum + 1 : null
+          },
+          message: `Real active listings from ${citiesFetched.join(', ')}, ${stateInfo.name} (${properties.length} properties)`
+        });
+      }
+
+      L.warn('Redfin API returned no results from any city, using sample data');
+    } catch (apiErr) {
+      L.error(`Redfin API failed: ${apiErr.message}`);
+    }
+
+    // Return sample data (API returned no results or failed)
+    // Note: Redfin's API often blocks server-side requests
+    const properties = generateMockProperties(state.toUpperCase(), stateInfo.name, parseInt(limit), city);
+
+    return res.json({
+      ok: true,
+      source: 'sample-data',
+      scrapedAt: new Date().toISOString(),
+      state: stateInfo.name,
+      stateCode: stateInfo.code,
+      city: city || 'All Cities',
+      filters: REDFIN_FILTERS,
+      count: properties.length,
+      addresses: properties,
+      message: `Sample listings for ${city || stateInfo.name}. Note: Redfin blocks server-side API requests. For real data, use the Redfin website directly.`
+    });
+
+  } catch (error) {
+    L.error('Live Redfin scrape failed', { error: error.message });
+
+    res.status(500).json({
+      ok: false,
+      error: error.message || 'Failed to scrape Redfin',
+      message: 'Failed to generate mock data. Please try again.',
+      addresses: []
+    });
+  }
+});
+
+/**
+ * GET /api/live-scrape/test
+ *
+ * Test endpoint that returns mock data to verify the API works
+ */
+router.get('/test', requireAuth, async (req, res) => {
+  const { limit = 10 } = req.query;
+
+  // Mock addresses for testing
+  const mockAddresses = [
+    '123 Main St, San Francisco, CA 94102',
+    '456 Oak Ave, Los Angeles, CA 90001',
+    '789 Pine Dr, San Diego, CA 92101',
+    '321 Elm Blvd, Sacramento, CA 95814',
+    '654 Maple Ct, San Jose, CA 95110',
+    '987 Cedar Ln, Fresno, CA 93650',
+    '147 Birch Way, Oakland, CA 94601',
+    '258 Willow St, Long Beach, CA 90802',
+    '369 Spruce Rd, Bakersfield, CA 93301',
+    '741 Redwood Pl, Anaheim, CA 92801'
+  ].slice(0, parseInt(limit)).map((addr, i) => ({
+    fullAddress: addr,
+    vendor: 'privy',
+    extractedAt: new Date().toISOString(),
+    sourceIndex: i,
+    test: true
+  }));
+
+  res.json({
+    ok: true,
+    source: 'test-mode',
+    scrapedAt: new Date().toISOString(),
+    count: mockAddresses.length,
+    addresses: mockAddresses,
+    message: 'Test data - Live scraping endpoint is working'
+  });
+});
+
+export default router;

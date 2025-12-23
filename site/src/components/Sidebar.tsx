@@ -18,6 +18,9 @@ export default function Sidebar({ isAdmin, onLogout }: Props) {
         <NavLink to="/deals" className={({ isActive }) => `${base} ${isActive ? active : idle}`}>
           <span>Deals</span>
         </NavLink>
+        <NavLink to="/scraped-deals" className={({ isActive }) => `${base} ${isActive ? active : idle}`}>
+          <span>All Addresses</span>
+        </NavLink>
         {isAdmin && (
           <NavLink to="/users" className={({ isActive }) => `${base} ${isActive ? active : idle}`}>
             <span>Users</span>

@@ -14,6 +14,7 @@ import {
 } from '../config/selection.js';
 import { upsertRawProperty } from '../../../controllers/rawPropertyController.js';
 import { upsertPropertyDetailsFromRaw } from '../../../controllers/propertyController.js';
+import ScrapedDeal from '../../../models/ScrapedDeal.js';
 import { randomMouseMovements, randomWait, parseAddresses } from '../../../helpers.js';
 import { logPrivy } from '../../../utils/logger.js';
 import path from 'path';
@@ -801,6 +802,37 @@ await page.evaluate(() => {
                   await upsertPropertyDetailsFromRaw(prop);
                 } catch (e) {
                   logPrivy.warn('Failed to mirror details into properties', { fullAddress: prop?.fullAddress || null, error: e?.message });
+                }
+
+                // Also save to ScrapedDeal for Deals page (auto-calculates isDeal when AMV is added)
+                try {
+                  const fullAddress_ci = prop.fullAddress.trim().toLowerCase();
+                  await ScrapedDeal.updateOne(
+                    { fullAddress_ci },
+                    {
+                      $set: {
+                        address: prop.address || prop.fullAddress?.split(',')[0]?.trim(),
+                        fullAddress: prop.fullAddress,
+                        fullAddress_ci,
+                        city: prop.city || null,
+                        state: prop.state || state,
+                        zip: prop.zip || null,
+                        listingPrice: prop.price || prop.listingPrice || null,
+                        beds: prop.beds || null,
+                        baths: prop.baths || null,
+                        sqft: prop.sqft || null,
+                        source: 'privy',
+                        scrapedAt: new Date(),
+                      },
+                      $setOnInsert: {
+                        amv: null,
+                        isDeal: false,
+                      }
+                    },
+                    { upsert: true }
+                  );
+                } catch (e) {
+                  logPrivy.warn('Failed to save to ScrapedDeal', { fullAddress: prop?.fullAddress || null, error: e?.message });
                 }
                 urlSaved += 1;
                 stateSaved += 1;

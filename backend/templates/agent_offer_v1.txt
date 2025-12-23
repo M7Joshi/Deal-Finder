@@ -1,26 +1,37 @@
-OFFER TO PURCHASE
+Subject: Offer to Purchase – {{property_address}}
 
-Date: {{date}}
-Agent Name: {{agent_name}}
+Dear {{agent_name}},
 
-Subject Address: {{property_address}}
-Offer Price: {{offer_price}}
-EMD: {{emd}}
-Terms: {{terms}}
+On behalf of MIOYM Properties, we are pleased to submit our Offer to Purchase for the property referenced above.
 
-Buyer:
-Mioym Properties c/o Marc Cox
-2900 Westchester Ave
-Suite 302. Harrison, NY 10577
-Phone: 914-488-4228
+Offer Details
 
-Title / Escrow:
+Subject Property: {{property_address}}
+Purchase Price: {{offer_price}}
+Earnest Money Deposit (EMD): $1,000 (to be delivered within five (5) days of acceptance)
+Financing: Hard Money
+Condition: AS IS
+Due Diligence Period: 15 days
+Closing Timeline: 30 days
+Delivery: Property to be delivered vacant
+
+Buyer Information
+
+MIOYM Properties / c/o Marc Cox
+2900 Westchester Avenue, Suite 302
+Purchase, NY 10577
+Phone: 347-247-7293
+
+Attorney / Title / Escrow
+
 Susan Makin, Chief Operating Officer
 15 Crawford Street
 Needham, MA 02494
-PH: 617-431-2011
-FX: 781-465-6100
+Phone: 617-431-2011
+Fax: 781-465-6100
 Email: Susan@KrisslawAtlantic.com
-Website: www.krisslawatlantic.com
 
-This offer was sent by {{reply_to}} via Mioym Deal Finder.
+Kind regards,
+
+Marc Cox
+MIOYM Properties

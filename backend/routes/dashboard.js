@@ -1,16 +1,17 @@
 // backend/routes/dashboard.js
 import express from 'express';
 import Property from '../models/Property.js';
-import { requireAuth, requireAdmin } from '../middleware/authMiddleware.js';
+import { requireAuth, scopeByState } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// Protect the whole router: admin-only
-router.use(requireAuth, requireAdmin);
+// Protect the whole router: authenticated users (admin OR subadmin)
+// Each user sees only their assigned states via scopeByState middleware
+router.use(requireAuth, scopeByState());
 
 /**
  * GET /api/dashboard/summary?months=12
- * Returns:
+ * Returns stats filtered by user's allowed states:
  *  - totals: { deals, nonDeals, properties }
  *  - dealsPerMonth:    [{ month: '2025-09', count: 42 }, ...]
  *  - nonDealsPerMonth: [{ month: '2025-09', count: 99 }, ...]
@@ -23,11 +24,15 @@ router.get('/summary', async (req, res) => {
     const since = new Date();
     since.setMonth(since.getMonth() - months + 1); // include current month
 
+    // Get state filter from middleware (empty for admins, filtered for subadmins)
+    const stateFilter = req.stateFilter || {};
+
     // compute a robust date field (createdAt if present, else ObjectId time)
     const dateExpr = { $ifNull: ['$createdAt', { $toDate: '$_id' }] };
 
-    // Totals (global)
+    // Totals (filtered by user's states)
     const [totalsAgg] = await Property.aggregate([
+      { $match: stateFilter },
       {
         $group: {
           _id: null,
@@ -38,9 +43,9 @@ router.get('/summary', async (req, res) => {
       },
     ]);
 
-    // Helper builders
+    // Helper builders - now include state filter
     const perMonth = (dealMatch) => ([
-      { $match: dealMatch },
+      { $match: { ...stateFilter, ...dealMatch } },
       { $addFields: { _date: dateExpr } },
       { $match: { _date: { $gte: since } } },
       { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$_date' } }, count: { $sum: 1 } } },
@@ -49,7 +54,7 @@ router.get('/summary', async (req, res) => {
     ]);
 
     const byState = (dealMatch) => ([
-      { $match: dealMatch },
+      { $match: { ...stateFilter, ...dealMatch } },
       { $group: { _id: '$state', count: { $sum: 1 } } },
       { $project: { _id: 0, state: '$_id', count: 1 } },
       { $sort: { count: -1 } },
@@ -62,11 +67,14 @@ router.get('/summary', async (req, res) => {
       Property.aggregate(perMonth({ $or: [ { deal: { $exists: false } }, { deal: { $ne: true } } ] })),
     ]);
 
-    // Deals/non-deals by state (all-time)
+    // Deals/non-deals by state (all-time, but only user's states)
     const [dealsByState, nonDealsByState] = await Promise.all([
       Property.aggregate(byState({ deal: true })),
       Property.aggregate(byState({ $or: [ { deal: { $exists: false } }, { deal: { $ne: true } } ] })),
     ]);
+
+    // Include user's allowed states in response for frontend display
+    const userStates = req.isAdmin ? 'all' : (req.user?.states || []);
 
     res.json({
       ok: true,
@@ -81,6 +89,7 @@ router.get('/summary', async (req, res) => {
         dealsByState,
         nonDealsByState,
         window: { since, months },
+        userStates, // tells frontend which states user can see
       },
     });
   } catch (err) {
@@ -91,7 +100,7 @@ router.get('/summary', async (req, res) => {
 
 /**
  * GET /api/dashboard/deals?limit=50&skip=0&sort=-createdAt&deal=true|false|all
- * Admin can page through deals / non-deals / all.
+ * Users can page through deals / non-deals / all (filtered by their states).
  * - deal=true  -> only deal: true
  * - deal=false -> deal !== true (includes false or missing)
  * - deal=all   -> no deal filter
@@ -103,6 +112,9 @@ router.get('/deals', async (req, res) => {
     const sort = String(req.query.sort || '-_id');
     const dealParam = String(req.query.deal || 'true').toLowerCase();
 
+    // Get state filter from middleware (empty for admins, filtered for subadmins)
+    const stateFilter = req.stateFilter || {};
+
     // Normalize sort safely
     const allowed = { createdAt: 1, updatedAt: 1, _id: 1 };
     const sortKey = sort.replace('-', '');
@@ -110,13 +122,13 @@ router.get('/deals', async (req, res) => {
       ? (sort.startsWith('-') ? { [sortKey]: -1 } : { [sortKey]: 1 })
       : { _id: -1 };
 
-    // Build query based on deal flag
-    let match = {};
+    // Build query based on deal flag + state filter
+    let match = { ...stateFilter };
     if (dealParam === 'true') {
-      match = { deal: true };
+      match = { ...stateFilter, deal: true };
     } else if (dealParam === 'false') {
-      match = { $or: [{ deal: { $exists: false } }, { deal: { $ne: true } }] };
-    } // 'all' leaves match = {}
+      match = { ...stateFilter, $or: [{ deal: { $exists: false } }, { deal: { $ne: true } }] };
+    } // 'all' leaves match = stateFilter only
 
     const rows = await Property.find(match)
       .sort(sortObj)

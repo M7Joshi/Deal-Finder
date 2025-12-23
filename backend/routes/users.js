@@ -38,8 +38,11 @@ router.get('/', async (req, res) => {
   try {
     const includeDeleted = String(req.query.include_deleted || '').toLowerCase() === '1' || String(req.query.include_deleted || '').toLowerCase() === 'true';
     const users = await User.find(includeDeleted ? {} : { deleted_at: { $exists: false } }).lean();
-    // do not leak password hashes
-    users.forEach(u => { if (u.password) delete u.password; });
+    // do not leak password hashes or SMTP passwords
+    users.forEach(u => {
+      if (u.password) delete u.password;
+      if (u.smtp_pass) u.smtp_pass = '********'; // mask but indicate it's set
+    });
     return res.json({ ok: true, data: users });
   } catch (err) {
     console.error(err);
@@ -55,6 +58,7 @@ router.get('/:id', async (req, res) => {
     const user = await User.findOne(lookup).lean();
     if (!user) return res.status(404).json({ ok: false, error: 'User not found' });
     if (user.password) delete user.password;
+    if (user.smtp_pass) user.smtp_pass = '********'; // mask but indicate it's set
     return res.json({ ok: true, data: user });
   } catch (err) {
     console.error(err);
@@ -108,11 +112,18 @@ router.post('/create', async (req, res) => {
       password: body.password.trim(), // let schema pre('save') hash this
       is_admin: role === 'admin' || toBool(body.is_admin),
       states,
+      // SMTP credentials for sending emails
+      smtp_host: body.smtp_host || null,
+      smtp_port: body.smtp_port ? parseInt(body.smtp_port, 10) : 587,
+      smtp_user: body.smtp_user || null,
+      smtp_pass: body.smtp_pass || null,
+      smtp_secure: toBool(body.smtp_secure),
     });
 
     const saved = await user.save();
     const doc = saved.toObject();
     delete doc.password;
+    if (doc.smtp_pass) doc.smtp_pass = '********';
     return res.status(201).json({ ok: true, data: doc });
   } catch (err) {
     console.error(err);
@@ -202,6 +213,7 @@ router.patch('/update/:id', async (req, res) => {
 
     const doc = updatedUser.toObject();
     delete doc.password;
+    if (doc.smtp_pass) doc.smtp_pass = '********';
     return res.json({ ok: true, data: doc });
   } catch (err) {
     console.error(err);

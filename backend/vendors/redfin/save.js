@@ -8,6 +8,7 @@ const num = (v) => {
 // In ESM, default-importing a CommonJS model maps to its module.exports
 import Property from '../../models/Property.js';
 import RawProperty from '../../models/rawProperty.js';
+import ScrapedDeal from '../../models/ScrapedDeal.js';
 
 export async function upsertRaw({ address, city, state, zip, price, beds, baths, sqft, raw, agentName, agentEmail }) {
   {
@@ -43,6 +44,36 @@ export async function upsertRaw({ address, city, state, zip, price, beds, baths,
       { $set: setDoc },
       { upsert: true }
     );
+
+    // Also save to ScrapedDeal for Deals page (auto-calculates isDeal when AMV is added)
+    try {
+      await ScrapedDeal.updateOne(
+        { fullAddress_ci },
+        {
+          $set: {
+            address: fullAddress.split(',')[0]?.trim() || fullAddress,
+            fullAddress,
+            fullAddress_ci,
+            city: city || null,
+            state: (state || '').toUpperCase() || null,
+            zip: zip || null,
+            listingPrice: priceNum || null,
+            beds: num(beds) || null,
+            baths: num(baths) || null,
+            sqft: num(sqft) || null,
+            source: 'redfin',
+            scrapedAt: new Date(),
+          },
+          $setOnInsert: {
+            amv: null,
+            isDeal: false,
+          }
+        },
+        { upsert: true }
+      );
+    } catch (e) {
+      // Silent fail - don't break the main flow
+    }
   }
 }
 
@@ -92,5 +123,35 @@ export async function upsertProperty({ prop_id, address, city, state, zip, price
       { $set: setDoc },
       { upsert: true }
     );
+
+    // Also save to ScrapedDeal for Deals page (auto-calculates isDeal when AMV is added)
+    try {
+      await ScrapedDeal.updateOne(
+        { fullAddress_ci },
+        {
+          $set: {
+            address: fullAddress.split(',')[0]?.trim() || fullAddress,
+            fullAddress,
+            fullAddress_ci,
+            city: city || null,
+            state: (state || '').toUpperCase() || null,
+            zip: zip || null,
+            listingPrice: priceNum || null,
+            beds: num(beds) || null,
+            baths: num(baths) || null,
+            sqft: num(sqft) || null,
+            source: 'redfin',
+            scrapedAt: new Date(),
+          },
+          $setOnInsert: {
+            amv: null,
+            isDeal: false,
+          }
+        },
+        { upsert: true }
+      );
+    } catch (e) {
+      // Silent fail - don't break the main flow
+    }
   }
 }

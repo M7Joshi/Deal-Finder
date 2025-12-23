@@ -6,6 +6,39 @@ import path from 'node:path';
 import os from 'os';
 import { makeRequestBlocker, defaultBlockList } from '../utils/requestFilters.js';
 
+// Auto-detect Chrome executable path based on platform
+function getDefaultChromePath() {
+  const platform = os.platform();
+
+  if (platform === 'win32') {
+    // Common Windows Chrome paths
+    const possiblePaths = [
+      path.join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    ];
+    for (const p of possiblePaths) {
+      if (fs.existsSync(p)) return p;
+    }
+  } else if (platform === 'darwin') {
+    // macOS
+    const macPath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    if (fs.existsSync(macPath)) return macPath;
+  } else {
+    // Linux
+    const linuxPaths = ['/usr/bin/google-chrome', '/usr/bin/chromium-browser', '/usr/bin/chromium'];
+    for (const p of linuxPaths) {
+      if (fs.existsSync(p)) return p;
+    }
+  }
+
+  // Fallback - let puppeteer try to find it
+  return null;
+}
+
+// Get Chrome path (cached)
+const CHROME_PATH = getDefaultChromePath();
+
 // Use a dedicated userDataDir to avoid Chrome "SingletonLock" on default profile
 const SHARED_USER_DATA_DIR = process.env.SHARED_CHROME_USER_DATA_DIR || `/tmp/df-shared-${process.pid}`;
 const PROTOCOL_TIMEOUT = Number(process.env.PPTR_PROTOCOL_TIMEOUT || 120000); // 120s default
@@ -18,6 +51,8 @@ export async function getSharedBrowser(launchOpts = {}) {
   }
   // Provide sane defaults but allow callers to override
   const defaults = {
+    // Only set executablePath if we have a valid Chrome path
+    ...(CHROME_PATH ? { executablePath: CHROME_PATH } : {}),
     headless: 'shell',
     defaultViewport: null,
     ignoreHTTPSErrors: true,
@@ -28,6 +63,7 @@ export async function getSharedBrowser(launchOpts = {}) {
       '--disable-gpu',
       '--disable-dev-shm-usage',
       '--no-sandbox',
+
       '--window-size=1366,768',
       '--remote-debugging-port=0',
       '--lang=en-US,en;q=0.9',
@@ -55,6 +91,17 @@ function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 
 function tryAcquireLock(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
+
+  // Clean up stale lock files (older than 2 minutes)
+  try {
+    const stats = fs.statSync(file);
+    const age = Date.now() - stats.mtimeMs;
+    if (age > 120000) { // 2 minutes
+      fs.unlinkSync(file);
+      console.log('[browser] Removed stale lock file (age: ' + Math.round(age/1000) + 's)');
+    }
+  } catch {}
+
   try {
     const fd = fs.openSync(file, 'wx');  // atomic create or throw if exists
     return fd;
@@ -115,6 +162,8 @@ export async function openBrowser(launchArgs = []) {
     return br;
   }
   const br = await puppeteer.launch({
+    // Only set executablePath if we have a valid Chrome path
+    ...(CHROME_PATH ? { executablePath: CHROME_PATH } : {}),
     protocolTimeout: PROTOCOL_TIMEOUT,
     headless: 'shell',
     defaultViewport: null,
@@ -152,18 +201,21 @@ export async function initSharedBrowser() {
     if (!lockFd) {
       // Someone else is launching — wait for WS file to appear
       const t0 = Date.now();
-      while (Date.now() - t0 < 30000) {  // 30s
+      const WAIT_TIMEOUT = Number(process.env.CHROME_LAUNCH_TIMEOUT_MS || 90000); // Increased to 90s
+      while (Date.now() - t0 < WAIT_TIMEOUT) {
         const br = await connectFromWsFile();
         if (br) return br;
-        await sleep(300);
+        await sleep(500); // Increased polling interval to reduce CPU usage
       }
-      throw new Error('Timeout waiting for shared Chrome to come up');
+      throw new Error(`Timeout waiting for shared Chrome to come up (waited ${WAIT_TIMEOUT}ms). Try increasing CHROME_LAUNCH_TIMEOUT_MS env variable.`);
     }
 
     // 3) We hold the lock: perform the launch.
     fs.mkdirSync(PROFILE_DIR, { recursive: true });
     const headless = String(process.env.PRIVY_HEADLESS || 'true').toLowerCase() !== 'false' ? 'new' : false;
     const browser = await puppeteer.launch({
+      // Only set executablePath if we have a valid Chrome path
+      ...(CHROME_PATH ? { executablePath: CHROME_PATH } : {}),
       protocolTimeout: PROTOCOL_TIMEOUT,
       headless,
       userDataDir: PROFILE_DIR,

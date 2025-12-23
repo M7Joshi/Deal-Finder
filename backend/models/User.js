@@ -13,8 +13,15 @@ const userSchema = new mongoose.Schema({
   role: { type: String, enum: ['admin', 'subadmin'], default: 'subadmin' },
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now },
-  deleted_at: { type: Date },  
-  states: { type: [String], default: [] }
+  deleted_at: { type: Date },
+  states: { type: [String], default: [] },
+
+  // SMTP credentials for sending emails from subadmin's account
+  smtp_host: { type: String, default: null },      // e.g., 'smtp.gmail.com'
+  smtp_port: { type: Number, default: 587 },       // Usually 587 for TLS
+  smtp_user: { type: String, default: null },      // Usually same as email
+  smtp_pass: { type: String, default: null },      // App password (not regular password)
+  smtp_secure: { type: Boolean, default: false },  // true for 465, false for 587
 });
 
 userSchema.pre('save', function(next) {

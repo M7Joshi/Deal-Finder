@@ -35,7 +35,24 @@ async function dismissOverlays(page){
   } catch {}
 }
 
-async function safeType(handle, value){
+async function safeType(handle, value, { useDirectSet = false } = {}){
+  // For passwords with special characters (@, #, etc.), use direct JS setting first
+  if (useDirectSet) {
+    try {
+      await handle.focus();
+      await handle.click({clickCount:3, delay:30});
+      await handle.evaluate((el,v)=>{
+        el.value = v;
+        el.dispatchEvent(new Event('input',{bubbles:true}));
+        el.dispatchEvent(new Event('change',{bubbles:true}));
+      }, value);
+      // Verify
+      const ok = await handle.evaluate((el,v)=> (el.value||'').toString().trim()===v, value);
+      if(ok) return true;
+    } catch {}
+  }
+
+  // Standard typing approach
   try{
     await handle.focus();
     await handle.click({clickCount:3, delay:30});
@@ -44,6 +61,7 @@ async function safeType(handle, value){
     const ok = await handle.evaluate((el,v)=> (el.value||'').toString().trim()===v, value);
     if(ok) return true;
   }catch{}
+
   // Fallback: set via JS directly
   try{
     await handle.evaluate((el,v)=>{ el.value=v; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); }, value);
@@ -81,8 +99,19 @@ import {
   consumeOtpCodeDB,
 
 } from '../../../state/otpState.js';
+import { fetchOtpFromEmail } from '../../../services/emailOtpFetcher.js';
 
 const PASSWORD             = process.env.PRIVY_PASSWORD;
+
+// Debug: verify password is loaded correctly (including special chars like #)
+if (PASSWORD) {
+  const lastChar = PASSWORD.slice(-1);
+  log.info('Password loaded from env', {
+    length: PASSWORD.length,
+    endsWithHash: lastChar === '#',
+    lastChar: lastChar
+  });
+}
 
 let __privyLoginInFlight = false;
 
@@ -94,23 +123,33 @@ async function requestOtpUnified({
   meta = null,
   timeoutMs = Number(process.env.OTP_REQUEST_TIMEOUT_MS || 120000),
 } = {}) {
-  // 1) Create a single DB OTP record
-  const { id } = await requestOtpCodeDB({ service, prompt, meta, timeoutMs });
+  // 1) Try to create DB OTP record (non-blocking if DB fails)
+  let id = `otp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    const dbResult = await Promise.race([
+      requestOtpCodeDB({ service, prompt, meta, timeoutMs }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('DB timeout')), 5000))
+    ]);
+    if (dbResult?.id) id = dbResult.id;
+  } catch (dbErr) {
+    log.warn('DB OTP request failed, continuing with email auto-fetch only', { error: dbErr.message });
+  }
 
   // 2) Wait for UI submission via global resolver map
   global.__otpResolvers = global.__otpResolvers || new Map();
-    const inMemoryWait = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        try { global.__otpResolvers.delete(id); } catch {}
-        reject(new Error('OTP request timed out'));
-      }, timeoutMs);
-      global.__otpResolvers.set(id, { resolve, reject, timeout });
-    });
-  
-    // Cross-process path: poll DB for submittedCode for this id
-    const dbWait = (async () => {
-      const t0 = Date.now();
-      while (Date.now() - t0 < timeoutMs) {
+  const inMemoryWait = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      try { global.__otpResolvers.delete(id); } catch {}
+      reject(new Error('OTP request timed out'));
+    }, timeoutMs);
+    global.__otpResolvers.set(id, { resolve, reject, timeout });
+  });
+
+  // Cross-process path: poll DB for submittedCode for this id (skip if DB unavailable)
+  const dbWait = (async () => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeoutMs) {
+      try {
         // Prefer a cheap direct consume to avoid double-reads
         const code = await consumeOtpCodeDB(id);
         if (code) return code;
@@ -119,15 +158,43 @@ async function requestOtpUnified({
         if (s && s.id === id && s.submittedCode) {
           return s.submittedCode;
         }
-        await new Promise(r => setTimeout(r, 500));
+      } catch (e) {
+        // DB error, skip this iteration
       }
-      throw new Error('OTP request timed out');
-    })();
-  
-    // whichever arrives first (same-process resolver OR DB submission)
-    const code = await Promise.race([inMemoryWait, dbWait]);
+      await new Promise(r => setTimeout(r, 500));
+    }
+    throw new Error('OTP request timed out');
+  })();
 
-  // 3) Best-effort: mark accepted / clear DB banner
+  // 3) Auto-fetch OTP from email (if configured) - PRIMARY METHOD
+  const emailFetchWait = (async () => {
+    try {
+      const autoFetchEnabled = process.env.OTP_AUTO_FETCH_ENABLED !== 'false';
+      const hasPassword = !!process.env.GMAIL_IMAP_APP_PASSWORD || !!process.env.GMAIL_PASSWORD;
+
+      if (!autoFetchEnabled || !hasPassword) {
+        log.debug('Auto OTP fetch disabled or not configured, skipping email fetch');
+        // Return a promise that never resolves (will lose the race)
+        return new Promise(() => {});
+      }
+
+      log.info('Starting automatic OTP fetch from email...');
+      const code = await fetchOtpFromEmail({
+        timeoutMs: Math.min(timeoutMs, Number(process.env.OTP_EMAIL_TIMEOUT_MS || 90000)),
+      });
+      log.info('Auto OTP fetch successful', { code: code.slice(0, 2) + '****' });
+      return code;
+    } catch (err) {
+      log.warn('Auto OTP fetch failed, falling back to manual entry', { error: err.message });
+      // Return a promise that never resolves (will lose the race to manual entry)
+      return new Promise(() => {});
+    }
+  })();
+
+  // whichever arrives first (same-process resolver OR DB submission OR email auto-fetch)
+  const code = await Promise.race([inMemoryWait, dbWait, emailFetchWait]);
+
+  // 4) Best-effort: mark accepted / clear DB banner
   try { await submitOtpCodeDB({ id, code }); } catch {}
   try { await cancelOtpRequestDB('otp accepted'); } catch {}
 
@@ -322,14 +389,27 @@ async function trustThisDeviceIfPresent(page) {
   const candidates = [
     'input[type="checkbox"][name*="trust" i]',
     'input[type="checkbox"][id*="trust" i]',
+    'input[type="checkbox"][name*="remember" i]',
+    'input[type="checkbox"][id*="remember" i]',
     'label[for*="trust" i]',
+    'label[for*="remember" i]',
     '//label[contains(., "Trust this device")]',
+    '//label[contains(., "Remember this device")]',
+    '//label[contains(., "Don\'t ask again")]',
     '//span[contains(., "Trust this device")]',
+    '//span[contains(., "Remember this device")]',
+    '//div[contains(@class, "checkbox")]//input',
   ];
   try {
-    const found = await waitForAnySelector(page, candidates, { timeout: 1500, visible: true });
+    const found = await waitForAnySelector(page, candidates, { timeout: 2000, visible: true });
     if (found) {
-      try { await found.handle.click({ delay: 40 }); } catch {}
+      log.info('Found "Trust this device" checkbox, clicking it');
+      try {
+        await found.handle.click({ delay: 40 });
+        log.info('Clicked "Trust this device" checkbox');
+      } catch (e) {
+        log.warn('Failed to click trust checkbox', { error: e?.message });
+      }
     }
   } catch {}
 }
@@ -485,11 +565,81 @@ export async function loginToPrivy(page) {
       }
 
       if (isPasswordPath) {
-        try { await passOrOtp.handle.focus(); } catch {}
-        const ok = await safeType(passOrOtp.handle, PASSWORD);
-        if(!ok){ L.warn('Typing password failed; attempting Enter anyway'); }
-        (await clickAny(page, SUBMIT_SELECTORS)) || await page.keyboard.press('Enter');
-        await randomWait(800, 1500);
+        L.info('Password field found, entering password using direct JS injection...', {
+          passwordLength: PASSWORD?.length,
+          endsWithHash: PASSWORD?.slice(-1) === '#'
+        });
+
+        // Use direct JavaScript injection to set password value
+        // This avoids keyboard issues with special characters like @ and #
+        let passwordSet = false;
+
+        // Method 1: Direct JS value injection (most reliable for special chars)
+        try {
+          await passOrOtp.handle.focus();
+          await randomWait(100, 200);
+
+          // Set value directly via JavaScript - bypasses keyboard entirely
+          await passOrOtp.handle.evaluate((el, pwd) => {
+            el.value = pwd;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            // Also dispatch keyup for React forms that listen to it
+            el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+          }, PASSWORD);
+
+          // Verify the value was set correctly
+          const setValue = await passOrOtp.handle.evaluate(el => el.value);
+          if (setValue === PASSWORD) {
+            passwordSet = true;
+            L.info('Password set via direct JS injection - verified correct');
+          } else {
+            L.warn('Password verification failed', { expected: PASSWORD?.length, got: setValue?.length });
+          }
+        } catch (e) {
+          L.warn('Direct JS injection failed', { error: e.message });
+        }
+
+        // Method 2: Fallback to safeType helper if JS injection failed
+        if (!passwordSet) {
+          try {
+            L.info('Trying safeType helper as fallback...');
+            passwordSet = await safeType(passOrOtp.handle, PASSWORD, { useDirectSet: true });
+            if (passwordSet) {
+              L.info('Password set via safeType helper');
+            }
+          } catch (e) {
+            L.warn('safeType fallback failed', { error: e.message });
+          }
+        }
+
+        // Method 3: Last resort - slow character-by-character typing
+        if (!passwordSet) {
+          try {
+            L.info('Last resort: slow character typing...');
+            await passOrOtp.handle.click({ clickCount: 3 });
+            await randomWait(100, 200);
+            // Type very slowly with longer delays
+            for (const char of PASSWORD) {
+              await page.keyboard.type(char, { delay: 100 });
+              await randomWait(50, 100);
+            }
+            passwordSet = true;
+            L.info('Password typed character by character');
+          } catch (e) {
+            L.warn('Character-by-character typing failed', { error: e.message });
+          }
+        }
+
+        await randomWait(500, 800);
+
+        // Submit the form
+        const submitted = await clickAny(page, SUBMIT_SELECTORS);
+        if (!submitted) {
+          await page.keyboard.press('Enter');
+        }
+        L.info('Form submitted');
+        await randomWait(1000, 2000);
       }
 
       // Post-submit: wait for dashboard, OTP markers, or sessions/* interstitials
@@ -593,7 +743,11 @@ export async function loginToPrivy(page) {
       const submitted = await submitOtpForm(page);
       if (!submitted) L.warn('Could not locate explicit OTP submit control; fall back to Enter key.');
 
-      // After OTP, allow SPA to push us to dashboard; don’t use networkidle
+      // Check for "Trust this device" after OTP submission (may appear now)
+      await randomWait(500, 1000);
+      await trustThisDeviceIfPresent(page);
+
+      // After OTP, allow SPA to push us to dashboard; don't use networkidle
       try {
         await Promise.race([
           page.waitForFunction(() => location.pathname.includes('/dashboard'), { timeout: 90_000 }),

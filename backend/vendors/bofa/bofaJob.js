@@ -1052,7 +1052,22 @@ async function fetchBatch(limit) {
 // Very light address normalizer: collapses whitespace/case and expands common suffixes
 function normalizeAddress(s) {
   if (!s) return '';
-  const x = String(s).trim().replace(/\s+/g, ' ').toUpperCase();
+  let x = String(s).trim();
+
+  // Fix concatenated directional + street types (e.g., "EastAvenue" -> "East Avenue")
+  // This fixes malformed addresses from Redfin like "66th EastAvenue" -> "66th East Avenue"
+  const directions = ['North', 'South', 'East', 'West', 'Northeast', 'Northwest', 'Southeast', 'Southwest'];
+  const streetTypes = ['Avenue', 'Ave', 'Street', 'St', 'Drive', 'Dr', 'Road', 'Rd', 'Boulevard', 'Blvd', 'Lane', 'Ln', 'Court', 'Ct', 'Circle', 'Cir', 'Place', 'Pl', 'Way', 'Terrace', 'Ter', 'Trail', 'Trl', 'Parkway', 'Pkwy'];
+  for (const dir of directions) {
+    for (const type of streetTypes) {
+      const pattern = new RegExp(`(${dir})(${type})\\b`, 'gi');
+      x = x.replace(pattern, '$1 $2');
+    }
+  }
+  // Fix ordinal + directional concatenation (e.g., "66thEast" -> "66th East")
+  x = x.replace(/(\d+(?:st|nd|rd|th))(North|South|East|West)/gi, '$1 $2');
+
+  x = x.replace(/\s+/g, ' ').toUpperCase();
   // Expand a few common USPS suffixes to reduce dupes
   const suffixes = [
     [/(\b)ST(\b)\.?/g, '$1STREET$2'],

@@ -16,6 +16,11 @@ const connectDB = async () => {
     }
 
     L.start('Connecting to MongoDB…');
+
+    // Disable buffering to avoid "buffering timed out" errors
+    mongoose.set('bufferCommands', false);
+    mongoose.set('bufferTimeoutMS', 30000);
+
     await mongoose.connect(dbURI, {
       serverSelectionTimeoutMS: 30000, // Increase timeout to 30 seconds
     });

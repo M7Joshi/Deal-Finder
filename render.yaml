@@ -83,11 +83,15 @@ envVarGroups:
       - key: PRIVY_REMOTE_DEBUG_URL
         value: ""
       - key: PRIVY_STATES
-        value: ALL
+        value: AL,AZ,AR,CA,CO,CT,DE,FL,GA,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,NE,NV,NH,NJ,NY,NC,OK,OR,PA,RI,SC,TN,TX,VT,VA,WA,WV,WI
       - key: PRIVY_MAX_PARALLEL_STATES
         value: "1"
       - key: PRIVY_CONCURRENCY
         value: "1"
+      - key: PRIVY_MAX_RETRIES
+        value: "3"
+      - key: PRIVY_RETRY_DELAY_MS
+        value: "5000"
       - key: PRIVY_KEEPALIVE_MINUTES
         value: "25"
       - key: PRIVY_NAV_TIMEOUT_MS
@@ -200,6 +204,8 @@ envVarGroups:
         value: "1"
       - key: BOFA_IDLE_MS
         value: "15000"
+      - key: SCRAPED_DEALS_AMV_BATCH
+        value: "100000"
       - key: BOFA_HIST_ENABLED
         value: "1"
       - key: BOFA_LRU_ENABLED
@@ -341,7 +347,7 @@ envVarGroups:
       - key: MAX_INDEX_PAGES_PER_CITY
         value: "1"
       - key: MAX_LISTINGS_PER_CITY
-        value: "25"
+        value: "10000"
       - key: REDFIN_UNKNOWN_OK
         value: "1"
       - key: REDFIN_REQUIRE_HOA_NO
@@ -448,3 +454,15 @@ services:
         value: production
       - key: AUTOMATION_WORKER
         value: "1"
+
+  # ---- Frontend (React) ----
+  - type: web
+    name: dealfinder-frontend
+    env: docker
+    plan: starter
+    autoDeploy: true
+    dockerfilePath: site/Dockerfile
+    buildCommand: npm run build
+    envVars:
+      - key: REACT_APP_API_BASE_URL
+        value: https://dealfinder-api.onrender.com

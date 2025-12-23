@@ -198,3 +198,63 @@ export async function sendAgentOffer(propertyId: string, payload: {
   });
   return asJson(res);
 }
+
+// === Live Scraping (no database) ===
+export async function liveScrapePrivy(params: { state?: string; city?: string; limit?: number; page?: number } = {}, signal?: AbortSignal) {
+  const res = await fetch(`${BASE}/api/live-scrape/privy${qs(params)}`, {
+    headers: authHeaders() as HeadersInit,
+    signal
+  });
+  return asJson(res);
+}
+
+export async function liveScrapeRedfin(params: { state: string; limit?: number } = { state: 'CA' }, signal?: AbortSignal) {
+  const res = await fetch(`${BASE}/api/live-scrape/redfin${qs(params)}`, {
+    headers: authHeaders() as HeadersInit,
+    signal
+  });
+  return asJson(res);
+}
+
+export async function liveScrapeTest(params: { limit?: number } = {}, signal?: AbortSignal) {
+  const res = await fetch(`${BASE}/api/live-scrape/test${qs(params)}`, {
+    headers: authHeaders() as HeadersInit,
+    signal
+  });
+  return asJson(res);
+}
+
+// === Scraped Deals (new deal-finding system) ===
+
+// Get all scraped addresses (deals and non-deals)
+export async function getScrapedDeals(params: { state?: string; source?: string; limit?: number; skip?: number } = {}) {
+  const res = await fetch(`${BASE}/api/scraped-deals${qs(params)}`, {
+    headers: authHeaders() as HeadersInit,
+  });
+  return asJson(res);
+}
+
+// Get only real deals (AMV >= 2x LP)
+export async function getRealDeals(params: { state?: string; source?: string; limit?: number; skip?: number } = {}) {
+  const res = await fetch(`${BASE}/api/scraped-deals/deals${qs(params)}`, {
+    headers: authHeaders() as HeadersInit,
+  });
+  return asJson(res);
+}
+
+// Get scraped deals stats
+export async function getScrapedDealsStats() {
+  const res = await fetch(`${BASE}/api/scraped-deals/stats`, {
+    headers: authHeaders() as HeadersInit,
+  });
+  return asJson(res);
+}
+
+// Recalculate isDeal for all existing records
+export async function recalculateDeals() {
+  const res = await fetch(`${BASE}/api/scraped-deals/recalculate`, {
+    method: 'POST',
+    headers: authHeaders() as HeadersInit,
+  });
+  return asJson(res);
+}

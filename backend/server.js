@@ -9,8 +9,13 @@ import { log } from './utils/logger.js';
 import { ensureMasterAdmin } from './utils/ensureMasterAdmin.js';
 import agentOffersRoutes from './routes/agent_offers.js';
 import mongoose from 'mongoose';
+import runBofaJob from './vendors/bofa/bofaJob.js';
 
 dotenv.config();
+
+// Disable mongoose buffering globally BEFORE any models are loaded
+mongoose.set('bufferCommands', false);
+mongoose.set('bufferTimeoutMS', 30000);
 
 const L = log.child('server');
 // ---- Boot Janitor: free disk space from stale Puppeteer artifacts ----
@@ -110,8 +115,10 @@ async function janitorOnce() {
 // ---- End Boot Janitor ----
 const app = express();
 const PORT = Number(process.env.PORT || 3015);
+
+// Global variable to store the actual bound port (may differ from PORT if port is in use)
+global.__ACTUAL_PORT__ = PORT;
 const IS_WORKER = ['1','true','yes','on'].includes(String(process.env.AUTOMATION_WORKER || '').toLowerCase());
-// When AUTOMATION_WORKER is not truthy (1/true/yes/on), the API runs in API-only mode and no vendor code is imported.
 
 import userRoutes from './routes/users.js';
 import automationRoutes from './routes/automation/automation.js';
@@ -122,6 +129,12 @@ import emailRoutes from './routes/email.js';
 import floodRoute from './routes/flood.js';
 import automationServiceRoutes from './routes/automation/automationService.js';
 import dashboardRoutes from './routes/dashboard.js';
+import liveScrapeRoutes from './routes/live-scrape.js';
+import bofaRoutes from './routes/bofa.js';
+import scrapedDealsRoutes from './routes/scraped-deals.js';
+import autoFetchRoutes from './routes/auto-fetch.js';
+import wellsfargoRoutes from './routes/wellsfargo.js';
+import enrichRedfinAgentRoutes from './routes/enrich-redfin-agent.js';
 
 // Global guards: never crash the process; log and continue
 process.on('warning', (w) => {
@@ -233,6 +246,11 @@ apiRoutes.use('/automation', automationRoutes);
 apiRoutes.use('/automation/status', automationStatusRoutes);
 apiRoutes.use('/automation/service', automationServiceRoutes);
 apiRoutes.use('/properties', propertyRoutes);
+apiRoutes.use('/live-scrape', liveScrapeRoutes);
+apiRoutes.use('/bofa', bofaRoutes);
+apiRoutes.use('/scraped-deals', scrapedDealsRoutes);
+apiRoutes.use('/auto-fetch', autoFetchRoutes);
+apiRoutes.use('/wellsfargo', wellsfargoRoutes);
 // Non-API namespaces
 app.use('/email', emailRoutes);
 
@@ -240,24 +258,29 @@ app.use('/email', emailRoutes);
 app.use('/api', floodRoute);
 app.use('/api', apiRoutes);
 app.use('/api/agent-offers', agentOffersRoutes);
+app.use('/api/enrich-redfin-agent', enrichRedfinAgentRoutes);
 // Dedicated dashboard prefix
 app.use('/api/dashboard', dashboardRoutes);
 
-// Start the server; connect to DB within the listener so logs are grouped
+// Start the server; connect to DB BEFORE starting server to avoid race conditions
 if (!IS_WORKER) {
   const start = async (boundPort) => {
+    // Connect to MongoDB FIRST before accepting any requests
+    try {
+      L.start('Connecting to MongoDB before starting server...');
+      await connectDB();
+      L.success('Database connected successfully');
+      await ensureMasterAdmin();
+    } catch (err) {
+      L.error('Database connection failed', { error: err?.message || String(err) });
+      L.warn('Server will start anyway, but authentication will not work');
+    }
+
+    // Now start the HTTP server
     httpServer = app
-      .listen(boundPort, '0.0.0.0', async () => {
+      .listen(boundPort, '0.0.0.0', () => {
+        global.__ACTUAL_PORT__ = boundPort;
         L.start('Booting API server', { port: boundPort });
-
-        try {
-          await connectDB();
-          L.success('Database connected successfully');
-          await ensureMasterAdmin();
-        } catch (err) {
-          L.error('Database connection failed', { error: err?.message || String(err) });
-        }
-
         L.success('Deal Finder API server running', { port: boundPort });
         L.info('API routes mounted', {
           routes: [
@@ -278,9 +301,12 @@ if (!IS_WORKER) {
 
         // Centralized concurrency log (single source via proxyManager)
         try {
-          const info = await (typeof getGlobalConcurrencyInfo === 'function' ? getGlobalConcurrencyInfo() : null);
-          if (info) {
-            L.info('Global concurrency configured', info);
+          if (typeof getGlobalConcurrencyInfo === 'function') {
+            getGlobalConcurrencyInfo().then(info => {
+              if (info) {
+                L.info('Global concurrency configured', info);
+              }
+            }).catch(() => {});
           }
         } catch {}
       })
@@ -289,6 +315,7 @@ if (!IS_WORKER) {
           // Fall back to an ephemeral port instead of crashing
           const srv = app.listen(0, () => {
             const p = srv.address().port;
+            global.__ACTUAL_PORT__ = p;
             L.warn('Port in use; rebound to random port', { requested: boundPort, actual: p });
           });
           httpServer = srv;
@@ -309,18 +336,10 @@ if (!IS_WORKER) {
     .filter(Boolean);
 
   const jobMap = {
-    // Lazy-load BoFA job only when explicitly requested in worker mode
-    async bofa() {
-      const mod = await import('./vendors/bofa/bofaJob.js');
-      const fn = mod.default || mod.bofaJob || mod.runBofaJob || mod;
-      if (typeof fn !== 'function') {
-        throw new Error('BoFA job module did not export a function');
-      }
-      return fn();
-    },
+    bofa: runBofaJob,
     // add more jobs here later, e.g.:
-    // async privy() { const m = await import('./vendors/privy/run.js'); return (m.default||m)(); },
-    // async redfin() { const m = await import('./vendors/redfin/run.js'); return (m.default||m)(); },
+    // privy: runPrivyJob,
+    // redfin: runRedfinJob,
   };
 
   (async () => {

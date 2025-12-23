@@ -2,75 +2,231 @@
 <html>
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Offer to Purchase</title>
     <style>
       body {
-        font-family: Arial, sans-serif;
-        line-height: 1.5;
-        color: #222;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        line-height: 1.7;
+        color: #333333;
+        background-color: #f5f5f5;
+        margin: 0;
         padding: 20px;
       }
-      h2 {
-        color: #003366;
-        margin-bottom: 10px;
+      .email-container {
+        max-width: 650px;
+        margin: 0 auto;
+        background-color: #ffffff;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+      }
+      .header {
+        background: linear-gradient(135deg, #1a3a5c 0%, #2d5a87 100%);
+        color: #ffffff;
+        padding: 30px;
+        text-align: center;
+      }
+      .header h1 {
+        margin: 0;
+        font-size: 24px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+      }
+      .header .property-address {
+        margin-top: 10px;
+        font-size: 16px;
+        opacity: 0.9;
+      }
+      .content {
+        padding: 35px;
+      }
+      .greeting {
+        font-size: 16px;
+        margin-bottom: 20px;
+      }
+      .intro-text {
+        font-size: 15px;
+        color: #555555;
+        margin-bottom: 30px;
       }
       .section {
-        margin-top: 20px;
+        margin-bottom: 30px;
       }
-      .label {
-        font-weight: bold;
+      .section-title {
+        font-size: 14px;
+        font-weight: 700;
+        color: #1a3a5c;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 15px;
+        padding-bottom: 8px;
+        border-bottom: 2px solid #e8e8e8;
       }
-      .offer-price {
-        font-size: 1.3em;
-        font-weight: bold;
-        color: #007b00;
+      .details-table {
+        width: 100%;
+        border-collapse: collapse;
       }
-      footer {
-        margin-top: 40px;
-        font-size: 0.9em;
-        color: #555;
+      .details-table tr {
+        border-bottom: 1px solid #f0f0f0;
+      }
+      .details-table tr:last-child {
+        border-bottom: none;
+      }
+      .details-table td {
+        padding: 12px 0;
+        vertical-align: top;
+      }
+      .details-table td:first-child {
+        font-weight: 600;
+        color: #555555;
+        width: 45%;
+      }
+      .details-table td:last-child {
+        color: #333333;
+      }
+      .highlight-price {
+        font-size: 20px;
+        font-weight: 700;
+        color: #2d7d46;
+      }
+      .contact-card {
+        background-color: #f9f9f9;
+        border-radius: 6px;
+        padding: 20px;
+        margin-bottom: 15px;
+      }
+      .contact-card h4 {
+        margin: 0 0 12px 0;
+        color: #1a3a5c;
+        font-size: 14px;
+        font-weight: 700;
+      }
+      .contact-card p {
+        margin: 0;
+        font-size: 14px;
+        line-height: 1.8;
+        color: #555555;
+      }
+      .contact-card a {
+        color: #2d5a87;
+        text-decoration: none;
+      }
+      .contact-card a:hover {
+        text-decoration: underline;
+      }
+      .signature {
+        margin-top: 35px;
+        padding-top: 25px;
+        border-top: 1px solid #e8e8e8;
+      }
+      .signature p {
+        margin: 5px 0;
+        color: #555555;
+      }
+      .signature .name {
+        font-weight: 700;
+        color: #1a3a5c;
+        font-size: 16px;
+      }
+      .signature .company {
+        color: #777777;
+        font-size: 14px;
+      }
+      .footer {
+        background-color: #f5f5f5;
+        padding: 20px 35px;
+        text-align: center;
+        font-size: 12px;
+        color: #888888;
       }
     </style>
   </head>
   <body>
-    <h2>OFFER TO PURCHASE</h2>
+    <div class="email-container">
+      <div class="header">
+        <h1>OFFER TO PURCHASE</h1>
+        <div class="property-address">{{property_address}}</div>
+      </div>
 
-    <p><span class="label">Date:</span> {{date}}</p>
-    <p><span class="label">Agent Name:</span> {{agent_name}}</p>
+      <div class="content">
+        <p class="greeting">Dear {{agent_name}},</p>
 
-    <div class="section">
-      <p><span class="label">Subject Address:</span> {{property_address}}</p>
-      <p>
-        <span class="label">Offer Price:</span>
-        <span class="offer-price">{{offer_price}}</span>
-      </p>
-      <p><span class="label">EMD:</span> {{emd}}</p>
-      <p><span class="label">Terms:</span> {{terms}}</p>
+        <p class="intro-text">On behalf of MIOYM Properties, we are pleased to submit our formal Offer to Purchase for the property referenced above. Please find the complete offer details below.</p>
+
+        <div class="section">
+          <div class="section-title">Offer Details</div>
+          <table class="details-table">
+            <tr>
+              <td>Subject Property</td>
+              <td>{{property_address}}</td>
+            </tr>
+            <tr>
+              <td>Purchase Price</td>
+              <td><span class="highlight-price">{{offer_price}}</span></td>
+            </tr>
+            <tr>
+              <td>Earnest Money Deposit (EMD)</td>
+              <td>$1,000 (within 5 days of acceptance)</td>
+            </tr>
+            <tr>
+              <td>Financing</td>
+              <td>Hard Money</td>
+            </tr>
+            <tr>
+              <td>Condition</td>
+              <td>AS IS</td>
+            </tr>
+            <tr>
+              <td>Due Diligence Period</td>
+              <td>15 days</td>
+            </tr>
+            <tr>
+              <td>Closing Timeline</td>
+              <td>30 days</td>
+            </tr>
+            <tr>
+              <td>Delivery</td>
+              <td>Property to be delivered vacant</td>
+            </tr>
+          </table>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Buyer Information</div>
+          <div class="contact-card">
+            <h4>MIOYM Properties</h4>
+            <p>
+              c/o Marc Cox<br />
+              2900 Westchester Avenue, Suite 302<br />
+              Purchase, NY 10577<br />
+              Phone: <a href="tel:347-247-7293">347-247-7293</a>
+            </p>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Attorney / Title / Escrow</div>
+          <div class="contact-card">
+            <h4>Krisslaw Atlantic</h4>
+            <p>
+              Susan Makin, Chief Operating Officer<br />
+              15 Crawford Street<br />
+              Needham, MA 02494<br />
+              Phone: <a href="tel:617-431-2011">617-431-2011</a><br />
+              Fax: 781-465-6100<br />
+              Email: <a href="mailto:Susan@KrisslawAtlantic.com">Susan@KrisslawAtlantic.com</a>
+            </p>
+          </div>
+        </div>
+
+        <div class="signature">
+          <p>Kind regards,</p>
+          <p class="name">Marc Cox</p>
+          <p class="company">MIOYM Properties</p>
+        </div>
+      </div>
+
     </div>
-
-    <div class="section">
-      <p><strong>Buyer:</strong><br />
-        Mioym Properties c/o Marc Cox<br />
-        2900 Westchester Ave<br />
-        Suite 302, Harrison, NY 10577<br />
-        Phone: 914-488-4228
-      </p>
-    </div>
-
-    <div class="section">
-      <p><strong>Title / Escrow:</strong><br />
-        Susan Makin, Chief Operating Officer<br />
-        15 Crawford Street<br />
-        Needham, MA 02494<br />
-        PH: 617-431-2011<br />
-        FX: 781-465-6100<br />
-        Email: <a href="mailto:Susan@KrisslawAtlantic.com">Susan@KrisslawAtlantic.com</a><br />
-        Website: <a href="https://www.krisslawatlantic.com">www.krisslawatlantic.com</a>
-      </p>
-    </div>
-
-    <footer>
-      <p>This offer was sent by {{reply_to}} via Mioym Deal Finder.</p>
-    </footer>
   </body>
 </html>

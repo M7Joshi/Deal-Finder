@@ -36,7 +36,7 @@ async function ensureDashboardReadyLocal(page, { timeout = 90_000, pollMs = 500 
   while (Date.now() - t0 < timeout) {
     const h = await page.$(candidates);
     if (h) return true;
-    await page.waitForTimeout(pollMs);
+    await new Promise(r => setTimeout(r, pollMs));
   }
   // Don’t kill the run — just warn and let scrape() handle its own waits
   logPrivy.warn('Dashboard anchors not found in time; continuing to scrape anyway');
@@ -159,7 +159,7 @@ export default class PrivyBot {
           if (isNetworkOrProxyError(e) && i < navAttempts - 1) {
             // Optional: try a paid forwarder lease before falling back to direct
             try { await getChromeProxyForPaid({ service: 'privy', sticky: true, key: 'privy' }); } catch {}
-            await this.page.waitForTimeout(400 + Math.floor(Math.random() * 800));
+            await new Promise(r => setTimeout(r, 400 + Math.floor(Math.random() * 800)));
             continue;
           }
           throw e;
@@ -176,7 +176,7 @@ export default class PrivyBot {
         } catch (e) {
           if (isNetworkOrProxyError(e) && i < navAttempts - 1) {
             try { await getChromeProxyForPaid({ service: 'privy', sticky: true, key: 'privy' }); } catch {}
-            await this.page.waitForTimeout(400 + Math.floor(Math.random() * 800));
+            await new Promise(r => setTimeout(r, 400 + Math.floor(Math.random() * 800)));
             continue;
           }
           throw e;
@@ -228,7 +228,7 @@ export default class PrivyBot {
           } catch (e) {
             if (isNetworkOrProxyError(e) && i < navAttempts - 1) {
               try { await getChromeProxyForPaid({ service: 'privy', sticky: true, key: 'privy' }); } catch {}
-              await this.page.waitForTimeout(400 + Math.floor(Math.random() * 800));
+              await new Promise(r => setTimeout(r, 400 + Math.floor(Math.random() * 800)));
               continue;
             }
             throw e;
@@ -242,7 +242,7 @@ export default class PrivyBot {
           } catch (e) {
             if (isNetworkOrProxyError(e) && i < navAttempts - 1) {
               try { await getChromeProxyForPaid({ service: 'privy', sticky: true, key: 'privy' }); } catch {}
-              await this.page.waitForTimeout(400 + Math.floor(Math.random() * 800));
+              await new Promise(r => setTimeout(r, 400 + Math.floor(Math.random() * 800)));
               continue;
             }
             throw e;

@@ -11,12 +11,14 @@ import MenuIcon from "@mui/icons-material/Menu";
 
 import Deals from "./screens/Deals.tsx";
 import Users from "./screens/Users.tsx";
-import PrivyOtp from "./screens/PrivyOtp.tsx";
-import Dashboard from "./screens/Dashboard.tsx";
+import PrivyFetcher from "./screens/PrivyFetcher.tsx";
+import RedfinFetcher from "./screens/RedfinFetcher.tsx";
+import BofaViewer from "./screens/BofaViewer.tsx";
+import ScrapedDeals from "./screens/ScrapedDeals.tsx";
+import AgentFetcher from "./screens/AgentFetcher.tsx";
+import ManageSubadmins from "./screens/ManageSubadmins.tsx";
 import Login from "./components/Login/Login.tsx";
 import { verify, clearToken } from "./helpers";
-import { ensureNotifPermission } from "./utils/notify.tsx";
-import OtpWatcher from './components/OtpWatcher.tsx';
 
 
 // ---- THEME (deep midnight w/ subtle gradient) ----
@@ -56,10 +58,14 @@ function Protected({ children }) {
 
 // ---- SIDEBAR + LAYOUT ----
 const navItems = [
-  { label: "Dashboard", to: "/" },
-  { label: "Deals", to: "/deals" },
+  { label: "Deals", to: "/deals" },  // Everyone can see this
+  { label: "All Addresses", to: "/all-addresses" },  // Everyone can see this
+  { label: "Manage Subadmins", to: "/manage-subadmins", adminOnly: true },
+  { label: "Privy Fetcher", to: "/privy-fetcher" },  // Everyone can see this
+  { label: "Redfin Fetcher", to: "/redfin-fetcher" },  // Everyone can see this
+  { label: "BofA Viewer", to: "/bofa-viewer" },  // Everyone can see this
+  { label: "Agent Fetcher", to: "/agent-fetcher" },  // Everyone can see this
   { label: "Users", to: "/users", adminOnly: true },
-  { label: "Privy OTP", to: "/privy-otp" },
 ];
 
 function Sidebar({ open, onClose, isAdmin, onLogout }) {
@@ -238,10 +244,6 @@ export default function App() {
   const [authed, setAuthed] = useState(Boolean(localStorage.getItem("authToken")));
 
   useEffect(() => {
-    try { ensureNotifPermission(); } catch {}
-  }, []);
-
-  useEffect(() => {
     if (!authed) return;
     (async () => {
       const v = await verify(); // { success, user }
@@ -265,7 +267,6 @@ export default function App() {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <BrowserRouter>
-        <OtpWatcher />
         <Routes>
           <Route path="/login" element={<Login verify={() => setAuthed(true)} />} />
           <Route
@@ -276,14 +277,25 @@ export default function App() {
               </Protected>
             }
           >
-            <Route index element={<Dashboard />} />
+            {/* Default route: Everyone goes to Deals */}
+            <Route index element={<Navigate to="/deals" replace />} />
+            {/* Deals - accessible to everyone */}
             <Route path="deals" element={<Deals />} />
-            <Route path="users" element={
-              (user?.isAdmin || user?.role === "admin") ? <Users /> : <Navigate to="/" replace />
+            {/* Pages accessible to everyone */}
+            <Route path="all-addresses" element={<ScrapedDeals />} />
+            <Route path="privy-fetcher" element={<PrivyFetcher />} />
+            <Route path="redfin-fetcher" element={<RedfinFetcher />} />
+            <Route path="bofa-viewer" element={<BofaViewer />} />
+            <Route path="agent-fetcher" element={<AgentFetcher />} />
+            {/* Admin-only routes */}
+            <Route path="manage-subadmins" element={
+              (user?.isAdmin || user?.role === "admin") ? <ManageSubadmins /> : <Navigate to="/deals" replace />
             } />
-            <Route path="privy-otp" element={<PrivyOtp />} />
+            <Route path="users" element={
+              (user?.isAdmin || user?.role === "admin") ? <Users /> : <Navigate to="/deals" replace />
+            } />
           </Route>
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<Navigate to="/deals" replace />} />
         </Routes>
       </BrowserRouter>
     </ThemeProvider>

@@ -5,8 +5,11 @@ import { getDeals, getDashboardSummary, updatePropertyBasic, deletePropertyById,
 import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Button, Stack, Chip, Snackbar, Alert, TextField, Tabs, Tab,
-  FormControl, InputLabel, Select, MenuItem, Checkbox, ListItemText
+  FormControl, InputLabel, Select, MenuItem, Checkbox, ListItemText, OutlinedInput,
+  LinearProgress, Box,
 } from '@mui/material';
+import { useNavigate } from 'react-router-dom';
+import { apiFetch } from '../helpers';
 
 
 const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -178,6 +181,30 @@ const dealKey = (r: any) => {
   return r._id || r.prop_id || normalizeAddress(base);
 };
 
+// Blocked states - these won't appear in state selection dropdowns
+const BLOCKED_STATES = ['SD', 'AK', 'ND', 'WY', 'HI', 'UT', 'NM', 'OH', 'MT'];
+
+// All US states for Auto Fetch (excluding blocked states)
+const US_STATES = [
+  { code: 'AL', name: 'Alabama' }, { code: 'AZ', name: 'Arizona' },
+  { code: 'AR', name: 'Arkansas' }, { code: 'CA', name: 'California' }, { code: 'CO', name: 'Colorado' },
+  { code: 'CT', name: 'Connecticut' }, { code: 'DE', name: 'Delaware' }, { code: 'FL', name: 'Florida' },
+  { code: 'GA', name: 'Georgia' }, { code: 'ID', name: 'Idaho' },
+  { code: 'IL', name: 'Illinois' }, { code: 'IN', name: 'Indiana' }, { code: 'IA', name: 'Iowa' },
+  { code: 'KS', name: 'Kansas' }, { code: 'KY', name: 'Kentucky' }, { code: 'LA', name: 'Louisiana' },
+  { code: 'ME', name: 'Maine' }, { code: 'MD', name: 'Maryland' }, { code: 'MA', name: 'Massachusetts' },
+  { code: 'MI', name: 'Michigan' }, { code: 'MN', name: 'Minnesota' }, { code: 'MS', name: 'Mississippi' },
+  { code: 'MO', name: 'Missouri' }, { code: 'NE', name: 'Nebraska' },
+  { code: 'NV', name: 'Nevada' }, { code: 'NH', name: 'New Hampshire' }, { code: 'NJ', name: 'New Jersey' },
+  { code: 'NY', name: 'New York' }, { code: 'NC', name: 'North Carolina' },
+  { code: 'OK', name: 'Oklahoma' },
+  { code: 'OR', name: 'Oregon' }, { code: 'PA', name: 'Pennsylvania' }, { code: 'RI', name: 'Rhode Island' },
+  { code: 'SC', name: 'South Carolina' }, { code: 'TN', name: 'Tennessee' },
+  { code: 'TX', name: 'Texas' }, { code: 'VT', name: 'Vermont' },
+  { code: 'VA', name: 'Virginia' }, { code: 'WA', name: 'Washington' }, { code: 'WV', name: 'West Virginia' },
+  { code: 'WI', name: 'Wisconsin' },
+];
+
 const dedupeByKey = <T,>(items: T[], keyFn: (x: T) => string) => {
   const map = new Map<string, T>();
   for (const it of items) {
@@ -192,7 +219,9 @@ const dedupeByKey = <T,>(items: T[], keyFn: (x: T) => string) => {
   return Array.from(map.values());
 };
 
+
 export default function Deals() {
+  const navigate = useNavigate();
   const REFRESH_MS = 3 * 60 * 1000; // 3 minutes
   const MIN_BEDS = 3; // hide anything below this count
   const [rows, setRows] = useState<Row[]>([]);
@@ -210,17 +239,72 @@ export default function Deals() {
   const [toast, setToast] = useState<{ open: boolean; msg: string; sev: 'success' | 'error' | 'info' }>({ open: false, msg: '', sev: 'success' });
   const [detailTab, setDetailTab] = useState<'details' | 'activity'>('details');
 
-  // Manual filters & sorting
-  const [filterStates, setFilterStates] = useState<string[]>([]);
-  const [emailFilter, setEmailFilter] = useState<'all' | 'sent' | 'unsent'>('all');
-  const [amvSort, setAmvSort] = useState<'none' | 'asc' | 'desc'>('none');
+  // Selection state for viewing in Agent Fetcher
+  const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
+
+  // Track which row's agent details are expanded
+  const [expandedAgentId, setExpandedAgentId] = useState<string | null>(null);
+
+  // Toggle selection for a single row
+  const toggleRowSelection = (id: string) => {
+    setSelectedRows(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) {
+        newSet.delete(id);
+      } else {
+        newSet.add(id);
+      }
+      return newSet;
+    });
+  };
+
+  // Toggle all visible rows
+  const toggleAllRows = () => {
+    if (selectedRows.size === displayedRows.length) {
+      setSelectedRows(new Set());
+    } else {
+      setSelectedRows(new Set(displayedRows.map(r => getId(r))));
+    }
+  };
+
+  // Auto Fetch state
+  const [autoFetchStates, setAutoFetchStates] = useState<string[]>([]);
+  const [autoFetchLimit, setAutoFetchLimit] = useState(10);
+  const [autoFetching, setAutoFetching] = useState(false);
+  const [autoFetchStatus, setAutoFetchStatus] = useState<string | null>(null);
+
+  // User's allowed states (from API response)
+  const [userStates, setUserStates] = useState<string[] | 'all'>('all');
+
+  // State filter for deals table - synced with localStorage for cross-page sharing
+  const [filterState, setFilterState] = useState<string>(() => {
+    const saved = localStorage.getItem('selectedState');
+    return saved || 'all';
+  });
+  // Limit for deals table display
+  const [displayLimit, setDisplayLimit] = useState<number>(50);
+
+  // Sync state selection to localStorage when it changes
+  useEffect(() => {
+    if (filterState !== 'all') {
+      localStorage.setItem('selectedState', filterState);
+    }
+  }, [filterState]);
 
   // Summary totals for cards
   const [totals, setTotals] = useState<Totals>({ properties: 0, deals: 0, nonDeals: 0 });
   const loadSummary = useCallback(async () => {
     try {
-      const s = await getDashboardSummary();
-      setTotals(normalizeTotals(s));
+      // Use the new scraped deals stats endpoint
+      const res = await apiFetch('/api/scraped-deals/stats');
+      const data = await res.json();
+      if (data.ok && data.stats) {
+        setTotals({
+          properties: data.stats.total || 0,           // Total addresses scraped
+          deals: data.stats.dealsCount || 0,           // Addresses where AMV >= 2x LP
+          nonDeals: (data.stats.total || 0) - (data.stats.dealsCount || 0),
+        });
+      }
     } catch (_) {
       // ignore errors; cards will show zeros
     }
@@ -356,6 +440,28 @@ console.debug('[Deals:onSaveAgentOnly] fallback UI values', { finalName, finalPh
     () => new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }),
     []
   );
+ 
+
+
+const cleanAddress = (address?: string | null): string => {
+  if (!address) return '';
+  
+  // Split the address into parts (street, city, state, zip)
+  const parts = address.split(',').map(part => part.trim());
+  if (parts.length < 2) return address;
+
+  // Process the street address part
+  const street = parts[0]
+    // Remove everything from "Unit" (case-insensitive) to the end of the street part
+    .split(/\s*(?:#|Unit|Apt|Apartment|Suite|Ste|Rm|Room|Bldg|Building|Lot|Spc|Space|Trlr|Trailer|Uint|Unt|U|#|No|Number)\b/i)[0]
+    // Clean up any trailing special characters or spaces
+    .replace(/[\s,-]+$/, '')
+    .trim();
+  
+  // Reconstruct the address with cleaned street
+  return [street, ...parts.slice(1)].filter(Boolean).join(', ');
+};
+
 
   const fmt = (n?: number | null) => (typeof n === 'number' && n > 0 ? currency.format(n) : '—');
 
@@ -411,103 +517,57 @@ console.debug('[Deals:onSaveAgentOnly] fallback UI values', { finalName, finalPh
     try {
       setLoading(true);
       setError(null);
-      const res: any = await getDeals(); // already requests onlyDeals=true
-      if (DEBUG) {
-        try {
-          console.log('[Deals:getDeals] raw response keys:', Object.keys(res || {}));
-          const sample = Array.isArray(res?.rows) ? res.rows.slice(0, 3) : (Array.isArray(res) ? res.slice(0, 3) : []);
-          console.log('[Deals:getDeals] sample rows (raw):', sample);
-        } catch (e) {
-          console.warn('[Deals:getDeals] debug log failed', e);
-        }
+
+      console.log('[Deals:loadDeals] Starting fetch...');
+
+      // Fetch ONLY real deals (AMV >= 2x LP AND AMV > $200k) from the endpoint
+      const response = await apiFetch('/api/scraped-deals/deals?limit=500');
+      console.log('[Deals:loadDeals] Response status:', response.status);
+
+      const data = await response.json();
+      console.log('[Deals:loadDeals] Response data:', data);
+
+      if (!data.ok) {
+        throw new Error(data.error || 'Failed to load deals');
       }
-      const arr: Row[] = Array.isArray(res?.rows) ? res.rows : Array.isArray(res) ? res : [];
 
-      // Hard-guard: only keep deals (server flag) OR LP ≤ 50% AMV
-      const onlyDeals = arr.filter((r) => {
-        const amv = Number(r.amv);
-        const lp = getLP(r);
-        const serverDeal = r.deal === true;
-        const calcDeal = Number.isFinite(amv) && typeof lp === 'number' && Number.isFinite(lp) && lp <= Math.round(0.55 * amv);
-        return serverDeal || calcDeal;
-      });
+      // Capture user's allowed states from response
+      if (data.userStates) {
+        setUserStates(data.userStates);
+      }
 
-      // 🔽 Normalize agent fields and coerce numeric strings → numbers so rendering/math works
-      const normalized = onlyDeals.map((r: any) => {
-        const agentName  = r.agentName  ?? r.agent ?? null;
-        const agentPhone = r.agentPhone ?? r.agent_phone ?? null;
-        const agentEmail = r.agentEmail ?? r.agent_email ?? null;
+      const arr: Row[] = data.rows || [];
 
-        // numeric normalization
-        const listingPrice = pickFirstNumber(
-          r.listingPrice,
-          r.price,
-          r.listPrice,
-          r.list_price,
-          r.listing_price,
-          r.lp,
-          r.askingPrice,
-          r.asking_price,
-          r.askPrice,
-          r.listprice,
-          r.currentListPrice,
-          r.originalListPrice
-        );
-        const amv   = toNum(r.amv);
-        const lp80  = toNum(r.lp80);
-        const amv40 = toNum(r.amv40);
-        const amv30 = toNum(r.amv30);
+      console.log('[Deals:loadDeals] fetched REAL deals (AMV >= 2x LP):', arr.length);
+      if (DEBUG) {
+        console.log('[Deals:loadDeals] sample:', arr.slice(0, 3));
+      }
 
-        // Additional numeric normalization for beds, baths, squareFeet
-        const beds = toNum(r.beds ?? r.bedrooms ?? r.num_beds);
-        const baths = toNum(r.baths ?? r.bathrooms ?? r.num_baths);
-        const squareFeet = toNum(r.squareFeet ?? r.sqft);
+      // Normalize the scraped deals data
+      const normalized = arr.map((r: any) => {
+        const listingPrice = toNum(r.listingPrice);
+        const amv = toNum(r.amv);
 
-        // derive fallbacks when API omits helper fields
-        const lp80Final  = lp80  ?? (listingPrice != null ? Math.round(listingPrice * 0.8) : null);
-        const amv40Final = amv40 ?? (amv != null ? Math.round(amv * 0.4) : null);
-        const amv30Final = amv30 ?? (amv != null ? Math.round(amv * 0.3) : null);
+        // derive fallbacks for calculated fields
+        const lp80Final = listingPrice != null ? Math.round(listingPrice * 0.8) : null;
+        const amv40Final = amv != null ? Math.round(amv * 0.4) : null;
+        const amv30Final = amv != null ? Math.round(amv * 0.3) : null;
 
-        const _id = r._id ?? r.prop_id ?? undefined;
+        const beds = toNum(r.beds);
+        const baths = toNum(r.baths);
+        const squareFeet = toNum(r.sqft);
 
-        // derive state from fullAddress if missing (e.g., "City, ST 12345")
+        // derive state from fullAddress if missing
         const stateFromAddr = (() => {
           const addr = String(r.fullAddress ?? r.address ?? '').toUpperCase();
-          // Match last ", ST" with optional ZIP
           const m = addr.match(/,\s*([A-Z]{2})\b(?:\s*\d{5}(?:-\d{4})?)?\s*$/);
           return m ? m[1] : null;
         })();
         const stateNorm = (r.state ? String(r.state).toUpperCase() : null) ?? stateFromAddr;
 
-        if (DEBUG) {
-          try {
-            console.debug('[Deals:normalize]', {
-              _id: r._id ?? r.prop_id,
-              raw_listingPrice: r.listingPrice ?? r.price ?? r.listPrice ?? r.list_price ?? r.lp,
-              parsed_listingPrice: listingPrice,
-              raw_amv: r.amv,
-              parsed_amv: amv,
-              raw_lp80: r.lp80,
-              parsed_lp80: lp80,
-              raw_amv40: r.amv40,
-              parsed_amv40: amv40,
-              raw_amv30: r.amv30,
-              parsed_amv30: amv30,
-            });
-          } catch (e) {
-            console.warn('[Deals:normalize] debug failed', e);
-          }
-        }
-
         return {
           ...r,
-          _id,
-          agentName,
-          agentPhone,
-          agentEmail,
-          agentEmailSent: isAutoEmailSent(r),
-
-          // overwrite with numeric versions so fmt(...) and offer math work
+          _id: r._id,
           listingPrice,
           amv,
           lp80: lp80Final,
@@ -517,45 +577,32 @@ console.debug('[Deals:onSaveAgentOnly] fallback UI values', { finalName, finalPh
           baths,
           squareFeet,
           state: stateNorm,
+          source: r.source, // 'privy' or 'redfin'
         } as Row;
       });
 
-      const unique = dedupeByKey(normalized, dealKey);
-      const minBedRows = unique.filter(x => {
-        const b = typeof x.beds === 'number' ? x.beds : toNum((x as any).beds);
-        const a = toNum(x.amv);
-        return typeof b === 'number' && b >= MIN_BEDS && typeof a === 'number' && a >= 150000;
-      });
-      setRows(minBedRows);
-      // Filter for deals with AMV >= 150000 for totals
-      const highAmvDeals = minBedRows.filter(r => {
-        const a = toNum(r.amv);
-        return typeof a === 'number' && a >= 150000;
-      });
+      setRows(normalized);
       setTotals(prev => ({
         ...prev,
-        deals: highAmvDeals.length,
-        nonDeals: Math.max(0, (prev.properties ?? 0) - highAmvDeals.length),
+        deals: normalized.length,
+        nonDeals: 0,
       }));
       if (DEBUG) {
         try {
           console.table(
-            unique.slice(0, 5).map((x: any) => ({
-              id: x._id || x.prop_id || (x.fullAddress || x.address),
+            normalized.slice(0, 5).map((x: any) => ({
+              id: x._id,
+              address: x.fullAddress || x.address,
               listingPrice: x.listingPrice,
               amv: x.amv,
-              lp80: x.lp80,
-              amv40: x.amv40,
-              amv30: x.amv30,
-              getLP: (typeof x.listingPrice === 'number' ? x.listingPrice : null),
-              emailSent: isAutoEmailSent(x),
+              source: x.source,
             }))
           );
         } catch (e) {
           console.warn('[Deals] post-normalize table failed', e);
         }
       }
-      console.debug('[Deals] loaded', { total: normalized.length, unique: unique.length, sent: unique.filter(isAutoEmailSent).length });
+      console.debug('[Deals] loaded scraped deals', { total: normalized.length });
     } catch (e: any) {
       console.error('Failed to load deals', e);
       setError(e?.message || 'Failed to load deals');
@@ -563,47 +610,84 @@ console.debug('[Deals:onSaveAgentOnly] fallback UI values', { finalName, finalPh
       setLoading(false);
     }
   }, []);
-  // Unique state list based on currently loaded rows
-  const uniqueStates = useMemo(() => {
-    const s = new Set<string>();
-    for (const r of rows) {
-      let st = r.state ? String(r.state).toUpperCase() : '';
-      if (!st) {
-        const addr = String(r.fullAddress ?? r.address ?? '').toUpperCase();
-        const m = addr.match(/,\s*([A-Z]{2})\b(?:\s*\d{5}(?:-\d{4})?)?\s*$/);
-        st = m ? m[1] : '';
+
+  // Auto Fetch - trigger Privy + Redfin for selected states
+  const handleAutoFetch = async () => {
+    if (autoFetchStates.length === 0) {
+      alert('Please select at least one state');
+      return;
+    }
+
+    setAutoFetching(true);
+    setAutoFetchStatus(`Starting auto-fetch for ${autoFetchStates.length} states...`);
+
+    try {
+      const res = await apiFetch('/api/auto-fetch/run', {
+        method: 'POST',
+        body: JSON.stringify({
+          states: autoFetchStates,
+          limitPerSource: autoFetchLimit,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (data.ok) {
+        const privyCount = data.progress ? Object.values(data.progress.states).reduce((sum: number, s: any) => {
+          const match = String(s.privy || '').match(/\((\d+)\)/);
+          return sum + (match ? parseInt(match[1]) : 0);
+        }, 0) : Math.floor(data.totalFetched / 2);
+        const redfinCount = data.totalFetched - privyCount;
+        const dealsFound = data.dealsCount ?? 0;
+        const skippedCount = data.progress?.skippedExisting ?? 0;
+
+        let statusMsg = `Done! Fetched ${data.totalFetched} new addresses (${privyCount} Privy + ${redfinCount} Redfin).`;
+        if (skippedCount > 0) {
+          statusMsg += ` Skipped ${skippedCount} existing.`;
+        }
+        statusMsg += ` Deals found: ${dealsFound} (AMV >= 2x LP). Saved: ${data.saved}, Updated: ${data.updated}, Failed: ${data.failed}`;
+
+        setAutoFetchStatus(statusMsg);
+        // Refresh the deals list
+        loadDeals();
+        loadSummary();
+      } else {
+        // Check if it's already running
+        if (data.status) {
+          setAutoFetchStatus(`Already in progress: ${data.status}`);
+        } else {
+          setAutoFetchStatus(`Error: ${data.error || 'Auto-fetch failed'}`);
+        }
       }
-      if (st) s.add(st);
+    } catch (err: any) {
+      console.error('Auto-fetch failed:', err);
+      setAutoFetchStatus(`Error: ${err?.message || 'Auto-fetch failed'}`);
+    } finally {
+      setAutoFetching(false);
     }
-    return Array.from(s).sort();
-  }, [rows]);
+  };
 
-  // Apply manual filters and sorting on top of core thresholds (beds >= 3, amv >= 150k)
+  // Filter rows by selected state and apply limit
   const displayedRows = useMemo(() => {
-    let out = [...rows];
-
-    if (filterStates.length) {
-      const allow = new Set(filterStates.map(s => s.toUpperCase()));
-      out = out.filter(r => r.state && allow.has(String(r.state).toUpperCase()));
-    }
-
-    if (emailFilter !== 'all') {
-      out = out.filter(r => {
-        const sent = isAutoEmailSent(r);
-        return emailFilter === 'sent' ? sent : !sent;
+    let filtered = rows;
+    if (filterState !== 'all') {
+      filtered = rows.filter(r => {
+        const rowState = (r.state || '').toUpperCase();
+        return rowState === filterState.toUpperCase();
       });
     }
+    // Apply display limit
+    return filtered.slice(0, displayLimit);
+  }, [rows, filterState, displayLimit]);
 
-    if (amvSort !== 'none') {
-      out.sort((a, b) => {
-        const A = toNum(a.amv) ?? -Infinity;
-        const B = toNum(b.amv) ?? -Infinity;
-        return amvSort === 'asc' ? (A - B) : (B - A);
-      });
-    }
-
-    return out;
-  }, [rows, filterStates, emailFilter, amvSort]);
+  // Total count before limit (for showing "X of Y")
+  const totalFilteredCount = useMemo(() => {
+    if (filterState === 'all') return rows.length;
+    return rows.filter(r => {
+      const rowState = (r.state || '').toUpperCase();
+      return rowState === filterState.toUpperCase();
+    }).length;
+  }, [rows, filterState]);
 
   useEffect(() => {
     if (!DEBUG) return;
@@ -628,30 +712,12 @@ console.debug('[Deals:onSaveAgentOnly] fallback UI values', { finalName, finalPh
     }
   }, [selected]);
 
-  // initial load
+  // initial load - ONLY runs once on mount (empty dependency array)
   useEffect(() => {
     loadSummary();
     loadDeals();
-  }, [loadDeals, loadSummary]);
-
-  // auto-refresh every 3 minutes (only when tab is visible)
-  useEffect(() => {
-    const tick = () => {
-      if (document.visibilityState === 'visible') {
-        loadDeals();
-        loadSummary();
-      }
-    };
-    const id = window.setInterval(tick, REFRESH_MS);
-    return () => window.clearInterval(id);
-  }, [loadDeals, loadSummary, REFRESH_MS]);
-
-  // refresh once when window regains focus
-  useEffect(() => {
-    const onFocus = () => loadDeals();
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [loadDeals]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty array = only run once on mount
 
   useEffect(() => {
     // Reset Street View as default when opening a property
@@ -808,11 +874,170 @@ console.debug('[Deals:onSaveAgentOnly] fallback UI values', { finalName, finalPh
   if (loading) return <div style={{ padding: 24 }}>Loading deals…</div>;
   if (error)   return <div style={{ padding: 24, color: '#ef4444' }}>{error}</div>;
 
+  const isAllStates = userStates === 'all';
+  const statesLabel = isAllStates
+    ? 'All States'
+    : Array.isArray(userStates) && userStates.length > 0
+      ? userStates.join(', ')
+      : 'No states assigned';
+
   return (
     <div style={{ padding: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#111827' }}>Deals</h2>
-        <div style={{ fontSize: 14, color: '#6b7280' }}>Total: {displayedRows.length}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {selectedRows.size > 0 && (
+            <div style={{ fontSize: 14, color: '#0ea5e9', fontWeight: 600 }}>
+              {selectedRows.size} selected
+            </div>
+          )}
+          <div style={{ fontSize: 14, color: '#6b7280' }}>Total: {rows.length}</div>
+          <Button
+            variant="contained"
+            size="small"
+            onClick={() => {
+              // Store all displayed addresses in localStorage
+              const allDisplayedAddresses = displayedRows
+                .map(r => r.fullAddress || r.address)
+                .filter(Boolean);
+              console.log('[Deals] Storing addresses:', allDisplayedAddresses);
+              localStorage.setItem('agentFetcherSelectedAddresses', JSON.stringify(allDisplayedAddresses));
+              console.log('[Deals] localStorage after set:', localStorage.getItem('agentFetcherSelectedAddresses'));
+              // Navigate to Agent Fetcher
+              navigate('/agent-fetcher');
+            }}
+            sx={{
+              backgroundColor: '#22c55e',
+              '&:hover': { backgroundColor: '#16a34a' },
+              textTransform: 'none',
+              fontWeight: 600
+            }}
+          >
+            View All {displayedRows.length} in Agent Fetcher
+          </Button>
+          {selectedRows.size > 0 && (
+            <Button
+              variant="contained"
+              size="small"
+              onClick={() => {
+                // Store selected addresses in localStorage
+                const selectedAddresses = rows
+                  .filter(r => selectedRows.has(getId(r)))
+                  .map(r => r.fullAddress || r.address)
+                  .filter(Boolean);
+                localStorage.setItem('agentFetcherSelectedAddresses', JSON.stringify(selectedAddresses));
+                // Navigate to Agent Fetcher
+                navigate('/agent-fetcher');
+              }}
+              sx={{
+                backgroundColor: '#0ea5e9',
+                '&:hover': { backgroundColor: '#0284c7' },
+                textTransform: 'none',
+                fontWeight: 600
+              }}
+            >
+              View Selected ({selectedRows.size}) in Agent Fetcher
+            </Button>
+          )}
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => { loadDeals(); loadSummary(); }}
+            sx={{ textTransform: 'none' }}
+          >
+            Refresh
+          </Button>
+        </div>
+      </div>
+
+      {/* State access indicator */}
+      <div style={{
+        marginBottom: 16,
+        padding: '8px 12px',
+        background: isAllStates ? '#e0f2fe' : '#fef3c7',
+        borderRadius: 6,
+        display: 'inline-block',
+        fontSize: 14,
+        color: isAllStates ? '#0369a1' : '#92400e'
+      }}>
+        {isAllStates ? 'Viewing: All States (Admin)' : `Viewing: ${statesLabel}`}
+      </div>
+
+      {/* Filter Controls Box - same style as Redfin/Privy */}
+      <div
+        style={{
+          background: '#fff',
+          border: '1px solid #e5e7eb',
+          borderRadius: 12,
+          padding: 16,
+          marginBottom: 16,
+          boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+        }}
+      >
+        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <FormControl
+            size="small"
+            sx={{
+              minWidth: 200,
+              '& .MuiOutlinedInput-root': {
+                color: '#000',
+                '& fieldset': { borderColor: '#000' },
+                '&:hover fieldset': { borderColor: '#000' },
+                '&.Mui-focused fieldset': { borderColor: '#000' },
+              },
+              '& .MuiInputLabel-root': { color: '#000' },
+              '& .MuiSelect-icon': { color: '#000' },
+            }}
+          >
+            <InputLabel>Filter by State</InputLabel>
+            <Select
+              value={filterState}
+              label="Filter by State"
+              onChange={(e) => setFilterState(e.target.value)}
+              MenuProps={{ PaperProps: { sx: { color: '#000', border: '1px solid #000', maxHeight: 400 } } }}
+            >
+              <MenuItem value="all">All States</MenuItem>
+              {US_STATES.map((s) => (
+                <MenuItem key={s.code} value={s.code}>
+                  {s.code} - {s.name}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <FormControl
+            size="small"
+            sx={{
+              minWidth: 160,
+              '& .MuiOutlinedInput-root': {
+                color: '#000',
+                '& fieldset': { borderColor: '#000' },
+                '&:hover fieldset': { borderColor: '#000' },
+                '&.Mui-focused fieldset': { borderColor: '#000' },
+              },
+              '& .MuiInputLabel-root': { color: '#000' },
+              '& .MuiSelect-icon': { color: '#000' },
+            }}
+          >
+            <InputLabel>Show Limit</InputLabel>
+            <Select
+              value={displayLimit}
+              label="Show Limit"
+              onChange={(e) => setDisplayLimit(Number(e.target.value))}
+              MenuProps={{ PaperProps: { sx: { color: '#000', border: '1px solid #000' } } }}
+            >
+              <MenuItem value={20}>20 addresses</MenuItem>
+              <MenuItem value={25}>25 addresses</MenuItem>
+              <MenuItem value={50}>50 addresses</MenuItem>
+              <MenuItem value={100}>100 addresses</MenuItem>
+              <MenuItem value={200}>200 addresses</MenuItem>
+              <MenuItem value={500}>500 addresses</MenuItem>
+              <MenuItem value={99999}>All</MenuItem>
+            </Select>
+          </FormControl>
+          <div style={{ fontSize: 14, color: '#6b7280', padding: '8px 0' }}>
+            Showing: {displayedRows.length} of {totalFilteredCount} {filterState !== 'all' ? `(${filterState})` : ''}
+          </div>
+        </div>
       </div>
 
       {/* Summary cards */}
@@ -829,108 +1054,97 @@ console.debug('[Deals:onSaveAgentOnly] fallback UI values', { finalName, finalPh
         <Card title="Not Deals" value={totals.nonDeals} />
       </div>
 
-      {/* Filters & sorting */}
-      <div style={{
-        display: 'flex',
-        gap: 12,
-        alignItems: 'center',
-        flexWrap: 'wrap',
-        marginBottom: 12,
-      }}>
-        {/* State filter (multi-select) */}
-        <FormControl
-          size="small"
-          sx={{
-            minWidth: 220,
-            '& .MuiOutlinedInput-root': {
-              color: '#000',
-              '& fieldset': { borderColor: '#000' },
-              '&:hover fieldset': { borderColor: '#000' },
-              '&.Mui-focused fieldset': { borderColor: '#000' }
-            },
-            '& .MuiInputLabel-root': { color: '#000' },
-            '& .MuiSelect-icon': { color: '#000' }
-          }}
-        >
-          <InputLabel id="filter-states-label">States</InputLabel>
-          <Select
-            labelId="filter-states-label"
-            multiple
-            value={filterStates}
-            onChange={(e) => setFilterStates(typeof e.target.value === 'string' ? e.target.value.split(',') : (e.target.value as string[]))}
-            label="States"
-            renderValue={(selected) => (selected as string[]).join(', ')}
-            MenuProps={{ PaperProps: { sx: { color: '#000', border: '1px solid #000' } } }}
-          >
-            {uniqueStates.map((s) => (
-              <MenuItem key={s} value={s}>
-                <Checkbox checked={filterStates.indexOf(s) > -1} />
-                <ListItemText primary={s} />
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+      {/* Auto Fetch Section */}
+      <div
+        style={{
+          background: '#fff',
+          border: '2px solid #22c55e',
+          borderRadius: 12,
+          padding: 16,
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ fontWeight: 700, color: '#16a34a', marginBottom: 12, fontSize: 16 }}>
+          Auto Fetch (Privy + Redfin)
+        </div>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <FormControl size="small" sx={{ minWidth: 300 }}>
+            <InputLabel>Select States</InputLabel>
+            <Select
+              multiple
+              value={autoFetchStates}
+              onChange={(e) => setAutoFetchStates(typeof e.target.value === 'string' ? [e.target.value] : e.target.value)}
+              input={<OutlinedInput label="Select States" />}
+              renderValue={(selected) => selected.join(', ')}
+              MenuProps={{ PaperProps: { sx: { maxHeight: 400 } } }}
+            >
+              {US_STATES.map((s) => (
+                <MenuItem key={s.code} value={s.code}>
+                  <Checkbox checked={autoFetchStates.indexOf(s.code) > -1} />
+                  <ListItemText primary={`${s.code} - ${s.name}`} />
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
 
-        {/* Email status filter */}
-        <FormControl
-          size="small"
-          sx={{
-            minWidth: 160,
-            '& .MuiOutlinedInput-root': {
-              color: '#000',
-              '& fieldset': { borderColor: '#000' },
-              '&:hover fieldset': { borderColor: '#000' },
-              '&.Mui-focused fieldset': { borderColor: '#000' }
-            },
-            '& .MuiInputLabel-root': { color: '#000' },
-            '& .MuiSelect-icon': { color: '#000' }
-          }}
-        >
-          <InputLabel id="filter-email-label">Email Status</InputLabel>
-          <Select
-            labelId="filter-email-label"
-            value={emailFilter}
-            label="Email Status"
-            onChange={(e) => setEmailFilter(e.target.value as any)}
-            MenuProps={{ PaperProps: { sx: { color: '#000', border: '1px solid #000' } } }}
-          >
-            <MenuItem value="all">All</MenuItem>
-            <MenuItem value="sent">Sent</MenuItem>
-            <MenuItem value="unsent">Unsent</MenuItem>
-          </Select>
-        </FormControl>
+          <FormControl size="small" sx={{ minWidth: 180 }}>
+            <InputLabel>Addresses per Source</InputLabel>
+            <Select
+              value={autoFetchLimit}
+              label="Addresses per Source"
+              onChange={(e) => setAutoFetchLimit(Number(e.target.value))}
+            >
+              <MenuItem value={5}>5 per source</MenuItem>
+              <MenuItem value={10}>10 per source</MenuItem>
+              <MenuItem value={15}>15 per source</MenuItem>
+              <MenuItem value={20}>20 per source</MenuItem>
+              <MenuItem value={25}>25 per source</MenuItem>
+            </Select>
+          </FormControl>
 
-        {/* AMV sort */}
-        <FormControl
-          size="small"
-          sx={{
-            minWidth: 160,
-            '& .MuiOutlinedInput-root': {
-              color: '#000',
-              '& fieldset': { borderColor: '#000' },
-              '&:hover fieldset': { borderColor: '#000' },
-              '&.Mui-focused fieldset': { borderColor: '#000' }
-            },
-            '& .MuiInputLabel-root': { color: '#000' },
-            '& .MuiSelect-icon': { color: '#000' }
-          }}
-        >
-          <InputLabel id="sort-amv-label">Sort AMV</InputLabel>
-          <Select
-            labelId="sort-amv-label"
-            value={amvSort}
-            label="Sort AMV"
-            onChange={(e) => setAmvSort(e.target.value as any)}
-            MenuProps={{ PaperProps: { sx: { color: '#000', border: '1px solid #000' } } }}
+          <Button
+            variant="contained"
+            onClick={handleAutoFetch}
+            disabled={autoFetching || autoFetchStates.length === 0}
+            sx={{
+              backgroundColor: '#22c55e',
+              '&:hover': { backgroundColor: '#16a34a' },
+              '&:disabled': { backgroundColor: '#9ca3af' },
+              textTransform: 'none',
+              fontWeight: 600,
+              px: 4,
+              py: 1,
+            }}
           >
-            <MenuItem value="none">None</MenuItem>
-            <MenuItem value="asc">Low → High</MenuItem>
-            <MenuItem value="desc">High → Low</MenuItem>
-          </Select>
-        </FormControl>
+            {autoFetching ? 'Fetching...' : `Auto Fetch (${autoFetchStates.length} states)`}
+          </Button>
+        </div>
 
-        {/* Quick clear */}
-        <Button size="small" onClick={() => { setFilterStates([]); setEmailFilter('all'); setAmvSort('none'); }}>Clear</Button>
+        {/* Progress/Status */}
+        {autoFetching && (
+          <Box sx={{ mt: 2 }}>
+            <LinearProgress color="success" />
+          </Box>
+        )}
+        {autoFetchStatus && (
+          <div style={{
+            marginTop: 12,
+            padding: 10,
+            background: autoFetchStatus.startsWith('Error') ? '#fef2f2' : '#f0fdf4',
+            border: `1px solid ${autoFetchStatus.startsWith('Error') ? '#fecaca' : '#86efac'}`,
+            borderRadius: 8,
+            color: autoFetchStatus.startsWith('Error') ? '#dc2626' : '#16a34a',
+            fontSize: 14,
+          }}>
+            {autoFetchStatus}
+          </div>
+        )}
+
+        <div style={{ marginTop: 12, color: '#6b7280', fontSize: 13 }}>
+          Will fetch {autoFetchLimit} addresses from Privy + {autoFetchLimit} from Redfin per state, then auto-fetch BofA AMV and save to database.
+          <br />
+          Total expected: ~{autoFetchStates.length * autoFetchLimit * 2} addresses
+        </div>
       </div>
 
       <div
@@ -945,6 +1159,31 @@ console.debug('[Deals:onSaveAgentOnly] fallback UI values', { finalName, finalPh
         <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
           <thead>
             <tr style={{ background: '#111827', color: '#fff' }}>
+              <th
+                style={{
+                  textAlign: 'center',
+                  padding: '12px 14px',
+                  fontSize: 12,
+                  letterSpacing: 0.4,
+                  textTransform: 'uppercase',
+                  borderBottom: '1px solid rgba(255,255,255,0.12)',
+                  position: 'sticky',
+                  top: 0,
+                  zIndex: 1,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <Checkbox
+                  checked={selectedRows.size === displayedRows.length && displayedRows.length > 0}
+                  indeterminate={selectedRows.size > 0 && selectedRows.size < displayedRows.length}
+                  onChange={toggleAllRows}
+                  sx={{
+                    color: '#fff',
+                    '&.Mui-checked': { color: '#fff' },
+                    '&.MuiCheckbox-indeterminate': { color: '#fff' },
+                  }}
+                />
+              </th>
               {[
                 'Full address',
                 'L.P',
@@ -953,6 +1192,7 @@ console.debug('[Deals:onSaveAgentOnly] fallback UI values', { finalName, finalPh
                 'AMV 40%',
                 'AMV 30%',
                 'Offer amount',
+                'Agent',
                 'Email status',
                 'Actions',
               ].map((h, i) => (
@@ -1004,53 +1244,132 @@ console.debug('[Deals:onSaveAgentOnly] fallback UI values', { finalName, finalPh
                 }
               }
 
+              const hasAgentInfo = r.agentName || r.agentPhone || r.agentEmail;
+              const isAgentExpanded = expandedAgentId === id;
+
               return (
-                <tr
-                  key={r._id || r.prop_id || (r.fullAddress || r.address)}
-                  onClick={() => { setSelected(r); setDetailTab('details'); }}
-                  style={{ background: zebra, cursor: 'pointer' }}
-                >
-                  <td style={tdLWide}>
-                    <div style={{ fontWeight: 600 }}>{addr || '—'}</div>
-                  </td>
-                  <td style={tdR}>{fmt(lp)}</td>
-                  <td style={tdR}>{fmt(lp80Display)}</td>
-                  <td style={tdR}>{fmt(r.amv)}</td>
-                  <td style={tdR}>{fmt(amv40Display)}</td>
-                  <td style={tdR}>{fmt(amv30Display)}</td>
-                  <td style={tdR}>{fmt(
-                    (() => {
-                      const a = typeof lp80Display === 'number' ? lp80Display : NaN;
-                      const b = typeof amv40Display === 'number' ? amv40Display : NaN;
-                      if (Number.isFinite(a) && Number.isFinite(b)) return Math.min(a, b);
-                      if (Number.isFinite(a)) return a;
-                      if (Number.isFinite(b)) return b;
-                      return null;
-                    })()
-                  )}</td>
-                  <td style={tdR}>
-                    <Chip
-                      size="small"
-                      label={emailStatus ? 'SENT' : 'UNSENT'}
-                      color={emailStatus ? 'success' : 'default'}
-                      variant={emailStatus ? 'filled' : 'outlined'}
-                      sx={
-                        emailStatus
-                          ? undefined
-                          : { color: '#111827', borderColor: '#9ca3af', bgcolor: 'transparent' }
-                      }
-                    />
-                  </td>
-                  <td style={{ ...tdR, whiteSpace: 'nowrap' }}>
-                    <Button size="small" variant="outlined" onClick={(e) => { e.stopPropagation(); openEdit(r); }} sx={{ mr: 1 }}>Edit</Button>
-                    <Button size="small" color="error" variant="outlined" onClick={(e) => { e.stopPropagation(); handleDelete(r); }}>Delete</Button>
-                  </td>
-                </tr>
+                <React.Fragment key={r._id || r.prop_id || (r.fullAddress || r.address)}>
+                  <tr style={{ background: zebra }}>
+                    <td style={{ ...tdBase, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={selectedRows.has(id)}
+                        onChange={() => toggleRowSelection(id)}
+                        sx={{
+                          color: '#111827',
+                          '&.Mui-checked': { color: '#0ea5e9' },
+                        }}
+                      />
+                    </td>
+                    <td style={{ ...tdLWide, cursor: 'pointer' }} onClick={() => { setSelected(r); setDetailTab('details'); }}>
+                      <div style={{ fontWeight: 600 }}>{addr || '—'}</div>
+                    </td>
+                    <td style={tdR}>{fmt(lp)}</td>
+                    <td style={tdR}>{fmt(lp80Display)}</td>
+                    <td style={tdR}>{fmt(r.amv)}</td>
+                    <td style={tdR}>{fmt(amv40Display)}</td>
+                    <td style={tdR}>{fmt(amv30Display)}</td>
+                    <td style={tdR}>{fmt(
+                      (() => {
+                        const a = typeof lp80Display === 'number' ? lp80Display : NaN;
+                        const b = typeof amv40Display === 'number' ? amv40Display : NaN;
+                        if (Number.isFinite(a) && Number.isFinite(b)) return Math.min(a, b);
+                        if (Number.isFinite(a)) return a;
+                        if (Number.isFinite(b)) return b;
+                        return null;
+                      })()
+                    )}</td>
+                    <td style={tdR}>
+                      {hasAgentInfo ? (
+                        <Button
+                          size="small"
+                          variant={isAgentExpanded ? 'contained' : 'outlined'}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpandedAgentId(isAgentExpanded ? null : id);
+                          }}
+                          sx={{
+                            textTransform: 'none',
+                            backgroundColor: isAgentExpanded ? '#7c3aed' : undefined,
+                            '&:hover': { backgroundColor: isAgentExpanded ? '#6d28d9' : undefined },
+                          }}
+                        >
+                          {isAgentExpanded ? 'Hide Agent' : 'View Agent'}
+                        </Button>
+                      ) : (
+                        <span style={{ color: '#9ca3af', fontSize: 13 }}>No agent</span>
+                      )}
+                    </td>
+                    <td style={tdR}>
+                      <Chip
+                        size="small"
+                        label={emailStatus ? 'SENT' : 'UNSENT'}
+                        color={emailStatus ? 'success' : 'default'}
+                        variant={emailStatus ? 'filled' : 'outlined'}
+                        sx={
+                          emailStatus
+                            ? undefined
+                            : { color: '#111827', borderColor: '#9ca3af', bgcolor: 'transparent' }
+                        }
+                      />
+                    </td>
+                    <td style={{ ...tdR, whiteSpace: 'nowrap' }}>
+                      <Button size="small" variant="outlined" onClick={(ev) => { ev.stopPropagation(); openEdit(r); }} sx={{ mr: 1 }}>Edit</Button>
+                      <Button size="small" color="error" variant="outlined" onClick={(ev) => { ev.stopPropagation(); handleDelete(r); }}>Delete</Button>
+                    </td>
+                  </tr>
+                  {/* Expandable Agent Details Row */}
+                  {isAgentExpanded && hasAgentInfo && (
+                    <tr style={{ background: '#f5f3ff' }}>
+                      <td colSpan={11} style={{ padding: '12px 14px' }}>
+                        <div style={{
+                          display: 'flex',
+                          gap: 24,
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                          paddingLeft: 20,
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ color: '#6b7280', fontSize: 13 }}>Name:</span>
+                            <span style={{ fontWeight: 600, color: '#111' }}>{r.agentName || '—'}</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ color: '#6b7280', fontSize: 13 }}>Phone:</span>
+                            {r.agentPhone ? (
+                              <a
+                                href={`tel:${r.agentPhone}`}
+                                style={{ fontWeight: 600, color: '#7c3aed', textDecoration: 'none' }}
+                                onClick={(ev) => ev.stopPropagation()}
+                              >
+                                {r.agentPhone}
+                              </a>
+                            ) : (
+                              <span style={{ color: '#9ca3af' }}>—</span>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ color: '#6b7280', fontSize: 13 }}>Email:</span>
+                            {r.agentEmail ? (
+                              <a
+                                href={`mailto:${r.agentEmail}`}
+                                style={{ fontWeight: 600, color: '#7c3aed', textDecoration: 'none' }}
+                                onClick={(ev) => ev.stopPropagation()}
+                              >
+                                {r.agentEmail}
+                              </a>
+                            ) : (
+                              <span style={{ color: '#9ca3af' }}>—</span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               );
             })}
             {!displayedRows.length && (
               <tr>
-                <td colSpan={9} style={{ padding: 18, textAlign: 'center', color: '#6b7280' }}>
+                <td colSpan={11} style={{ padding: 18, textAlign: 'center', color: '#6b7280' }}>
                   No deals found.
                 </td>
               </tr>

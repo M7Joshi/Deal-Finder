@@ -21,8 +21,14 @@ export const openDetailSelector  = '[data-testid="property-card"], .property-car
 export const filterButtonSelector = '#SearchBlock-Filter-Button';
 export const priceFromSelector   = '#list_price_from';
 export const priceToSelector     = '#list_price_to';
+export const bedsFromSelector    = '#beds_from';
 export const sqftFromSelector    = '#sqft_from';
 export const sqftToSelector      = '#sqft_to';
 export const hoaNoSelector       = '#hoa_no';
 export const dateRangeSelect     = 'select[name="date_range"]';
 export const filterApplyButton   = 'div.bottom-bar > button';
+// Property type checkboxes
+export const detachedCheckbox    = '#include_detached';
+export const condoCheckbox       = '#include_condo';
+export const attachedCheckbox    = '#include_attached';
+export const multiFamilyCheckbox = '#include_multi_family';

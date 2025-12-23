@@ -11,7 +11,11 @@ import { fileURLToPath } from 'url';
 export function computeOfferPrice(property, override) {
   if (typeof override === 'number' && isFinite(override) && override > 0) return Math.round(override);
 
-  const lp  = Number(property?.offerAmount ?? property?.listPrice ?? property?.price ?? NaN);
+  // If offerAmount is provided directly, use it as the exact offer price (no calculation)
+  const directOffer = Number(property?.offerAmount ?? NaN);
+  if (Number.isFinite(directOffer) && directOffer > 0) return Math.round(directOffer);
+
+  const lp  = Number(property?.listPrice ?? property?.price ?? NaN);
   const amv = Number(property?.amv ?? NaN);
 
   // Preferred rule: lowest of 80% LP and 40% AMV
@@ -113,7 +117,7 @@ export async function composeOfferPayload({ to, from, replyTo, subject, template
 
   const defaults = {
     date: new Date().toISOString().slice(0, 10),
-    agent_name: agentName || 'Listing Agent',
+    agent_name: agentName || 'Sir/Madam',
     property_address: property?.fullAddress || '',
     offer_price: pretty,
     emd: '$5,000',

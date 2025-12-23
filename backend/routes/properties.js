@@ -37,10 +37,44 @@ router.get('/table', requireAuth, scopeByState(), async (req, res) => {
     const onlyDeals = String(req.query?.onlyDeals || '').toLowerCase() === 'true';
 
     // Extra filters from query string
-    const { hasEmail, minPrice, states, minBeds } = req.query || {};
+    const { hasEmail, minPrice, states, minBeds, emailSent, sortBy, order, minAMV } = req.query || {};
     const ands = [baseFilter];
 
     if (onlyDeals) ands.push({ deal: true });
+
+    // Filter by minimum AMV: ?minAMV=150000
+    if (minAMV != null) {
+      const ma = num(minAMV);
+      if (Number.isFinite(ma) && ma > 0) {
+        ands.push({ amv: { $gte: ma } });
+      }
+    }
+
+    // Filter by email sent status: ?emailSent=true|false
+    if (typeof emailSent !== 'undefined') {
+      const wantSent = String(emailSent).toLowerCase() === 'true';
+      if (wantSent) {
+        // Look for any indicator that email was sent
+        ands.push({
+          $or: [
+            { agentEmailSent: true },
+            { emailSent: true },
+            { 'offerStatus.lastSentAt': { $exists: true, $ne: null } },
+            { 'offerStatus.lastResult': { $in: ['sent', 'delivered', 'ok', 'success'] } },
+            { emailStatus: { $in: ['sent', 'delivered', 'ok', 'success'] } }
+          ]
+        });
+      } else {
+        // Not sent - none of the sent indicators are true
+        ands.push({
+          $and: [
+            { $or: [{ agentEmailSent: { $exists: false } }, { agentEmailSent: { $ne: true } }] },
+            { $or: [{ emailSent: { $exists: false } }, { emailSent: { $ne: true } }] },
+            { $or: [{ 'offerStatus.lastSentAt': { $exists: false } }, { 'offerStatus.lastSentAt': null }] }
+          ]
+        });
+      }
+    }
 
     // Filter by one or more states: ?states=AL,GA,FL
     if (typeof states === 'string' && states.trim()) {
@@ -108,8 +142,14 @@ router.get('/table', requireAuth, scopeByState(), async (req, res) => {
       return null;
     };
 
+    // FIX: Reduce memory usage by limiting before sort
+    // Add a reasonable limit to prevent MongoDB from exceeding 32MB sort limit
+    const MAX_SORT_DOCS = 5000; // Process max 5000 docs at a time
+
     const pipeline = [
       { $match: filter },
+      // Limit BEFORE expensive operations to reduce memory usage
+      { $limit: MAX_SORT_DOCS },
       { $addFields: {
           fullAddress_ci_norm: { $toLower: { $ifNull: ["$fullAddress_ci", "$fullAddress"] } }
         }
@@ -162,11 +202,20 @@ router.get('/table', requireAuth, scopeByState(), async (req, res) => {
           details: 1, beds: 1, baths: 1, sqft: 1,
           // agent (new + legacy)
           agentName: 1, agentPhone: 1, agentEmail: 1, agent: 1, agent_phone: 1, agent_email: 1,
-          offerStatus: 1, deal: 1
+          offerStatus: 1, deal: 1,
+          // Include email sent indicators for filtering
+          agentEmailSent: 1, emailSent: 1, emailStatus: 1
       } }
     );
 
-    const docs = await Property.aggregate(pipeline);
+    // Add sorting by AMV if requested: ?sortBy=amv&order=asc|desc
+    if (sortBy === 'amv') {
+      const sortOrder = order === 'asc' ? 1 : -1;
+      pipeline.push({ $sort: { amv: sortOrder, _id: 1 } });
+    }
+
+    // Execute aggregation (limit added to prevent memory issues)
+    const docs = await Property.aggregate(pipeline).allowDiskUse(true);
 
     const rows = docs.map((p) => {
       // prefer explicit listingPrice; else fall back to price

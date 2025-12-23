@@ -43,7 +43,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import mongoose from 'mongoose';
 import Property from '../models/Property.js';
+import ScrapedDeal from '../models/ScrapedDeal.js';
 import { getPreferredChromeProxy, SERVICE_PROBE_URL } from '../services/proxyManager.js';
+import { getVendorProxyPool, toProxyArg } from '../utils/proxyBuilder.js';
 import { computeAMV as computePropertyAMV } from '../models/Property.js';
 
 // import runEnrichAgents from './jobs/enrichAgents.js';
@@ -898,7 +900,8 @@ const selectedStates = stateList; // keep var for logs if needed
           logPrivy.start(`Running PrivyBot automation across ${stateList.length} state(s)…`, { states: stateList.slice(0, 10), note: 'showing first 10 for brevity' });
 
           const runOneState = async (stateCode, { mode = 'auto' } = {}) => {
-            const MAX_ATTEMPTS = 2;
+            const MAX_ATTEMPTS = Number(process.env.PRIVY_MAX_RETRIES || 3); // Increased from 2 to 3
+            const RETRY_DELAY_MS = Number(process.env.PRIVY_RETRY_DELAY_MS || 5000); // Wait before retry
             let attempt = 0;
             while (attempt < MAX_ATTEMPTS) {
               attempt++;
@@ -973,14 +976,48 @@ const selectedStates = stateList; // keep var for logs if needed
               return;
             } catch (e) {
               const msg = e?.message || String(e);
-              const tunnel = /ERR_TUNNEL_CONNECTION_FAILED/i.test(msg) || isNetworkOrProxyError(e);
-              logPrivy.warn(`PrivyBot(${stateCode}) attempt ${attempt} failed`, { error: msg });
+              // Expanded error detection for auto-recovery
+              const isRetryableError =
+                /ERR_TUNNEL_CONNECTION_FAILED/i.test(msg) ||
+                /ERR_CONNECTION_REFUSED/i.test(msg) ||
+                /ERR_CONNECTION_RESET/i.test(msg) ||
+                /ERR_CONNECTION_CLOSED/i.test(msg) ||
+                /ERR_NETWORK_CHANGED/i.test(msg) ||
+                /ERR_INTERNET_DISCONNECTED/i.test(msg) ||
+                /ECONNREFUSED/i.test(msg) ||
+                /ETIMEDOUT/i.test(msg) ||
+                /ENOTFOUND/i.test(msg) ||
+                /timeout/i.test(msg) ||
+                /Navigation timeout/i.test(msg) ||
+                /net::ERR_/i.test(msg) ||
+                /live.*scrape/i.test(msg) ||
+                /scrape.*error/i.test(msg) ||
+                /session.*expired/i.test(msg) ||
+                /login.*failed/i.test(msg) ||
+                /Target closed/i.test(msg) ||
+                /Protocol error/i.test(msg) ||
+                /Page crashed/i.test(msg) ||
+                isNetworkOrProxyError(e);
+
+              logPrivy.warn(`PrivyBot(${stateCode}) attempt ${attempt}/${MAX_ATTEMPTS} failed`, {
+                error: msg,
+                isRetryable: isRetryableError,
+                willRetry: isRetryableError && attempt < MAX_ATTEMPTS
+              });
+
               try { await privyBot?.close?.(); } catch {}
-              if (tunnel && attempt < MAX_ATTEMPTS) {
+
+              if (isRetryableError && attempt < MAX_ATTEMPTS) {
                 cooldownPaidForService('privy', 10 * 60 * 1000);
+                logPrivy.info(`PrivyBot(${stateCode}) waiting ${RETRY_DELAY_MS}ms before retry...`);
+                await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
                 continue; // retry with a rotated proxy
               }
-              throw e;
+
+              // If all retries failed, log but don't throw - continue with next state
+              logPrivy.error(`PrivyBot(${stateCode}) all ${MAX_ATTEMPTS} attempts failed - skipping state`, { error: msg });
+              progressTrackerStats.privy.completedJobs += 1; // Mark as "processed" even if failed
+              return; // Don't throw - continue with other states
             }
             }
           };
@@ -1057,7 +1094,7 @@ const selectedStates = stateList; // keep var for logs if needed
           // Safe defaults for first runs / to punch through early 403s; override via env if needed
           if (!process.env.REDFIN_FORCE_RENDER) process.env.REDFIN_FORCE_RENDER = '1';
           if (!process.env.MAX_INDEX_PAGES_PER_CITY) process.env.MAX_INDEX_PAGES_PER_CITY = '1';
-          if (!process.env.MAX_LISTINGS_PER_CITY) process.env.MAX_LISTINGS_PER_CITY = '25';
+          if (!process.env.MAX_LISTINGS_PER_CITY) process.env.MAX_LISTINGS_PER_CITY = '10000';
 
           const { runAllCities } = await import('./redfin/runner.js');
           await runAllCities();
@@ -1070,6 +1107,102 @@ const selectedStates = stateList; // keep var for logs if needed
       log.info('Redfin job skipped (not selected)');
     }
 
+    // --- ScrapedDeal AMV Fetcher: Get BofA AMV for ScrapedDeal entries without AMV ---
+    // This runs after Privy/Redfin to enrich deals with valuations
+    if (jobs.has('scraped_deals_amv') || jobs.has('privy') || jobs.has('redfin')) {
+      tasks.push((async () => {
+        try {
+          // Wait a bit for Privy/Redfin to finish saving
+          await new Promise(r => setTimeout(r, 5000));
+
+          const BATCH_SIZE = Math.max(1, Number(process.env.SCRAPED_DEALS_AMV_BATCH || 50));
+          log.info('ScrapedDeal AMV: Fetching AMV for deals without valuation...', { batchSize: BATCH_SIZE });
+
+          // Find ScrapedDeal entries that have listingPrice but no AMV
+          const dealsNeedingAMV = await ScrapedDeal.find({
+            listingPrice: { $gt: 0 },
+            $or: [{ amv: null }, { amv: { $exists: false } }]
+          })
+            .sort({ scrapedAt: -1 })
+            .limit(BATCH_SIZE)
+            .lean();
+
+          if (!dealsNeedingAMV.length) {
+            log.info('ScrapedDeal AMV: No deals need AMV - all caught up!');
+            return;
+          }
+
+          log.info(`ScrapedDeal AMV: Found ${dealsNeedingAMV.length} deals needing AMV`);
+
+          // Import BofA automation
+          const getHomeValue = (await import('./bofa/bofaAutomation.js')).default;
+          const { initSharedBrowser, getSharedPage } = await import('../utils/browser.js');
+
+          // Initialize browser
+          await initSharedBrowser();
+          const page = await getSharedPage('bofa-scraped-deals', {
+            interceptRules: { block: ['media', 'analytics', 'tracking'] },
+            timeoutMs: 60000,
+          });
+
+          // Navigate to BofA page once
+          const BOFA_URL = 'https://homevaluerealestatecenter.bankofamerica.com/';
+          await page.goto(BOFA_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+          let successCount = 0;
+          let failCount = 0;
+
+          for (const deal of dealsNeedingAMV) {
+            if (control.abort) {
+              log.warn('ScrapedDeal AMV: Stop requested - aborting');
+              break;
+            }
+
+            try {
+              const result = await getHomeValue(
+                { fullAddress: deal.fullAddress },
+                2, // max attempts
+                { injected: { page } }
+              );
+
+              if (result?.bofa_value && result.bofa_value > 0) {
+                // Update ScrapedDeal with AMV - isDeal will be calculated
+                const isDeal = result.bofa_value >= (deal.listingPrice * 2);
+                await ScrapedDeal.updateOne(
+                  { _id: deal._id },
+                  {
+                    $set: {
+                      amv: result.bofa_value,
+                      bofaFetchedAt: new Date(),
+                      isDeal: isDeal
+                    }
+                  }
+                );
+                successCount++;
+                log.info(`ScrapedDeal AMV: Updated ${deal.fullAddress?.slice(0, 40)}...`, {
+                  amv: result.bofa_value,
+                  listingPrice: deal.listingPrice,
+                  isDeal
+                });
+              } else {
+                failCount++;
+              }
+
+              // Small delay between requests
+              await new Promise(r => setTimeout(r, 1000 + Math.random() * 500));
+            } catch (e) {
+              failCount++;
+              log.warn(`ScrapedDeal AMV: Failed for ${deal.fullAddress?.slice(0, 30)}`, { error: e?.message });
+            }
+          }
+
+          try { await page.close(); } catch {}
+          log.success(`ScrapedDeal AMV: Completed. Success: ${successCount}, Failed: ${failCount}`);
+        } catch (e) {
+          log.error('ScrapedDeal AMV: Error in automation', { error: e?.message || String(e) });
+        }
+      })());
+    }
 
     // --- AMV Daemon: small, continuous batches every tick ---
     if (jobs.has('amv_daemon')) {
