@@ -8,17 +8,28 @@ const JOB_ALIAS_MAP = Object.freeze({
   // human-friendly vendor aliases → home_valuations pipeline
   valuations: 'home_valuations',
   valuation: 'home_valuations',
+  home_valuations: 'home_valuations',
   bofa: 'bofa',
   bankofamerica: 'bofa',
   boa: 'bofa',
   chase: 'chase',
   // NEW agent-offers aliases
-  agent_offers: 'agent_offers',   // ← ADD
-  'agent-offers': 'agent_offers', // ← ADD
-  offers: 'agent_offers',         // ← ADD
+  agent_offers: 'agent_offers',
+  'agent-offers': 'agent_offers',
+  offers: 'agent_offers',
+  // privy
+  privy: 'privy',
   // redfin
   redfin: 'redfin',
   '4': 'redfin',
+  // current_listings
+  current_listings: 'current_listings',
+  'current-listings': 'current_listings',
+  listings: 'current_listings',
+  // enrich_agent
+  enrich_agent: 'enrich_agent',
+  'enrich-agent': 'enrich_agent',
+  enrichagent: 'enrich_agent',
   // amv daemon aliases
   amv: 'amv_daemon',
   'amv-recompute': 'amv_daemon',
