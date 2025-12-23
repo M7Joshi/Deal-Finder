@@ -87,81 +87,7 @@ function releaseScrapingSlot() {
   }
 }
 
-/**
- * Generate mock properties for testing when Redfin API fails
- */
-/**
- * Generate mock properties WITH hardcoded filters applied:
- * - Price: $50K - $500K
- * - Beds: 3+
- * - Sqft: 1000+
- * - Home Type: House (Single Family)
- * - No HOA
- */
-function generateMockProperties(stateCode, stateName, limit = 10, cityFilter = '') {
-  const cities = {
-    'NJ': ['Newark', 'Jersey City', 'Paterson', 'Elizabeth', 'Edison', 'Woodbridge'],
-    'NC': ['Charlotte', 'Raleigh', 'Greensboro', 'Durham', 'Winston-Salem', 'Fayetteville'],
-    'CA': ['Los Angeles', 'San Diego', 'San Jose', 'San Francisco', 'Fresno', 'Sacramento'],
-    'TX': ['Houston', 'San Antonio', 'Dallas', 'Austin', 'Fort Worth', 'El Paso'],
-    'FL': ['Jacksonville', 'Miami', 'Tampa', 'Orlando', 'St. Petersburg', 'Hialeah'],
-    'NY': ['New York', 'Buffalo', 'Rochester', 'Yonkers', 'Syracuse', 'Albany']
-  };
-
-  const streets = ['Main St', 'Oak Ave', 'Maple Dr', 'Pine Rd', 'Cedar Ln', 'Elm St', 'Park Ave', 'Lake Dr', 'Hill St', 'Valley Rd'];
-  const stateCities = cities[stateCode] || ['Downtown', 'Midtown', 'Uptown', 'Westside', 'Eastside', 'Northside'];
-
-  const properties = [];
-  for (let i = 0; i < limit; i++) {
-    const streetNum = 100 + Math.floor(Math.random() * 9900);
-    const street = streets[i % streets.length];
-    // Use cityFilter if provided, otherwise random city from state
-    const city = cityFilter || stateCities[Math.floor(Math.random() * stateCities.length)];
-    const zip = 10000 + Math.floor(Math.random() * 89999);
-
-    // APPLY FILTERS:
-    // Price: $50K - $500K
-    const price = 50000 + Math.floor(Math.random() * 450000);
-    // Beds: 3+ (3, 4, or 5)
-    const beds = 3 + Math.floor(Math.random() * 3);
-    // Baths: Any
-    const baths = 1 + Math.floor(Math.random() * 3) + (Math.random() > 0.5 ? 0.5 : 0);
-    // Sqft: 1000+
-    const sqft = 1000 + Math.floor(Math.random() * 2000);
-
-    properties.push({
-      fullAddress: `${streetNum} ${street}, ${city}, ${stateCode} ${zip}`,
-      vendor: 'redfin',
-      extractedAt: new Date().toISOString(),
-      sourceIndex: i,
-      url: `https://www.redfin.com/${stateCode.toLowerCase()}/${city.toLowerCase().replace(/\s+/g, '-')}/mock-property-${i}`,
-      state: stateCode,
-      city: city,
-      price: price,
-      priceText: `$${price.toLocaleString()}`,
-      beds: beds,
-      bedsText: `${beds} bed${beds !== 1 ? 's' : ''}`,
-      baths: baths,
-      bathsText: `${baths} bath${baths !== 1 ? 's' : ''}`,
-      sqft: sqft,
-      sqftText: `${sqft.toLocaleString()} sqft`,
-      // Home Type: House only
-      propertyType: 'Single Family',
-      // No HOA
-      hoa: 'No',
-      hoaText: 'No HOA',
-      listingId: `MOCK${Date.now()}${i}`,
-      mlsId: `MLS${Math.floor(Math.random() * 1000000)}`,
-      yearBuilt: 1950 + Math.floor(Math.random() * 74),
-      daysOnMarket: Math.floor(Math.random() * 90),
-      status: 'active',
-      latitude: 35 + Math.random() * 10,
-      longitude: -120 + Math.random() * 30
-    });
-  }
-
-  return properties;
-}
+// Mock property generation removed - we now return errors instead of fake data
 
 /**
  * Scrape agent details (name, phone, brokerage) from a Redfin property detail page
@@ -1723,6 +1649,13 @@ router.get('/redfin', async (req, res) => {
         const propertyType = home.propertyType?.value || home.propertyType;
         const hoa = home.hoa?.value || home.hoa || 0;
 
+        // CRITICAL: Filter by state - Redfin API sometimes returns wrong states
+        const homeState = (home.state || '').toUpperCase();
+        if (homeState && homeState !== stateUpper) {
+          L.debug(`Filtering out property from wrong state: ${homeState} (expected ${stateUpper})`);
+          return false;
+        }
+
         if (price < MIN_PRICE || price > MAX_PRICE) return false;
         if (beds < MIN_BEDS) return false;
         if (sqft < MIN_SQFT) return false;
@@ -1917,27 +1850,22 @@ router.get('/redfin', async (req, res) => {
         });
       }
 
-      L.warn('Redfin API returned no results from any city, using sample data');
+      L.warn('Redfin API returned no results from any city');
+      return res.status(404).json({
+        ok: false,
+        error: 'No properties found',
+        message: `Redfin returned no results for ${city || stateInfo.name}. The API may be blocking server requests or there are no listings matching the filters.`,
+        addresses: []
+      });
     } catch (apiErr) {
       L.error(`Redfin API failed: ${apiErr.message}`);
+      return res.status(500).json({
+        ok: false,
+        error: apiErr.message || 'Redfin API failed',
+        message: 'Failed to fetch data from Redfin. The API may be blocking server requests.',
+        addresses: []
+      });
     }
-
-    // Return sample data (API returned no results or failed)
-    // Note: Redfin's API often blocks server-side requests
-    const properties = generateMockProperties(state.toUpperCase(), stateInfo.name, parseInt(limit), city);
-
-    return res.json({
-      ok: true,
-      source: 'sample-data',
-      scrapedAt: new Date().toISOString(),
-      state: stateInfo.name,
-      stateCode: stateInfo.code,
-      city: city || 'All Cities',
-      filters: REDFIN_FILTERS,
-      count: properties.length,
-      addresses: properties,
-      message: `Sample listings for ${city || stateInfo.name}. Note: Redfin blocks server-side API requests. For real data, use the Redfin website directly.`
-    });
 
   } catch (error) {
     L.error('Live Redfin scrape failed', { error: error.message });
