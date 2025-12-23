@@ -787,17 +787,17 @@ async def _wait_for_listings(page) -> None:
         "a[href*='/listings/']",
         "article",
     ]
-    for _ in range(4):
+    for _ in range(6):  # Increased from 4 to 6 attempts
         for sel in selectors:
             try:
-                await page.wait_for_selector(sel, timeout=3000)
+                await page.wait_for_selector(sel, timeout=5000)  # Increased from 3000ms to 5000ms
                 return
             except PWTimeoutError:
                 pass
-        await _progressive_scroll(page, steps=2, wait_ms=500)
+        await _progressive_scroll(page, steps=3, wait_ms=800)  # Increased steps and wait time
     # final attempt
-    await page.wait_for_selector(selectors[-1], timeout=5000)
-    await _progressive_scroll(page, steps=2, wait_ms=400)
+    await page.wait_for_selector(selectors[-1], timeout=8000)  # Increased from 5000ms to 8000ms
+    await _progressive_scroll(page, steps=3, wait_ms=800)  # More scrolling
 
 def _mine_inline_scripts(html: str) -> list[dict]:
     # Try to find embedded JSON blobs in <script> tags
@@ -1045,7 +1045,7 @@ async def collect_estately(
                 return results
             await _dismiss_banners(page)
             await _prime_results(page)
-            await page.wait_for_timeout(1000)
+            await page.wait_for_timeout(2000)  # Increased from 1000ms to 2000ms
             try:
                 await _wait_for_listings(page)
             except Exception:
@@ -1053,10 +1053,10 @@ async def collect_estately(
                 pass
 
             # small extra scroll to ensure cards are in DOM
-            await _progressive_scroll(page, steps=2, wait_ms=400)
+            await _progressive_scroll(page, steps=4, wait_ms=800)  # Increased steps from 2->4 and wait from 400->800ms
 
             # Give the app a moment to fire network requests
-            await page.wait_for_timeout(800)
+            await page.wait_for_timeout(2000)  # Increased from 800ms to 2000ms
 
             if ESTATELY_DEBUG:
                 print(f"[estately] net blobs so far: {len(net_bucket)}")
