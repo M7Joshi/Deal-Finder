@@ -337,6 +337,30 @@ router.put('/:id', requireAuth, scopeByState(), async (req, res) => {
   }
 });
 
+// --- DELETE /api/properties/clear/all - Clear ALL properties from database ---
+// WARNING: This permanently deletes all properties!
+// NOTE: This route MUST be before /:id route to avoid matching "clear" as an ID
+router.delete('/clear/all', requireAuth, async (_req, res) => {
+  try {
+    const countBefore = await Property.countDocuments();
+
+    // Delete all properties
+    const result = await Property.deleteMany({});
+
+    console.log(`🗑️ Cleared all properties: ${result.deletedCount} documents deleted`);
+
+    return res.json({
+      ok: true,
+      message: 'All properties cleared successfully',
+      deletedCount: result.deletedCount,
+      countBefore
+    });
+  } catch (e) {
+    console.error('DELETE /properties/clear/all failed', e);
+    return res.status(500).json({ error: 'Failed to clear properties' });
+  }
+});
+
 // --- DELETE /api/properties/:id ---
 router.delete('/:id', requireAuth, scopeByState(), async (req, res) => {
   try {
