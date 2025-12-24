@@ -1599,12 +1599,11 @@ if (jobs.has('home_valuations')) {
 
 // Export function to manually start scheduler (for single-process mode)
 export function startSchedulerManually() {
-  if (schedulerEnabled) {
-    log.info('Scheduler already enabled');
-    return;
-  }
   log.info('Starting scheduler manually (single-process mode)');
   schedulerEnabled = true;
+
+  // Always call bootstrapScheduler - it handles the actual scheduling
+  // The old check was preventing startup when schedulerEnabled was already true
   bootstrapScheduler();
 }
 
