@@ -4,7 +4,7 @@ import {
   TextField, Alert, Paper, Typography, FormControl, InputLabel, Select, MenuItem, Chip, Box,
   Checkbox,
 } from '@mui/material';
-import { apiFetch } from '../helpers';
+import { apiFetch, getApiBaseUrl } from '../helpers';
 
 // Blocked states (same as Deals page) - excluded from fetching
 const BLOCKED_STATES = ['SD', 'AK', 'ND', 'WY', 'HI', 'UT', 'NM', 'OH', 'MT'];
@@ -439,7 +439,7 @@ export default function PrivyFetcher() {
       const token = localStorage.getItem('authToken') || localStorage.getItem('token');
 
       // State-level URL (no city parameter)
-      const url = `http://localhost:3015/api/live-scrape/privy?state=${state}&limit=${limit}`;
+      const url = `${getApiBaseUrl()}/api/live-scrape/privy?state=${state}&limit=${limit}`;
 
       const response = await fetch(
         url,
@@ -513,7 +513,7 @@ export default function PrivyFetcher() {
       setState(currentState.code);
 
       try {
-        const url = `http://localhost:3015/api/live-scrape/privy?state=${currentState.code}&limit=${limit}`;
+        const url = `${getApiBaseUrl()}/api/live-scrape/privy?state=${currentState.code}&limit=${limit}`;
         const response = await fetch(url, {
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
         });
@@ -583,7 +583,7 @@ export default function PrivyFetcher() {
     setStatus({ message: 'Submitting verification code...', type: 'info' });
     try {
       const token = localStorage.getItem('authToken') || localStorage.getItem('token');
-      const response = await fetch('http://localhost:3015/api/automation/otp', {
+      const response = await fetch(`${getApiBaseUrl()}/api/automation/otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ code: otpCode, service: 'privy' }),

@@ -63,6 +63,9 @@ export async function getOtpState() {
 // Centralized API calls + token handling.
 // Relies on API_BASE and routes from constants.ts
 
+// ---- API Base URL helper ----
+export const getApiBaseUrl = () => API_BASE;
+
 // ---- Token helpers ----
 const TOKEN_KEY = "authToken";
 export const getToken = () => localStorage.getItem(TOKEN_KEY);

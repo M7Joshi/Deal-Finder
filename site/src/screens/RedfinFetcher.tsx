@@ -12,7 +12,7 @@ import {
   MenuItem,
   Checkbox,
 } from '@mui/material';
-import { apiFetch } from '../helpers';
+import { apiFetch, getApiBaseUrl } from '../helpers';
 
 interface Address {
   fullAddress: string;
@@ -276,7 +276,7 @@ export default function RedfinFetcher() {
 
     try {
       const response = await fetch(
-        `http://localhost:3015/api/live-scrape/redfin?state=${state}&city=${encodeURIComponent(cityName)}&limit=${needed}&page=1`,
+        `${getApiBaseUrl()}/api/live-scrape/redfin?state=${state}&city=${encodeURIComponent(cityName)}&limit=${needed}&page=1`,
         {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -369,7 +369,7 @@ export default function RedfinFetcher() {
     try {
       const token = localStorage.getItem('authToken');
       const response = await fetch(
-        `http://localhost:3015/api/live-scrape/redfin?state=${state}&city=${encodeURIComponent(city)}&limit=${limit}&page=${page}`,
+        `${getApiBaseUrl()}/api/live-scrape/redfin?state=${state}&city=${encodeURIComponent(city)}&limit=${limit}&page=${page}`,
         {
           headers: {
             Authorization: `Bearer ${token}`,
