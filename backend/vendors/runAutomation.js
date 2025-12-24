@@ -490,12 +490,19 @@ function getCurrentPhase() {
   const elapsed = Date.now() - phaseStartTime;
   if (elapsed >= PHASE_DURATION_MS) {
     // Switch phases
+    const oldPhase = currentPhase;
     currentPhase = currentPhase === 'scrape' ? 'amv' : 'scrape';
     phaseStartTime = Date.now();
     log.info(`Scheduler: Switching to ${currentPhase.toUpperCase()} phase`, {
       phase: currentPhase,
+      previousPhase: oldPhase,
       phaseDurationMs: PHASE_DURATION_MS
     });
+    // Signal current run to abort so new phase can start
+    if (isRunning) {
+      control.abort = true;
+      log.warn(`Scheduler: Aborting ${oldPhase} phase to start ${currentPhase} phase`);
+    }
   }
   return currentPhase;
 }
@@ -549,13 +556,17 @@ function bootstrapScheduler() {
 
 async function schedulerTick() {
   if (!schedulerEnabled) return;
+
+  // Check phase FIRST, even if a run is in progress
+  // This ensures we switch phases on time
+  const phase = getCurrentPhase();
+
   if (isRunning) {
-    log.info('Scheduler: a run is already in progress — will check again shortly.');
+    log.info('Scheduler: a run is already in progress — will check again shortly.', { currentPhase: phase });
     return scheduleNextRun(5000);
   }
 
-  // Get current phase and determine which jobs to run
-  const phase = getCurrentPhase();
+  // Determine which jobs to run for current phase
   const phaseJobs = getPhaseJobs(phase);
 
   log.info(`Scheduler: starting ${phase.toUpperCase()} phase`, {
