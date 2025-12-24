@@ -161,12 +161,12 @@ router.get('/pending-amv', async (req, res) => {
       amv: { $gt: 0 }
     });
 
-    // Get recent pending deals (for display) - include agent details
+    // Get ALL pending deals (for display) - include agent details
+    // No limit - show all addresses pending AMV (up to batch limit of 500)
     const recentPending = await ScrapedDeal.find({
       $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
     })
       .sort({ scrapedAt: -1 })
-      .limit(50)
       .select('fullAddress state listingPrice scrapedAt source agentName agentPhone agentEmail')
       .lean();
 

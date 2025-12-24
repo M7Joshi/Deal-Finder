@@ -319,7 +319,7 @@ export default function PendingAMV() {
           }}
         >
           <div style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', fontWeight: 700, color: '#111' }}>
-            Recent Addresses Waiting for AMV ({recentPending.length} shown)
+            All Addresses Waiting for AMV ({recentPending.length} total)
           </div>
           <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
             <thead>
