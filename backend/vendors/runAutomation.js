@@ -1757,18 +1757,46 @@ if (IS_WORKER) {
     bootstrapScheduler().catch(e => log.error('bootstrapScheduler error', { error: e?.message }));
   }
 }
-// Hidden hook used by routes to request a graceful stop
-progressTracker._requestStop = function requestStop() {
+// Hidden hook used by routes to request a FORCE stop - kills everything immediately
+progressTracker._requestStop = async function requestStop() {
+  log.warn('FORCE STOP requested - killing all automations immediately');
+
+  // Set abort flag immediately
   control.abort = true;
   schedulerEnabled = false;
+  isRunning = false;
+
+  // Clear all timers and queues
   try { if (schedulerTimer) clearTimeout(schedulerTimer); } catch {}
   try { if (homeValuationsQueue) homeValuationsQueue.clear(); } catch {}
   try { if (currentListingsQueue) currentListingsQueue.clear(); } catch {}
   try { if (currentGlobalLimiter) currentGlobalLimiter.clear(); } catch {}
-  resetOtpState();
   try { if (maintainPoolHandle) clearInterval(maintainPoolHandle); } catch {}
-  progressTracker.status = 'stopping';
-  log.warn('Stop requested for automations. Scheduler disabled; clearing pending queue and letting in-flight tasks finish.');
+
+  // Reset OTP state
+  resetOtpState();
+
+  // Force close all browsers
+  try {
+    await closeSharedBrowser();
+    log.info('Shared browser closed');
+  } catch (e) {
+    log.warn('Error closing shared browser', { error: e?.message });
+  }
+
+  // Reset progress tracker to idle state
+  progressTracker.isRunning = false;
+  progressTracker.status = 'idle';
+  progressTracker.jobs = [];
+  progressTracker.error = null;
+  progressTracker.otp = null;
+
+  // Reset queues
+  homeValuationsQueue = null;
+  currentListingsQueue = null;
+  currentGlobalLimiter = null;
+
+  log.warn('FORCE STOP complete - all automations killed, status reset to idle');
 };
 
 export default runAutomation;

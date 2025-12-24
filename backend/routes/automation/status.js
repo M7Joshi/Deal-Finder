@@ -17,8 +17,13 @@ async function buildSnapshot() {
 
 
 // JSON snapshot for polling (what your dashboard calls frequently)
-router.get('/', (req, res) => {
-  res.json(buildSnapshot());
+router.get('/', async (req, res) => {
+  try {
+    const snapshot = await buildSnapshot();
+    res.json(snapshot);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to get status', message: err?.message });
+  }
 });
 
 // Live logs / progress via Server-Sent Events (SSE)

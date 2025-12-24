@@ -32,19 +32,16 @@ router.post('/run', async (req, res) => {
   return res.status(202).json({ ok: true, message: 'Automation started (compat /run)' });
 });
 
-// Stop request — asks the automation to stop accepting new work and clears pending queue.
+// Stop request — FORCE STOP - kills everything immediately
 router.post('/stop', async (req, res) => {
   try {
-    if (!progressTracker.isRunning && progressTracker.status !== 'running') {
-      return res.status(200).json({ ok: true, message: 'Automation is not running' });
-    }
-    // Signal stop via the exported helper on runAutomation module
+    // Signal force stop via the exported helper on runAutomation module
     if (typeof progressTracker._requestStop === 'function') {
-      progressTracker._requestStop();
+      await progressTracker._requestStop();
     }
-    return res.status(202).json({ ok: true, message: 'Stop requested' });
+    return res.status(200).json({ ok: true, message: 'Force stop complete - all automations killed', status: 'idle' });
   } catch (err) {
-    return res.status(500).json({ ok: false, message: 'Failed to request stop', error: err?.message || String(err) });
+    return res.status(500).json({ ok: false, message: 'Failed to force stop', error: err?.message || String(err) });
   }
 });
 
