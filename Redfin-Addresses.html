@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Redfin Address Fetcher</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #d32323 0%, #a61d1d 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 900px;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #d32323 0%, #a61d1d 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 36px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .input-group {
+            margin-bottom: 25px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: all 0.3s;
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: #d32323;
+            box-shadow: 0 0 0 3px rgba(211, 35, 35, 0.1);
+        }
+
+        .input-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        button {
+            width: 100%;
+            padding: 18px;
+            background: linear-gradient(135deg, #d32323 0%, #a61d1d 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(211, 35, 35, 0.4);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .status {
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+            display: none;
+        }
+
+        .status.show {
+            display: block;
+            animation: slideDown 0.4s ease;
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .status.info {
+            background: #e3f2fd;
+            border-left: 4px solid #2196F3;
+            color: #1565c0;
+        }
+
+        .status.success {
+            background: #e8f5e9;
+            border-left: 4px solid #4CAF50;
+            color: #2e7d32;
+        }
+
+        .status.error {
+            background: #ffebee;
+            border-left: 4px solid #f44336;
+            color: #c62828;
+        }
+
+        .status.warning {
+            background: #fff3e0;
+            border-left: 4px solid #ff9800;
+            color: #e65100;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #d32323;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 30px auto;
+            display: none;
+        }
+
+        .spinner.show {
+            display: block;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .addresses {
+            margin-top: 30px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .address-card {
+            background: #f9f9f9;
+            border-left: 4px solid #d32323;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+
+        .address-card:hover {
+            transform: translateX(5px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+
+        .address-number {
+            display: inline-block;
+            background: #d32323;
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 30px;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+
+        .address-text {
+            font-size: 16px;
+            color: #333;
+        }
+
+        .address-details {
+            font-size: 14px;
+            color: #666;
+            margin-top: 5px;
+            padding-left: 40px;
+        }
+
+        .count-badge {
+            background: #4CAF50;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            display: inline-block;
+            margin: 20px 0;
+            font-weight: 600;
+        }
+
+        .info-box {
+            background: #fff3e0;
+            border-left: 4px solid #ff9800;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .info-box h4 {
+            color: #e65100;
+            margin-bottom: 8px;
+        }
+
+        .info-box p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .agent-info {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f0f7ff;
+            border-radius: 6px;
+            border-left: 3px solid #2196F3;
+        }
+
+        .agent-info .agent-name {
+            font-weight: 600;
+            color: #1565c0;
+            font-size: 14px;
+        }
+
+        .agent-info .agent-phone {
+            color: #333;
+            font-size: 14px;
+            margin-top: 4px;
+        }
+
+        .agent-info .agent-phone a {
+            color: #d32323;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .agent-info .agent-phone a:hover {
+            text-decoration: underline;
+        }
+
+        .agent-info .agent-email {
+            color: #333;
+            font-size: 14px;
+            margin-top: 4px;
+        }
+
+        .agent-info .agent-email a {
+            color: #1976d2;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .agent-info .agent-email a:hover {
+            text-decoration: underline;
+        }
+
+        .agent-info .brokerage {
+            color: #666;
+            font-size: 12px;
+            margin-top: 4px;
+            font-style: italic;
+        }
+
+        .enrichment-stats {
+            background: #e8f5e9;
+            border-left: 4px solid #4CAF50;
+            padding: 10px 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 14px;
+            color: #2e7d32;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏡 Redfin Address Fetcher</h1>
+            <p>Fetch live addresses from Redfin.com</p>
+        </div>
+
+        <div class="content">
+            <div class="info-box">
+                <h4>ℹ️ How it works</h4>
+                <p>This tool fetches active real estate listings from Redfin. No login required!</p>
+            </div>
+
+            <div class="input-group">
+                <label for="state">Select State</label>
+                <select id="state">
+                    <option value="">-- Select a State --</option>
+                    <option value="AL">Alabama</option>
+                    <option value="AK">Alaska</option>
+                    <option value="AZ">Arizona</option>
+                    <option value="AR">Arkansas</option>
+                    <option value="CA">California</option>
+                    <option value="CO">Colorado</option>
+                    <option value="CT">Connecticut</option>
+                    <option value="DE">Delaware</option>
+                    <option value="FL">Florida</option>
+                    <option value="GA">Georgia</option>
+                    <option value="HI">Hawaii</option>
+                    <option value="ID">Idaho</option>
+                    <option value="IL">Illinois</option>
+                    <option value="IN">Indiana</option>
+                    <option value="IA">Iowa</option>
+                    <option value="KS">Kansas</option>
+                    <option value="KY">Kentucky</option>
+                    <option value="LA">Louisiana</option>
+                    <option value="ME">Maine</option>
+                    <option value="MD">Maryland</option>
+                    <option value="MA">Massachusetts</option>
+                    <option value="MI">Michigan</option>
+                    <option value="MN">Minnesota</option>
+                    <option value="MS">Mississippi</option>
+                    <option value="MO">Missouri</option>
+                    <option value="MT">Montana</option>
+                    <option value="NE">Nebraska</option>
+                    <option value="NV">Nevada</option>
+                    <option value="NH">New Hampshire</option>
+                    <option value="NJ">New Jersey</option>
+                    <option value="NM">New Mexico</option>
+                    <option value="NY">New York</option>
+                    <option value="NC" selected>North Carolina</option>
+                    <option value="ND">North Dakota</option>
+                    <option value="OH">Ohio</option>
+                    <option value="OK">Oklahoma</option>
+                    <option value="OR">Oregon</option>
+                    <option value="PA">Pennsylvania</option>
+                    <option value="RI">Rhode Island</option>
+                    <option value="SC">South Carolina</option>
+                    <option value="SD">South Dakota</option>
+                    <option value="TN">Tennessee</option>
+                    <option value="TX">Texas</option>
+                    <option value="UT">Utah</option>
+                    <option value="VT">Vermont</option>
+                    <option value="VA">Virginia</option>
+                    <option value="WA">Washington</option>
+                    <option value="WV">West Virginia</option>
+                    <option value="WI">Wisconsin</option>
+                    <option value="WY">Wyoming</option>
+                </select>
+            </div>
+
+            <div class="input-group">
+                <label for="limit">Number of Addresses</label>
+                <select id="limit">
+                    <option value="10">10 addresses</option>
+                    <option value="20">20 addresses</option>
+                    <option value="50">50 addresses</option>
+                    <option value="100">100 addresses</option>
+                </select>
+            </div>
+
+            <button onclick="fetchAddresses()" id="fetchBtn">
+                🚀 Fetch Addresses from Redfin
+            </button>
+
+            <div class="spinner" id="spinner"></div>
+
+            <div class="status" id="status"></div>
+
+            <!-- Results -->
+            <div id="results"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:3015';
+        let authToken = null;
+
+        // Auto-login on page load
+        async function autoLogin() {
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        email: 'mcox@mioym.com',
+                        password: 'Mioym@2900'
+                    })
+                });
+
+                const data = await response.json();
+                if (data.token) {
+                    authToken = data.token;
+                    console.log('Auto-login successful');
+                    return true;
+                }
+            } catch (error) {
+                console.error('Auto-login failed:', error);
+            }
+            return false;
+        }
+
+        // Fetch addresses
+        async function fetchAddresses() {
+            const state = document.getElementById('state').value.trim();
+            const limit = document.getElementById('limit').value;
+            const fetchBtn = document.getElementById('fetchBtn');
+            const spinner = document.getElementById('spinner');
+
+            if (!state) {
+                alert('Please select a state');
+                return;
+            }
+
+            // Disable button
+            fetchBtn.disabled = true;
+            spinner.classList.add('show');
+            showStatus(`Searching for properties in ${state}...`, 'info');
+
+            // Hide previous results
+            document.getElementById('results').innerHTML = '';
+
+            try {
+                // Login if needed
+                if (!authToken) {
+                    await autoLogin();
+                }
+
+                // Call live scrape API for Redfin
+                const response = await fetch(
+                    `${API_BASE}/api/live-scrape/redfin?state=${state}&limit=${limit}`,
+                    {
+                        headers: {
+                            'Authorization': `Bearer ${authToken}`,
+                            'Content-Type': 'application/json'
+                        }
+                    }
+                );
+
+                const data = await response.json();
+
+                if (data.ok && data.addresses && data.addresses.length > 0) {
+                    // Success - display addresses with agent enrichment stats
+                    displayAddresses(data.addresses, state, data.agentEnrichment);
+
+                    // Build success message with agent info stats
+                    let successMsg = `✅ Successfully fetched ${data.addresses.length} addresses from Redfin!`;
+                    if (data.agentEnrichment && data.agentEnrichment.withPhone > 0) {
+                        successMsg += ` (${data.agentEnrichment.withPhone} with agent phone numbers)`;
+                    }
+                    showStatus(successMsg, 'success');
+                } else if (data.addresses && data.addresses.length === 0) {
+                    showStatus(`⚠️ No properties found in ${state}. Try a different state.`, 'warning');
+                } else {
+                    // If API endpoint doesn't exist yet, show mock data
+                    showMockData(state, parseInt(limit));
+                }
+            } catch (error) {
+                // Show mock data if API is not ready
+                console.log('API error, showing mock data:', error.message);
+                showMockData(state, parseInt(limit));
+            } finally {
+                spinner.classList.remove('show');
+                fetchBtn.disabled = false;
+            }
+        }
+
+        // Show mock data (for demo purposes until Redfin API is built)
+        function showMockData(state, limit) {
+            showStatus('ℹ️ Redfin API endpoint not configured yet. Showing sample data.', 'warning');
+
+            const mockAddresses = [];
+            const streets = ['Main St', 'Oak Ave', 'Maple Dr', 'Pine Rd', 'Cedar Ln', 'Elm St', 'Park Ave', 'Lake Dr', 'Hill St', 'Valley Rd'];
+            const cities = ['City Center', 'Downtown', 'Westside', 'Eastside', 'Northville', 'Southside'];
+
+            for (let i = 0; i < limit; i++) {
+                const streetNum = 100 + Math.floor(Math.random() * 9000);
+                const street = streets[i % streets.length];
+                const city = cities[Math.floor(Math.random() * cities.length)];
+                const zip = 10000 + Math.floor(Math.random() * 89999);
+
+                mockAddresses.push({
+                    fullAddress: `${streetNum} ${street}, ${city}, ${state} ${zip}`,
+                    price: 150000 + Math.floor(Math.random() * 300000),
+                    beds: 2 + Math.floor(Math.random() * 4),
+                    baths: 1 + Math.floor(Math.random() * 3),
+                    sqft: 1000 + Math.floor(Math.random() * 2000)
+                });
+            }
+
+            displayAddresses(mockAddresses, state);
+        }
+
+        // Display addresses
+        function displayAddresses(addresses, state, agentEnrichment = null) {
+            const resultsDiv = document.getElementById('results');
+
+            // Get state name from the select dropdown
+            const stateSelect = document.getElementById('state');
+            const stateName = stateSelect.options[stateSelect.selectedIndex].text;
+
+            let html = `<div class="count-badge">🏡 ${addresses.length} Properties in ${stateName}</div>`;
+
+            // Show agent enrichment stats if available
+            if (agentEnrichment) {
+                html += `
+                    <div class="enrichment-stats">
+                        📞 Agent Info: ${agentEnrichment.withPhone}/${agentEnrichment.total} properties have phone numbers
+                    </div>
+                `;
+            }
+
+            html += '<div class="addresses">';
+
+            addresses.forEach((addr, index) => {
+                const fullAddr = addr.fullAddress || addr.address || 'N/A';
+                const price = addr.price ? `$${addr.price.toLocaleString()}` : '';
+                const beds = addr.beds ? `${addr.beds} beds` : '';
+                const baths = addr.baths ? `${addr.baths} baths` : '';
+                const sqft = addr.sqft ? `${addr.sqft} sqft` : '';
+
+                const details = [price, beds, baths, sqft].filter(Boolean).join(' • ');
+
+                // Build agent info section - always show with '-' as fallback
+                let agentHtml = '<div class="agent-info">';
+
+                // Agent name - always show
+                const agentNameDisplay = addr.agentName || '-';
+                agentHtml += `<div class="agent-name">👤 ${agentNameDisplay}</div>`;
+
+                // Agent phone - always show, make clickable if available
+                if (addr.agentPhone) {
+                    const phoneDigits = addr.agentPhone.replace(/\D/g, '');
+                    agentHtml += `<div class="agent-phone">📞 <a href="tel:${phoneDigits}">${addr.agentPhone}</a></div>`;
+                } else {
+                    agentHtml += `<div class="agent-phone">📞 -</div>`;
+                }
+
+                // Agent email - always show, make clickable if available
+                if (addr.agentEmail) {
+                    agentHtml += `<div class="agent-email">✉️ <a href="mailto:${addr.agentEmail}">${addr.agentEmail}</a></div>`;
+                } else {
+                    agentHtml += `<div class="agent-email">✉️ -</div>`;
+                }
+
+                // Brokerage - only show if available
+                if (addr.brokerage) {
+                    agentHtml += `<div class="brokerage">🏢 ${addr.brokerage}</div>`;
+                }
+                agentHtml += '</div>';
+
+                html += `
+                    <div class="address-card">
+                        <div>
+                            <span class="address-number">${index + 1}</span>
+                            <span class="address-text">${fullAddr}</span>
+                        </div>
+                        ${details ? `<div class="address-details">${details}</div>` : ''}
+                        ${agentHtml}
+                    </div>
+                `;
+            });
+
+            html += '</div>';
+            resultsDiv.innerHTML = html;
+        }
+
+        // Show status message
+        function showStatus(message, type) {
+            const statusEl = document.getElementById('status');
+            statusEl.className = `status ${type} show`;
+            statusEl.innerHTML = `<strong>${message}</strong>`;
+        }
+
+        // Auto-login on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            autoLogin();
+        });
+    </script>
+</body>
+</html>

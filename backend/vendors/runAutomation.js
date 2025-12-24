@@ -1282,11 +1282,13 @@ const selectedStates = stateList; // keep var for logs if needed
         try {
           log.info('ScrapedDeal AMV: Starting AMV fetching phase...');
 
+          // Use same batch size and concurrency as RedfinFetcher page
+          // Default to 10 parallel browsers for faster processing
           const BATCH_SIZE = Math.max(1, Number(process.env.SCRAPED_DEALS_AMV_BATCH || 100));
-          log.info('ScrapedDeal AMV: Fetching AMV for deals without valuation...', { batchSize: BATCH_SIZE });
+          const CONCURRENCY = Math.max(1, Math.min(10, Number(process.env.SCRAPED_DEALS_AMV_CONCURRENCY || 10)));
+          log.info('ScrapedDeal AMV: Fetching AMV for deals without valuation...', { batchSize: BATCH_SIZE, concurrency: CONCURRENCY });
 
           // Find ScrapedDeal entries that don't have AMV yet
-          // Include all deals so we can get BofA valuations for them
           const dealsNeedingAMV = await ScrapedDeal.find({
             $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
           })
@@ -1301,73 +1303,83 @@ const selectedStates = stateList; // keep var for logs if needed
 
           log.info(`ScrapedDeal AMV: Found ${dealsNeedingAMV.length} deals needing AMV`);
 
-          // Import BofA automation
-          const getHomeValue = (await import('./bofa/bofaAutomation.js')).default;
-          const { initSharedBrowser, getSharedPage } = await import('../utils/browser.js');
-
-          // Initialize browser
-          await initSharedBrowser();
-          const page = await getSharedPage('bofa-scraped-deals', {
-            interceptRules: { block: ['media', 'analytics', 'tracking'] },
-            timeoutMs: 60000,
-          });
-
-          // Navigate to BofA page once
-          const BOFA_URL = 'https://homevaluerealestatecenter.bankofamerica.com/';
-          await page.goto(BOFA_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+          // Import the same BofA lookup function used by /api/bofa/batch
+          // This is the proven approach that RedfinFetcher uses
+          const { lookupSingleAddressInternal } = await import('../routes/bofa-internal.js');
 
           let successCount = 0;
           let failCount = 0;
+          let noDataCount = 0;
 
-          for (const deal of dealsNeedingAMV) {
+          // Process in chunks with concurrency (same as RedfinFetcher page)
+          for (let i = 0; i < dealsNeedingAMV.length; i += CONCURRENCY) {
             if (control.abort) {
               log.warn('ScrapedDeal AMV: Stop requested - aborting');
               break;
             }
 
-            try {
-              const result = await getHomeValue(
-                { fullAddress: deal.fullAddress },
-                2, // max attempts
-                { injected: { page } }
-              );
+            const chunk = dealsNeedingAMV.slice(i, i + CONCURRENCY);
+            log.info(`ScrapedDeal AMV: Processing chunk ${Math.floor(i / CONCURRENCY) + 1}/${Math.ceil(dealsNeedingAMV.length / CONCURRENCY)}`, {
+              chunkSize: chunk.length
+            });
 
-              if (result?.bofa_value && result.bofa_value > 0) {
-                // Update ScrapedDeal with AMV - isDeal will be calculated
-                // Deal criteria: AMV >= 2x LP AND AMV > $200,000
+            // Process chunk in parallel (same as /api/bofa/batch)
+            const chunkResults = await Promise.all(
+              chunk.map(async (deal) => {
+                try {
+                  const result = await lookupSingleAddressInternal(deal.fullAddress);
+                  return { deal, result };
+                } catch (e) {
+                  return { deal, result: { ok: false, error: e?.message } };
+                }
+              })
+            );
+
+            // Update database with results
+            for (const { deal, result } of chunkResults) {
+              if (result?.ok && result.amv && result.amv > 0) {
+                // Calculate isDeal: AMV >= 2x LP AND AMV > $200,000
                 const lp = deal.listingPrice || 0;
-                const isDeal = lp > 0 && result.bofa_value >= (lp * 2) && result.bofa_value > 200000;
+                const isDeal = lp > 0 && result.amv >= (lp * 2) && result.amv > 200000;
+
                 await ScrapedDeal.updateOne(
                   { _id: deal._id },
                   {
                     $set: {
-                      amv: result.bofa_value,
+                      amv: result.amv,
                       bofaFetchedAt: new Date(),
                       isDeal: isDeal
                     }
                   }
                 );
                 successCount++;
-                log.info(`ScrapedDeal AMV: Updated ${deal.fullAddress?.slice(0, 40)}...`, {
-                  amv: result.bofa_value,
+                log.info(`ScrapedDeal AMV: ✓ ${deal.fullAddress?.slice(0, 40)}...`, {
+                  amv: result.amv,
                   listingPrice: lp,
                   isDeal
                 });
+              } else if (result?.noDataFound) {
+                // BofA has no data for this address - mark as checked
+                await ScrapedDeal.updateOne(
+                  { _id: deal._id },
+                  {
+                    $set: {
+                      amv: -1, // Mark as "no data" so we don't retry
+                      bofaFetchedAt: new Date(),
+                      isDeal: false
+                    }
+                  }
+                );
+                noDataCount++;
+                log.debug(`ScrapedDeal AMV: No BofA data for ${deal.fullAddress?.slice(0, 30)}`);
               } else {
                 failCount++;
-                log.debug(`ScrapedDeal AMV: No value returned for ${deal.fullAddress?.slice(0, 30)}`);
+                log.warn(`ScrapedDeal AMV: ✗ ${deal.fullAddress?.slice(0, 30)}`, { error: result?.error });
               }
-
-              // Small delay between requests
-              await new Promise(r => setTimeout(r, 1000 + Math.random() * 500));
-            } catch (e) {
-              failCount++;
-              log.warn(`ScrapedDeal AMV: Failed for ${deal.fullAddress?.slice(0, 30)}`, { error: e?.message });
             }
           }
 
-          try { await page.close(); } catch {}
-          log.success(`ScrapedDeal AMV: Completed. Success: ${successCount}, Failed: ${failCount}`);
+          log.success(`ScrapedDeal AMV: Completed. Success: ${successCount}, NoData: ${noDataCount}, Failed: ${failCount}`);
         } catch (e) {
           log.error('ScrapedDeal AMV: Error in automation', { error: e?.message || String(e) });
         }

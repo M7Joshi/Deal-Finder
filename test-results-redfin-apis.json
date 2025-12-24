@@ -1,0 +1,116 @@
+{
+  "timestamp": "2025-12-03T23:57:51.046Z",
+  "summary": {
+    "total": 15,
+    "passed": 15,
+    "failed": 0,
+    "passRate": "100.0%"
+  },
+  "tests": [
+    {
+      "name": "Auth - Status Code",
+      "passed": true,
+      "message": "Expected 200, got 200",
+      "details": null,
+      "timestamp": "2025-12-03T23:57:35.879Z"
+    },
+    {
+      "name": "Auth - Token Generated",
+      "passed": true,
+      "message": "Token length: 292 chars",
+      "details": null,
+      "timestamp": "2025-12-03T23:57:35.879Z"
+    },
+    {
+      "name": "Auth - User Data",
+      "passed": "mcox@mioym.com",
+      "message": "User: mcox@mioym.com",
+      "details": null,
+      "timestamp": "2025-12-03T23:57:35.879Z"
+    },
+    {
+      "name": "Test Endpoint - Status",
+      "passed": true,
+      "message": "Status: 200",
+      "details": null,
+      "timestamp": "2025-12-03T23:57:35.906Z"
+    },
+    {
+      "name": "Test Endpoint - Structure",
+      "passed": true,
+      "message": "Valid response structure",
+      "details": null,
+      "timestamp": "2025-12-03T23:57:35.906Z"
+    },
+    {
+      "name": "Test Endpoint - Address Count",
+      "passed": true,
+      "message": "Expected 10, got 10",
+      "details": null,
+      "timestamp": "2025-12-03T23:57:35.906Z"
+    },
+    {
+      "name": "Test Endpoint - Address Format",
+      "passed": "2025-12-03T23:57:35.904Z",
+      "message": "All required fields present",
+      "details": null,
+      "timestamp": "2025-12-03T23:57:35.906Z"
+    },
+    {
+      "name": "Redfin - Missing State Validation",
+      "passed": "State parameter is required",
+      "message": "Correctly returns 400 error for missing state",
+      "details": null,
+      "timestamp": "2025-12-03T23:57:35.932Z"
+    },
+    {
+      "name": "Redfin - Invalid State Validation",
+      "passed": "Invalid state code",
+      "message": "Correctly returns 400 error for invalid state",
+      "details": null,
+      "timestamp": "2025-12-03T23:57:36.055Z"
+    },
+    {
+      "name": "Redfin - NC Scrape Status",
+      "passed": true,
+      "message": "Status: 200",
+      "details": null,
+      "timestamp": "2025-12-03T23:57:51.012Z"
+    },
+    {
+      "name": "Redfin - Response Structure",
+      "passed": true,
+      "message": "Valid structure",
+      "details": null,
+      "timestamp": "2025-12-03T23:57:51.012Z"
+    },
+    {
+      "name": "Redfin - Addresses Returned",
+      "passed": true,
+      "message": "5 addresses returned",
+      "details": null,
+      "timestamp": "2025-12-03T23:57:51.012Z"
+    },
+    {
+      "name": "Authorization - No Token",
+      "passed": true,
+      "message": "Returns 401 (should be 401 or 403)",
+      "details": null,
+      "timestamp": "2025-12-03T23:57:51.018Z"
+    },
+    {
+      "name": "Authorization - Invalid Token",
+      "passed": true,
+      "message": "Returns 401 (should be 401 or 403)",
+      "details": null,
+      "timestamp": "2025-12-03T23:57:51.020Z"
+    },
+    {
+      "name": "Performance - Response Time",
+      "passed": true,
+      "message": "Response time: 25ms (should be < 5000ms)",
+      "details": null,
+      "timestamp": "2025-12-03T23:57:51.045Z"
+    }
+  ]
+}

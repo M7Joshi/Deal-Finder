@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Redfin Real Data Tester - NO LOGIN REQUIRED</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    h1 {
+      color: #333;
+    }
+    .controls {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    label {
+      display: inline-block;
+      margin-right: 10px;
+      font-weight: bold;
+    }
+    input, select, button {
+      padding: 8px 12px;
+      margin: 5px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    button {
+      background: #0066cc;
+      color: white;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    button:hover {
+      background: #0052a3;
+    }
+    #status {
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 4px;
+    }
+    .success {
+      background: #d4edda;
+      color: #155724;
+    }
+    .error {
+      background: #f8d7da;
+      color: #721c24;
+    }
+    .properties {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+      gap: 20px;
+    }
+    .property {
+      background: white;
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .property h3 {
+      margin-top: 0;
+      color: #0066cc;
+    }
+    .property-details {
+      margin: 10px 0;
+    }
+    .property-details div {
+      margin: 5px 0;
+    }
+    .price {
+      font-size: 1.3em;
+      font-weight: bold;
+      color: #2d862d;
+    }
+    .link {
+      display: inline-block;
+      margin-top: 10px;
+      color: #0066cc;
+      text-decoration: none;
+    }
+    .link:hover {
+      text-decoration: underline;
+    }
+    .api-url {
+      background: #f0f0f0;
+      padding: 10px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+      word-break: break-all;
+      margin: 10px 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>Redfin Real Data Tester</h1>
+  <p><strong>NO LOGIN REQUIRED</strong> - Fetches live data directly from Redfin.com</p>
+
+  <div class="controls">
+    <div>
+      <label for="port">Backend Port:</label>
+      <input type="number" id="port" value="65245" placeholder="65245">
+    </div>
+
+    <div>
+      <label for="state">State:</label>
+      <select id="state">
+        <option value="CA">California (CA)</option>
+        <option value="NY">New York (NY)</option>
+        <option value="TX">Texas (TX)</option>
+        <option value="FL">Florida (FL)</option>
+        <option value="WA">Washington (WA)</option>
+        <option value="IL">Illinois (IL)</option>
+        <option value="PA">Pennsylvania (PA)</option>
+        <option value="OH">Ohio (OH)</option>
+        <option value="GA">Georgia (GA)</option>
+        <option value="NC">North Carolina (NC)</option>
+      </select>
+    </div>
+
+    <div>
+      <label for="limit">Number of Properties:</label>
+      <input type="number" id="limit" value="10" min="1" max="50">
+    </div>
+
+    <div>
+      <button onclick="fetchProperties()">Fetch Real Data from Redfin</button>
+    </div>
+
+    <div id="status"></div>
+    <div id="apiUrl" class="api-url" style="display:none;"></div>
+  </div>
+
+  <div id="results" class="properties"></div>
+
+  <script>
+    async function fetchProperties() {
+      const port = document.getElementById('port').value;
+      const state = document.getElementById('state').value;
+      const limit = document.getElementById('limit').value;
+      const status = document.getElementById('status');
+      const results = document.getElementById('results');
+      const apiUrlDiv = document.getElementById('apiUrl');
+
+      status.textContent = 'Fetching real data from Redfin...';
+      status.className = '';
+      results.innerHTML = '';
+      apiUrlDiv.style.display = 'none';
+
+      try {
+        const url = `http://localhost:${port}/api/live-scrape/redfin?state=${state}&limit=${limit}`;
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (!data.ok) {
+          throw new Error(data.error || data.message || 'Failed to fetch data');
+        }
+
+        // Show API URL
+        if (data.apiUrl) {
+          apiUrlDiv.textContent = 'Redfin API URL: ' + data.apiUrl;
+          apiUrlDiv.style.display = 'block';
+        }
+
+        status.textContent = `✅ Success! Got ${data.count} real properties from ${data.state}`;
+        status.className = 'success';
+
+        // Display properties
+        data.addresses.forEach((prop, index) => {
+          const div = document.createElement('div');
+          div.className = 'property';
+          div.innerHTML = `
+            <h3>Property ${index + 1}</h3>
+            <div class="price">${prop.priceText}</div>
+            <div class="property-details">
+              <div><strong>Address:</strong> ${prop.fullAddress}</div>
+              <div><strong>Beds/Baths:</strong> ${prop.bedsText} / ${prop.bathsText}</div>
+              <div><strong>Size:</strong> ${prop.sqftText || 'N/A'}</div>
+              <div><strong>Year Built:</strong> ${prop.yearBuilt || 'N/A'}</div>
+              <div><strong>Days on Market:</strong> ${prop.daysOnMarket || 'N/A'} days</div>
+              <div><strong>MLS ID:</strong> ${prop.mlsId || 'N/A'}</div>
+              <div><strong>Property Type:</strong> ${prop.propertyType || 'N/A'}</div>
+            </div>
+            <a href="${prop.url}" target="_blank" class="link">View on Redfin.com →</a>
+          `;
+          results.appendChild(div);
+        });
+
+      } catch (error) {
+        status.textContent = `❌ Error: ${error.message}`;
+        status.className = 'error';
+        console.error('Error:', error);
+      }
+    }
+
+    // Auto-fetch on load
+    window.addEventListener('load', () => {
+      fetchProperties();
+    });
+  </script>
+</body>
+</html>

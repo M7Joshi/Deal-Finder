@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NC Address Scraper - Privy</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 16px;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .status {
+            background: #f0f7ff;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+
+        .status.success {
+            background: #f0fff4;
+            border-left-color: #4CAF50;
+        }
+
+        .status.error {
+            background: #fff5f5;
+            border-left-color: #f44336;
+        }
+
+        .status.warning {
+            background: #fffbf0;
+            border-left-color: #ff9800;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        button {
+            flex: 1;
+            padding: 15px 30px;
+            font-size: 16px;
+            font-weight: 600;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-secondary {
+            background: #f5f5f5;
+            color: #333;
+        }
+
+        .otp-section {
+            background: #fff9e6;
+            border: 2px dashed #ffa000;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .otp-section.active {
+            display: block;
+        }
+
+        .otp-input {
+            width: 100%;
+            padding: 12px;
+            font-size: 24px;
+            text-align: center;
+            letter-spacing: 10px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+
+        .addresses-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        .addresses-table th,
+        .addresses-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+
+        .addresses-table th {
+            background: #f5f5f5;
+            font-weight: 600;
+            color: #666;
+        }
+
+        .addresses-table tr:hover {
+            background: #f9f9f9;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            display: none;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 14px;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏠 North Carolina Address Scraper</h1>
+            <p>Fetch live addresses from Privy.pro</p>
+        </div>
+
+        <div class="content">
+            <div id="status" class="status">
+                <strong>System Status:</strong> Ready to scrape
+            </div>
+
+            <div class="stats">
+                <div class="stat-card">
+                    <div class="stat-value" id="addressCount">0</div>
+                    <div class="stat-label">Addresses Found</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="serverStatus">🟢</div>
+                    <div class="stat-label">Backend Server</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="loginStatus">⚪</div>
+                    <div class="stat-label">Privy Login</div>
+                </div>
+            </div>
+
+            <div class="button-group">
+                <button class="btn-secondary" onclick="checkServers()">Check Servers</button>
+                <button class="btn-primary" onclick="startScraping()" id="scrapeBtn">
+                    🚀 Scrape NC Addresses
+                </button>
+            </div>
+
+            <div id="otpSection" class="otp-section">
+                <h3>🔐 OTP Required</h3>
+                <p>Privy has sent a verification code to <strong>Kimberly@mioym.com</strong></p>
+                <p>Check your email and enter the 6-digit code below:</p>
+                <input type="text" class="otp-input" id="otpInput" placeholder="000000" maxlength="6">
+                <button class="btn-primary" onclick="submitOTP()" style="width: 100%;">
+                    Submit OTP Code
+                </button>
+            </div>
+
+            <div id="loading" class="loading">
+                <div class="spinner"></div>
+                <p>Scraping addresses from Privy.pro...</p>
+                <p style="color: #999; font-size: 14px;">This may take 30-60 seconds</p>
+            </div>
+
+            <div id="results">
+                <table class="addresses-table" id="addressTable" style="display: none;">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Address</th>
+                            <th>City</th>
+                            <th>State</th>
+                            <th>ZIP</th>
+                        </tr>
+                    </thead>
+                    <tbody id="addressTableBody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:3015';
+        let authToken = null;
+
+        // Check if servers are running
+        async function checkServers() {
+            try {
+                const response = await fetch(`${API_BASE}/healthz`);
+                if (response.ok) {
+                    updateStatus('Backend server is running ✅', 'success');
+                    document.getElementById('serverStatus').textContent = '🟢';
+                } else {
+                    updateStatus('Backend server not responding ❌', 'error');
+                    document.getElementById('serverStatus').textContent = '🔴';
+                }
+            } catch (error) {
+                updateStatus('Cannot connect to backend. Make sure it\'s running on port 3015.', 'error');
+                document.getElementById('serverStatus').textContent = '🔴';
+            }
+        }
+
+        // Login to get auth token
+        async function login() {
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        email: 'mcox@mioym.com',
+                        password: 'Mioym@2900'
+                    })
+                });
+
+                const data = await response.json();
+                if (data.token) {
+                    authToken = data.token;
+                    updateStatus('Logged in successfully ✅', 'success');
+                    document.getElementById('loginStatus').textContent = '🟢';
+                    return true;
+                } else {
+                    updateStatus('Login failed ❌', 'error');
+                    return false;
+                }
+            } catch (error) {
+                updateStatus('Login error: ' + error.message, 'error');
+                return false;
+            }
+        }
+
+        // Start scraping
+        async function startScraping() {
+            // First login
+            document.getElementById('scrapeBtn').disabled = true;
+            updateStatus('Logging in...', 'warning');
+
+            const loggedIn = await login();
+            if (!loggedIn) {
+                document.getElementById('scrapeBtn').disabled = false;
+                return;
+            }
+
+            // Show loading
+            document.getElementById('loading').classList.add('active');
+            updateStatus('Connecting to Privy.pro...', 'warning');
+
+            try {
+                const response = await fetch(`${API_BASE}/api/live-scrape/privy?state=NC&limit=10`, {
+                    headers: { 'Authorization': `Bearer ${authToken}` }
+                });
+
+                const data = await response.json();
+
+                if (data.ok && data.addresses) {
+                    displayAddresses(data.addresses);
+                    updateStatus(`Found ${data.addresses.length} addresses! ✅`, 'success');
+                    document.getElementById('addressCount').textContent = data.addresses.length;
+                } else if (data.requiresOTP) {
+                    // Show OTP input
+                    document.getElementById('otpSection').classList.add('active');
+                    updateStatus('OTP verification required. Check your email.', 'warning');
+                } else {
+                    updateStatus('No addresses found. ' + (data.message || ''), 'warning');
+                }
+            } catch (error) {
+                updateStatus('Scraping error: ' + error.message, 'error');
+            } finally {
+                document.getElementById('loading').classList.remove('active');
+                document.getElementById('scrapeBtn').disabled = false;
+            }
+        }
+
+        // Submit OTP
+        async function submitOTP() {
+            const code = document.getElementById('otpInput').value;
+            if (code.length !== 6) {
+                alert('Please enter a 6-digit code');
+                return;
+            }
+
+            updateStatus('Submitting OTP...', 'warning');
+
+            try {
+                const response = await fetch(`${API_BASE}/api/otp/submit`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${authToken}`
+                    },
+                    body: JSON.stringify({ code })
+                });
+
+                if (response.ok) {
+                    document.getElementById('otpSection').classList.remove('active');
+                    updateStatus('OTP verified! Continuing scraping...', 'success');
+                    // Continue scraping
+                    setTimeout(startScraping, 2000);
+                } else {
+                    updateStatus('Invalid OTP code', 'error');
+                }
+            } catch (error) {
+                updateStatus('OTP submission error: ' + error.message, 'error');
+            }
+        }
+
+        // Display addresses in table
+        function displayAddresses(addresses) {
+            const tbody = document.getElementById('addressTableBody');
+            tbody.innerHTML = '';
+
+            addresses.forEach((addr, index) => {
+                const row = tbody.insertRow();
+                row.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td>${addr.fullAddress || addr.address || 'N/A'}</td>
+                    <td>${addr.city || 'N/A'}</td>
+                    <td>${addr.state || 'NC'}</td>
+                    <td>${addr.zip || 'N/A'}</td>
+                `;
+            });
+
+            document.getElementById('addressTable').style.display = 'table';
+        }
+
+        // Update status message
+        function updateStatus(message, type = 'info') {
+            const statusEl = document.getElementById('status');
+            statusEl.innerHTML = `<strong>Status:</strong> ${message}`;
+            statusEl.className = `status ${type}`;
+        }
+
+        // Check servers on page load
+        window.addEventListener('load', () => {
+            checkServers();
+        });
+    </script>
+</body>
+</html>
