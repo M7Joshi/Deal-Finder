@@ -12,6 +12,10 @@ const JOB_ALIAS_MAP = Object.freeze({
   bofa: 'bofa',
   bankofamerica: 'bofa',
   boa: 'bofa',
+  // ScrapedDeal AMV fetcher (for batch scheduler)
+  scraped_deals_amv: 'scraped_deals_amv',
+  'scraped-deals-amv': 'scraped_deals_amv',
+  scrapeddeals_amv: 'scraped_deals_amv',
   chase: 'chase',
   // NEW agent-offers aliases
   agent_offers: 'agent_offers',
@@ -428,7 +432,7 @@ function getRequestedJobsRaw() {
 }
 
 // --- Job selection (ENV/CLI) ---
-const ALL_JOBS = ['privy', 'home_valuations', 'current_listings', 'agent_offers', 'redfin', 'bofa', 'chase', 'amv_daemon'];
+const ALL_JOBS = ['privy', 'home_valuations', 'current_listings', 'agent_offers', 'redfin', 'bofa', 'chase', 'amv_daemon', 'scraped_deals_amv'];
 const DEFAULT_JOBS = ['privy','home_valuations','amv_daemon'];
 
 // Coerce any input (string/array/set) into a Set of valid job keys
