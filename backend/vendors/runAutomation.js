@@ -545,6 +545,15 @@ function bootstrapScheduler() {
 async function schedulerTick() {
   if (!schedulerEnabled) return;
 
+  // Ensure database is connected before any DB operations
+  try {
+    await connectDB();
+  } catch (e) {
+    log.error('Scheduler: Failed to connect to database', { error: e?.message });
+    scheduleNextRun(10000); // Retry in 10 seconds
+    return;
+  }
+
   if (isRunning) {
     log.info('Scheduler: a run is already in progress — will check again shortly.');
     return scheduleNextRun(5000);
@@ -1599,12 +1608,21 @@ if (jobs.has('home_valuations')) {
 
 // Export function to manually start scheduler (for single-process mode)
 export function startSchedulerManually() {
-  log.info('Starting scheduler manually (single-process mode)');
+  log.info('=== startSchedulerManually called ===');
+  log.info('Current state before start', {
+    schedulerEnabled,
+    DISABLE_SCHEDULER,
+    RUN_IMMEDIATELY: process.env.RUN_IMMEDIATELY,
+    currentMode
+  });
+
   schedulerEnabled = true;
 
   // Always call bootstrapScheduler - it handles the actual scheduling
   // The old check was preventing startup when schedulerEnabled was already true
   bootstrapScheduler();
+
+  log.info('=== startSchedulerManually complete ===');
 }
 
 // Bootstrap the sequential scheduler (only in worker mode is now handled above)
