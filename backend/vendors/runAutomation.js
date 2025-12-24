@@ -581,23 +581,30 @@ async function schedulerTick() {
     $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
   });
 
+  // Check total addresses in database
+  const totalAddresses = await ScrapedDeal.countDocuments({});
+
   // Debug: Log the decision point
   // IMPORTANT: If we have significant pending AMV (>50), prioritize AMV mode even on restart
   // This prevents the scheduler from scraping more addresses when there's a backlog
+  // BUT: If total addresses is very low (fresh start), always scrape first
   const AMV_BACKLOG_THRESHOLD = Math.max(50, Math.floor(SCRAPE_BATCH_LIMIT / 2));
   const hasAMVBacklog = pendingAMV >= AMV_BACKLOG_THRESHOLD;
-  const shouldEnterAMV = pendingAMV > 0 && (
+  const isFreshStart = totalAddresses < 10; // Less than 10 addresses = fresh start, scrape first
+  const shouldEnterAMV = !isFreshStart && pendingAMV > 0 && (
     hasAMVBacklog ||  // Always process AMV if backlog exists (even after restart)
     addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT ||
     currentMode === 'amv'
   );
   log.info('Scheduler: MODE DECISION', {
+    totalAddresses,
     pendingAMV,
     addressesScrapedThisBatch,
     batchLimit: SCRAPE_BATCH_LIMIT,
     currentMode,
     batchLimitReached: addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT,
     hasAMVBacklog,
+    isFreshStart,
     shouldEnterAMV
   });
 
