@@ -1,7 +1,7 @@
 import express from 'express';
 import { progressTracker } from '../../vendors/runAutomation.js';
 import { logBus, getRecentLogs } from '../../utils/logger.js';
-import { getOtpState, onOtpChange } from '../../state/otpState.js';
+import { getOtpState, getOtpStateDB, onOtpChange } from '../../state/otpState.js';
 
 const router = express.Router();
 
