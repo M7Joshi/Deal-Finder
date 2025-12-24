@@ -50,6 +50,7 @@ export default function PendingAMV() {
   const [pendingByState, setPendingByState] = useState<PendingByState[]>([]);
   const [recentPending, setRecentPending] = useState<PendingDeal[]>([]);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [clearing, setClearing] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -94,12 +95,43 @@ export default function PendingAMV() {
   const modeColor = scraperStatus.mode === 'scrape' ? '#22c55e' : scraperStatus.mode === 'amv' ? '#3b82f6' : '#9ca3af';
   const modeLabel = scraperStatus.mode === 'scrape' ? 'SCRAPING' : scraperStatus.mode === 'amv' ? 'FETCHING AMV' : 'UNKNOWN';
 
+  const handleClearAll = async () => {
+    if (!window.confirm('Are you sure you want to clear ALL data and start fresh? This cannot be undone.')) {
+      return;
+    }
+    setClearing(true);
+    try {
+      const res = await apiFetch('/api/scraped-deals/clear-all', { method: 'POST' });
+      const data = await res.json();
+      if (data.ok) {
+        alert(`Cleared ${data.cleared?.scrapedDeals || 0} addresses. Ready to start fresh!`);
+        loadData();
+      } else {
+        alert('Failed to clear: ' + (data.error || 'Unknown error'));
+      }
+    } catch (err: any) {
+      alert('Failed to clear: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
     <div style={{ padding: 24, background: '#f8fafc', minHeight: '100vh' }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#111' }}>Pending AMV Queue</h2>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <Button
+            variant="outlined"
+            size="small"
+            color="error"
+            onClick={handleClearAll}
+            disabled={clearing}
+            sx={{ textTransform: 'none' }}
+          >
+            {clearing ? 'Clearing...' : 'Clear All & Start Fresh'}
+          </Button>
           <Button
             variant={autoRefresh ? 'contained' : 'outlined'}
             size="small"

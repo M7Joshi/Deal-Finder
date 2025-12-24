@@ -507,8 +507,8 @@ export function shouldPauseScraping() {
   return addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT;
 }
 
-// Reset counter after AMV phase completes
-function resetBatchCounter() {
+// Reset counter after AMV phase completes (exported for clear-all endpoint)
+export function resetBatchCounter() {
   addressesScrapedThisBatch = 0;
 }
 

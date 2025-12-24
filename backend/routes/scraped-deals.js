@@ -450,6 +450,40 @@ router.delete('/', async (req, res) => {
   }
 });
 
+// POST /api/scraped-deals/clear-all - Clear all data and reset batch counter
+router.post('/clear-all', async (req, res) => {
+  try {
+    // Import reset function
+    let resetBatchCounter;
+    try {
+      const automation = await import('../vendors/runAutomation.js');
+      resetBatchCounter = automation.resetBatchCounter;
+    } catch {}
+
+    // Clear ScrapedDeal
+    const scrapedResult = await ScrapedDeal.deleteMany({});
+    L.info('Cleared ScrapedDeal', { count: scrapedResult.deletedCount });
+
+    // Reset batch counter if available
+    if (resetBatchCounter) {
+      resetBatchCounter();
+      L.info('Reset batch counter to 0');
+    }
+
+    res.json({
+      ok: true,
+      cleared: {
+        scrapedDeals: scrapedResult.deletedCount,
+      },
+      batchCounterReset: !!resetBatchCounter,
+      message: 'All data cleared. Ready to start fresh!',
+    });
+  } catch (err) {
+    L.error('Failed to clear all data', { error: err?.message });
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to clear data' });
+  }
+});
+
 // GET /api/scraped-deals/stats - Get stats for dashboard (filtered by user's states)
 router.get('/stats', async (req, res) => {
   try {
