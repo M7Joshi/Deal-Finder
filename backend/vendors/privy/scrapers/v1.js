@@ -879,6 +879,10 @@ await page.evaluate(() => {
                         beds: prop.beds || null,
                         baths: prop.baths || null,
                         sqft: prop.sqft || null,
+                        // Save agent details from Privy
+                        agentName: prop.details?.agent_name || null,
+                        agentEmail: prop.details?.agent_email || null,
+                        agentPhone: prop.details?.agent_phone || null,
                         source: 'privy',
                         scrapedAt: new Date(),
                       },

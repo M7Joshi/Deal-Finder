@@ -472,49 +472,19 @@ function parseSelectedJobs(rawInput) {
 const __REQ = getRequestedJobsRaw();
 const SELECTED_JOBS = parseSelectedJobs(__REQ.raw);
 
-// --- Alternating scheduler: Privy (10 min) -> BofA (10 min) -> repeat ---
-// Each phase runs for 10 minutes by default
-const PHASE_DURATION_MS = Number(process.env.PHASE_DURATION_MS || 10 * 60 * 1000); // 10 minutes per phase
-const RUN_INTERVAL_MS = Number(process.env.RUN_INTERVAL_MS || 3 * 60 * 1000); // interval within phase
+// --- Unified scheduler: Run BOTH scraping and AMV together ---
+// No more alternating - process addresses AND get AMV in each cycle
+const RUN_INTERVAL_MS = Number(process.env.RUN_INTERVAL_MS || 5 * 60 * 1000); // 5 minutes between runs
 const DISABLE_SCHEDULER =
   String(process.env.DISABLE_SCHEDULER || '').toLowerCase() === '1' ||
   RUN_INTERVAL_MS <= 0;
 let schedulerTimer = null;
 let schedulerEnabled = !DISABLE_SCHEDULER;
 
-// Alternating phase tracker: 'scrape' (Privy/Redfin) or 'amv' (BofA)
-let currentPhase = 'scrape'; // Start with scraping addresses
-let phaseStartTime = Date.now();
-
-function getCurrentPhase() {
-  const elapsed = Date.now() - phaseStartTime;
-  if (elapsed >= PHASE_DURATION_MS) {
-    // Switch phases
-    const oldPhase = currentPhase;
-    currentPhase = currentPhase === 'scrape' ? 'amv' : 'scrape';
-    phaseStartTime = Date.now();
-    log.info(`Scheduler: Switching to ${currentPhase.toUpperCase()} phase`, {
-      phase: currentPhase,
-      previousPhase: oldPhase,
-      phaseDurationMs: PHASE_DURATION_MS
-    });
-    // Signal current run to abort so new phase can start
-    if (isRunning) {
-      control.abort = true;
-      log.warn(`Scheduler: Aborting ${oldPhase} phase to start ${currentPhase} phase`);
-    }
-  }
-  return currentPhase;
-}
-
-function getPhaseJobs(phase) {
-  if (phase === 'scrape') {
-    // Address scraping phase: Privy and Redfin
-    return new Set(['privy', 'redfin']);
-  } else {
-    // AMV fetching phase: BofA for ScrapedDeals
-    return new Set(['bofa', 'scraped_deals_amv']);
-  }
+// Get all jobs to run - both scraping AND AMV in same cycle
+function getAllJobs() {
+  // Run privy/redfin for scraping AND bofa for AMV together
+  return new Set(['privy', 'redfin', 'bofa', 'scraped_deals_amv']);
 }
 
 function scheduleNextRun(delayMs = RUN_INTERVAL_MS) {
@@ -528,25 +498,20 @@ function scheduleNextRun(delayMs = RUN_INTERVAL_MS) {
 
 function bootstrapScheduler() {
   const immediate = process.env.RUN_IMMEDIATELY === 'true';
-  const bootReq = getRequestedJobsRaw();
-  const bootResolved = Array.from(parseSelectedJobs(bootReq.raw));
 
-  // Log the alternating scheduler configuration
-  log.info('Scheduler bootstrap (ALTERNATING MODE)', {
-    PHASE_DURATION_MS,
+  // Log the unified scheduler configuration
+  log.info('Scheduler bootstrap (UNIFIED MODE - scrape + AMV together)', {
     RUN_INTERVAL_MS,
     immediate,
     worker: true,
-    scrapePhaseJobs: Array.from(getPhaseJobs('scrape')),
-    amvPhaseJobs: Array.from(getPhaseJobs('amv')),
-    startingPhase: currentPhase,
+    jobs: Array.from(getAllJobs()),
     disabled: DISABLE_SCHEDULER
   });
 
   if (DISABLE_SCHEDULER) {
     // One-shot: run immediately and do NOT schedule a follow-up
     schedulerEnabled = false;
-    runAutomation(parseSelectedJobs(bootReq.raw))
+    runAutomation(getAllJobs())
       .catch((e) => log.error('One-shot runAutomation error', { error: e?.message || String(e) }))
       .finally(() => log.info('Scheduler disabled — completed one-shot run.'));
     return;
@@ -557,44 +522,28 @@ function bootstrapScheduler() {
 async function schedulerTick() {
   if (!schedulerEnabled) return;
 
-  // Check phase FIRST, even if a run is in progress
-  // This ensures we switch phases on time
-  const phase = getCurrentPhase();
-
   if (isRunning) {
-    log.info('Scheduler: a run is already in progress — will check again shortly.', { currentPhase: phase });
+    log.info('Scheduler: a run is already in progress — will check again shortly.');
     return scheduleNextRun(5000);
   }
 
-  // Determine which jobs to run for current phase
-  const phaseJobs = getPhaseJobs(phase);
+  // Run ALL jobs together - scraping AND AMV
+  const jobs = getAllJobs();
 
-  log.info(`Scheduler: starting ${phase.toUpperCase()} phase`, {
-    phase,
-    jobs: Array.from(phaseJobs),
-    phaseElapsedMs: Date.now() - phaseStartTime,
-    phaseDurationMs: PHASE_DURATION_MS
+  log.info('Scheduler: starting unified run (scrape + AMV)', {
+    jobs: Array.from(jobs)
   });
 
   try {
-    await runAutomation(phaseJobs);
+    await runAutomation(jobs);
   } catch (e) {
     log.error('Scheduler: runAutomation threw', { error: e?.message || String(e) });
   } finally {
     if (schedulerEnabled) {
-      // Check if phase should switch
-      const elapsed = Date.now() - phaseStartTime;
-      const remainingInPhase = Math.max(0, PHASE_DURATION_MS - elapsed);
-
-      // If less than RUN_INTERVAL_MS left in phase, wait for phase switch
-      const nextDelay = remainingInPhase < RUN_INTERVAL_MS ? remainingInPhase + 1000 : RUN_INTERVAL_MS;
-
       log.info('Scheduler: run finished — scheduling next', {
-        inMs: nextDelay,
-        currentPhase: phase,
-        remainingInPhase
+        inMs: RUN_INTERVAL_MS
       });
-      scheduleNextRun(nextDelay);
+      scheduleNextRun(RUN_INTERVAL_MS);
     } else {
       log.info('Scheduler: disabled after run completion.');
     }
