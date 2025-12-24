@@ -9,7 +9,6 @@ import { log } from './utils/logger.js';
 import { ensureMasterAdmin } from './utils/ensureMasterAdmin.js';
 import agentOffersRoutes from './routes/agent_offers.js';
 import mongoose from 'mongoose';
-import runBofaJob from './vendors/bofa/bofaJob.js';
 
 dotenv.config();
 
@@ -328,46 +327,24 @@ if (!IS_WORKER) {
   start(PORT);
 } else {
   L.info('Worker mode detected — HTTP server not started');
+  L.info('Importing runAutomation.js to bootstrap the alternating scheduler...');
 
-  // Simple job dispatcher driven by JOBS="job1,job2"
-  const jobsRequested = String(process.env.JOBS || '')
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean);
-
-  const jobMap = {
-    bofa: runBofaJob,
-    // add more jobs here later, e.g.:
-    // privy: runPrivyJob,
-    // redfin: runRedfinJob,
-  };
-
+  // Connect to MongoDB first
   (async () => {
-    const selected = jobsRequested.length ? jobsRequested : Object.keys(jobMap);
-    L.info('Starting automations…', { requestedJobs: jobsRequested.join(',') || '(all)', resolvedJobs: selected });
-
-    // If your individual job modules already connect to Mongo (your BofA module does),
-    // you do NOT need to connect here. Otherwise, uncomment the next two lines:
-    // await connectDB();
-    // L.info('DB connected for worker dispatcher');
-
-    for (const name of selected) {
-      const fn = jobMap[name];
-      if (!fn) {
-        L.warn('Job not recognized — skipping', { name });
-        continue;
-      }
-      try {
-        L.info(`Running ${name} job…`);
-        await fn();
-        L.info(`Finished ${name} job`);
-      } catch (e) {
-        L.error(`Error in ${name} job`, { error: e?.message || String(e) });
-      }
+    try {
+      await connectDB();
+      L.success('Database connected for worker mode');
+    } catch (err) {
+      L.error('Database connection failed in worker mode', { error: err?.message || String(err) });
     }
 
-    L.info('All automations completed.');
-    // Optional: exit in worker mode so the orchestrator can relaunch on a schedule
-    // process.exit(0);
+    // Import runAutomation.js - this will automatically bootstrap the scheduler
+    // because AUTOMATION_WORKER=1 triggers the scheduler initialization at module load
+    try {
+      await import('./vendors/runAutomation.js');
+      L.success('runAutomation.js imported - scheduler should be running');
+    } catch (e) {
+      L.error('Failed to import runAutomation.js', { error: e?.message || String(e) });
+    }
   })();
 }
