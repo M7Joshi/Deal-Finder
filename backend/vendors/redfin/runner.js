@@ -120,9 +120,18 @@ console.log(`Found ${listings.length} index listings (all pages)`);
       const baths = d.baths ?? parseBaths(it.bathsText || '');
 
       // Apply filters (can be disabled via env; see Patch 2)
-      const ok = passesAll(
-        { price, sqft, hoa: d.hoa ?? null, listedAt: d.listedAt ?? null }
-      );
+      const ok = passesAll({
+        price,
+        sqft,
+        beds,
+        hoa: d.hoa ?? null,
+        listedAt: d.listedAt ?? null,
+        description: d.description ?? '',
+        remarks: d.remarks ?? '',
+        propertyType: d.propertyType ?? '',
+        tags: d.tags ?? [],
+        keyFacts: d.keyFacts ?? []
+      });
 
       if (!ok) { filteredOut++; continue; }
       passed++;
