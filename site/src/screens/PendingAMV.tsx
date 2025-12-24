@@ -16,6 +16,9 @@ interface PendingDeal {
   listingPrice?: number | null;
   scrapedAt?: string;
   source: 'privy' | 'redfin';
+  agentName?: string | null;
+  agentPhone?: string | null;
+  agentEmail?: string | null;
 }
 
 interface ScraperStatus {
@@ -321,11 +324,11 @@ export default function PendingAMV() {
           <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
             <thead>
               <tr style={{ background: '#111827', color: '#fff' }}>
-                {['Address', 'State', 'Listing Price', 'Source', 'Scraped At'].map((h, i) => (
+                {['Address', 'State', 'Listing Price', 'Agent', 'Source', 'Scraped At'].map((h, i) => (
                   <th
                     key={h}
                     style={{
-                      textAlign: i === 0 ? 'left' : 'right',
+                      textAlign: i === 0 || i === 3 ? 'left' : 'right',
                       padding: '12px 14px',
                       fontSize: 12,
                       textTransform: 'uppercase',
@@ -348,6 +351,21 @@ export default function PendingAMV() {
                     </td>
                     <td style={{ padding: 14, textAlign: 'right', color: '#6b7280' }}>{deal.state || '—'}</td>
                     <td style={{ padding: 14, textAlign: 'right', color: '#059669', fontWeight: 600 }}>{fmt(deal.listingPrice)}</td>
+                    <td style={{ padding: 14, minWidth: 180 }}>
+                      {deal.agentName ? (
+                        <div>
+                          <div style={{ fontWeight: 600, color: '#111', fontSize: 13 }}>{deal.agentName}</div>
+                          {deal.agentPhone && (
+                            <div style={{ color: '#3b82f6', fontSize: 12 }}>{deal.agentPhone}</div>
+                          )}
+                          {deal.agentEmail && (
+                            <div style={{ color: '#6b7280', fontSize: 11, wordBreak: 'break-all' }}>{deal.agentEmail}</div>
+                          )}
+                        </div>
+                      ) : (
+                        <span style={{ color: '#9ca3af', fontSize: 12 }}>—</span>
+                      )}
+                    </td>
                     <td style={{ padding: 14, textAlign: 'right' }}>
                       <Chip
                         label={deal.source}
@@ -363,7 +381,7 @@ export default function PendingAMV() {
               })}
               {recentPending.length === 0 && (
                 <tr>
-                  <td colSpan={5} style={{ padding: 40, textAlign: 'center', color: '#6b7280' }}>
+                  <td colSpan={6} style={{ padding: 40, textAlign: 'center', color: '#6b7280' }}>
                     No addresses pending AMV. All caught up!
                   </td>
                 </tr>

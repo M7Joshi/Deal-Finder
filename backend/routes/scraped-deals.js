@@ -161,13 +161,13 @@ router.get('/pending-amv', async (req, res) => {
       amv: { $gt: 0 }
     });
 
-    // Get recent pending deals (for display)
+    // Get recent pending deals (for display) - include agent details
     const recentPending = await ScrapedDeal.find({
       $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
     })
       .sort({ scrapedAt: -1 })
       .limit(50)
-      .select('fullAddress state listingPrice scrapedAt source')
+      .select('fullAddress state listingPrice scrapedAt source agentName agentPhone agentEmail')
       .lean();
 
     // Group pending by state

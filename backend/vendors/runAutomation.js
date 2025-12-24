@@ -439,7 +439,14 @@ const DEFAULT_JOBS = ['privy','home_valuations','amv_daemon'];
 function toJobSet(input) {
   const MAP = JOB_ALIAS_MAP;
   if (!input) return new Set(ALL_JOBS);
-  if (input instanceof Set) return input;
+  // Convert Set to array and map through aliases
+  if (input instanceof Set) {
+    const list = Array.from(input)
+      .map((s) => String(s).toLowerCase())
+      .map((s) => MAP[s] || s) // Use alias if exists, otherwise keep original
+      .filter((s) => ALL_JOBS.includes(s)); // Only keep valid jobs
+    return new Set(list.length ? list : ALL_JOBS);
+  }
   if (Array.isArray(input)) {
     const list = input
       .map((s) => String(s).toLowerCase())
@@ -613,9 +620,14 @@ async function schedulerTick() {
     // If we hit the batch limit, switch to AMV mode
     if (addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT) {
       currentMode = 'amv';
-      log.info('Scheduler: Batch limit reached, switching to AMV mode', {
+      log.info('Scheduler: Batch limit reached, switching to AMV mode IMMEDIATELY', {
         addressesScraped: addressesScrapedThisBatch
       });
+      // Schedule AMV run immediately (no delay)
+      if (schedulerEnabled) {
+        scheduleNextRun(0);
+      }
+      return; // Don't schedule again below
     }
   }
 
