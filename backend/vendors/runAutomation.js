@@ -1173,20 +1173,19 @@ const selectedStates = stateList; // keep var for logs if needed
     }
 
     // --- ScrapedDeal AMV Fetcher: Get BofA AMV for ScrapedDeal entries without AMV ---
-    // This runs after Privy/Redfin to enrich deals with valuations
-    if (jobs.has('scraped_deals_amv') || jobs.has('privy') || jobs.has('redfin')) {
+    // This runs during the AMV phase to enrich deals with valuations from BofA
+    if (jobs.has('scraped_deals_amv') || jobs.has('bofa')) {
       tasks.push((async () => {
         try {
-          // Wait a bit for Privy/Redfin to finish saving
-          await new Promise(r => setTimeout(r, 5000));
+          log.info('ScrapedDeal AMV: Starting AMV fetching phase...');
 
-          const BATCH_SIZE = Math.max(1, Number(process.env.SCRAPED_DEALS_AMV_BATCH || 50));
+          const BATCH_SIZE = Math.max(1, Number(process.env.SCRAPED_DEALS_AMV_BATCH || 100));
           log.info('ScrapedDeal AMV: Fetching AMV for deals without valuation...', { batchSize: BATCH_SIZE });
 
-          // Find ScrapedDeal entries that have listingPrice but no AMV
+          // Find ScrapedDeal entries that don't have AMV yet
+          // Include all deals so we can get BofA valuations for them
           const dealsNeedingAMV = await ScrapedDeal.find({
-            listingPrice: { $gt: 0 },
-            $or: [{ amv: null }, { amv: { $exists: false } }]
+            $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
           })
             .sort({ scrapedAt: -1 })
             .limit(BATCH_SIZE)
@@ -1232,7 +1231,9 @@ const selectedStates = stateList; // keep var for logs if needed
 
               if (result?.bofa_value && result.bofa_value > 0) {
                 // Update ScrapedDeal with AMV - isDeal will be calculated
-                const isDeal = result.bofa_value >= (deal.listingPrice * 2);
+                // Deal criteria: AMV >= 2x LP AND AMV > $200,000
+                const lp = deal.listingPrice || 0;
+                const isDeal = lp > 0 && result.bofa_value >= (lp * 2) && result.bofa_value > 200000;
                 await ScrapedDeal.updateOne(
                   { _id: deal._id },
                   {
@@ -1246,11 +1247,12 @@ const selectedStates = stateList; // keep var for logs if needed
                 successCount++;
                 log.info(`ScrapedDeal AMV: Updated ${deal.fullAddress?.slice(0, 40)}...`, {
                   amv: result.bofa_value,
-                  listingPrice: deal.listingPrice,
+                  listingPrice: lp,
                   isDeal
                 });
               } else {
                 failCount++;
+                log.debug(`ScrapedDeal AMV: No value returned for ${deal.fullAddress?.slice(0, 30)}`);
               }
 
               // Small delay between requests
