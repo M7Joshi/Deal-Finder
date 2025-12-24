@@ -7,19 +7,27 @@ const waitForViews = async (page) => {
   };
 
 const getClustersWithKeys = async (page) => {
-  const handles = await page.$$('.cluster.cluster-deal');
-  const clusters = [];
-
-  for (const handle of handles) {
-    const key = await handle.evaluate(el => {
+  // Get cluster info with coordinates - don't store handles since they can become stale
+  const clusterData = await page.evaluate(() => {
+    const clusters = [];
+    const elements = document.querySelectorAll('.cluster.cluster-deal');
+    for (const el of elements) {
       const rect = el.getBoundingClientRect();
-      return `${el.textContent?.trim()}@${Math.round(rect.x)}x${Math.round(rect.y)}`;
-    });
+      // Only include visible clusters (within viewport)
+      if (rect.width > 0 && rect.height > 0 && rect.x > 0 && rect.y > 0) {
+        clusters.push({
+          key: `${el.textContent?.trim()}@${Math.round(rect.x)}x${Math.round(rect.y)}`,
+          x: Math.round(rect.x + rect.width / 2),
+          y: Math.round(rect.y + rect.height / 2),
+          count: parseInt(el.textContent?.trim() || '0', 10)
+        });
+      }
+    }
+    // Sort by count descending (larger clusters first)
+    return clusters.sort((a, b) => b.count - a.count);
+  });
 
-    clusters.push({ handle, key });
-  }
-
-  return clusters;
+  return clusterData;
 };
 
 const zoomMap = async (page, direction = "in") => {
@@ -77,11 +85,15 @@ const clickClustersRecursively = async (
   }
 
   console.log(`📍 Found ${unvisited.length} unvisited cluster(s) at zoom level ${zoomLevel}`);
-  for (const { handle, key } of unvisited) {
+  for (const cluster of unvisited) {
+    const { key, x, y } = cluster;
     try {
-      await handle.click();
+      // Use coordinates-based clicking to avoid stale element handles
+      await page.mouse.move(x, y);
+      await wait(100); // Small delay for hover effects
+      await page.mouse.click(x, y);
       visited.add(key);
-      console.log(`✅ Clicked cluster ${key}`);
+      console.log(`✅ Clicked cluster ${key} at (${x}, ${y})`);
       await wait(1000);
       const viewsAfterClick = await waitForViews(page);
       if (viewsAfterClick.length > 0) {
