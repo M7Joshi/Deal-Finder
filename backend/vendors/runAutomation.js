@@ -268,7 +268,7 @@ function startStandbyWatcher() {
 }
 
 // --- Cancellation / stop control ---
-const control = { abort: false };
+export const control = { abort: false };
 
 // --- Global progress tracker ---
 // Shared progress tracker object
@@ -472,19 +472,44 @@ function parseSelectedJobs(rawInput) {
 const __REQ = getRequestedJobsRaw();
 const SELECTED_JOBS = parseSelectedJobs(__REQ.raw);
 
-// --- Unified scheduler: Run BOTH scraping and AMV together ---
-// No more alternating - process addresses AND get AMV in each cycle
-const RUN_INTERVAL_MS = Number(process.env.RUN_INTERVAL_MS || 5 * 60 * 1000); // 5 minutes between runs
+// --- Batch-based scheduler: Scrape 500 addresses, then fetch AMV for all ---
+// This prevents building up a huge backlog of addresses without AMV
+const RUN_INTERVAL_MS = Number(process.env.RUN_INTERVAL_MS || 1 * 60 * 1000); // 1 minute between cycles
+const SCRAPE_BATCH_LIMIT = Number(process.env.SCRAPE_BATCH_LIMIT || 500); // Max addresses to scrape before AMV
 const DISABLE_SCHEDULER =
   String(process.env.DISABLE_SCHEDULER || '').toLowerCase() === '1' ||
   RUN_INTERVAL_MS <= 0;
 let schedulerTimer = null;
 let schedulerEnabled = !DISABLE_SCHEDULER;
 
-// Get all jobs to run - both scraping AND AMV in same cycle
-function getAllJobs() {
-  // Run privy/redfin for scraping AND bofa for AMV together
-  return new Set(['privy', 'redfin', 'bofa', 'scraped_deals_amv']);
+// Track how many addresses scraped in current batch
+let addressesScrapedThisBatch = 0;
+let currentMode = 'scrape'; // 'scrape' or 'amv'
+
+// Export for tracking
+export function getScraperStatus() {
+  return {
+    mode: currentMode,
+    addressesScrapedThisBatch,
+    batchLimit: SCRAPE_BATCH_LIMIT,
+    schedulerEnabled
+  };
+}
+
+// Increment counter when address is scraped (called from Privy scraper)
+export function incrementAddressCount() {
+  addressesScrapedThisBatch++;
+  return addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT;
+}
+
+// Check if we've hit the batch limit
+export function shouldPauseScraping() {
+  return addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT;
+}
+
+// Reset counter after AMV phase completes
+function resetBatchCounter() {
+  addressesScrapedThisBatch = 0;
 }
 
 function scheduleNextRun(delayMs = RUN_INTERVAL_MS) {
@@ -499,21 +524,19 @@ function scheduleNextRun(delayMs = RUN_INTERVAL_MS) {
 function bootstrapScheduler() {
   const immediate = process.env.RUN_IMMEDIATELY === 'true';
 
-  // Log the unified scheduler configuration
-  log.info('Scheduler bootstrap (UNIFIED MODE - scrape + AMV together)', {
+  // Log the batch-based scheduler configuration
+  log.info('Scheduler bootstrap (BATCH MODE - scrape 500, then AMV)', {
     RUN_INTERVAL_MS,
+    SCRAPE_BATCH_LIMIT,
     immediate,
     worker: true,
-    jobs: Array.from(getAllJobs()),
+    startingMode: currentMode,
     disabled: DISABLE_SCHEDULER
   });
 
   if (DISABLE_SCHEDULER) {
-    // One-shot: run immediately and do NOT schedule a follow-up
     schedulerEnabled = false;
-    runAutomation(getAllJobs())
-      .catch((e) => log.error('One-shot runAutomation error', { error: e?.message || String(e) }))
-      .finally(() => log.info('Scheduler disabled — completed one-shot run.'));
+    log.info('Scheduler disabled — will not run.');
     return;
   }
   scheduleNextRun(immediate ? 0 : RUN_INTERVAL_MS);
@@ -527,26 +550,70 @@ async function schedulerTick() {
     return scheduleNextRun(5000);
   }
 
-  // Run ALL jobs together - scraping AND AMV
-  const jobs = getAllJobs();
-
-  log.info('Scheduler: starting unified run (scrape + AMV)', {
-    jobs: Array.from(jobs)
+  // Check how many addresses need AMV
+  const pendingAMV = await ScrapedDeal.countDocuments({
+    $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
   });
 
-  try {
-    await runAutomation(jobs);
-  } catch (e) {
-    log.error('Scheduler: runAutomation threw', { error: e?.message || String(e) });
-  } finally {
-    if (schedulerEnabled) {
-      log.info('Scheduler: run finished — scheduling next', {
-        inMs: RUN_INTERVAL_MS
-      });
-      scheduleNextRun(RUN_INTERVAL_MS);
-    } else {
-      log.info('Scheduler: disabled after run completion.');
+  // Decide mode based on pending AMV count
+  // If we have pending AMV addresses, process them first
+  if (pendingAMV > 0 && (addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT || currentMode === 'amv')) {
+    currentMode = 'amv';
+    log.info('Scheduler: AMV MODE - processing pending addresses', {
+      pendingAMV,
+      addressesScrapedThisBatch
+    });
+
+    try {
+      // Run only AMV jobs
+      await runAutomation(new Set(['bofa', 'scraped_deals_amv']));
+    } catch (e) {
+      log.error('Scheduler: AMV run threw', { error: e?.message || String(e) });
     }
+
+    // Check if AMV is complete (or mostly done)
+    const stillPending = await ScrapedDeal.countDocuments({
+      $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+    });
+
+    if (stillPending === 0 || stillPending < 50) {
+      // AMV done, switch back to scrape mode
+      currentMode = 'scrape';
+      resetBatchCounter();
+      log.info('Scheduler: AMV complete, switching to SCRAPE mode', { stillPending });
+    }
+  } else {
+    currentMode = 'scrape';
+    log.info('Scheduler: SCRAPE MODE - fetching new addresses', {
+      addressesScrapedThisBatch,
+      batchLimit: SCRAPE_BATCH_LIMIT,
+      pendingAMV
+    });
+
+    try {
+      // Run only scraping jobs
+      await runAutomation(new Set(['privy', 'redfin']));
+    } catch (e) {
+      log.error('Scheduler: Scrape run threw', { error: e?.message || String(e) });
+    }
+
+    // If we hit the batch limit, switch to AMV mode
+    if (addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT) {
+      currentMode = 'amv';
+      log.info('Scheduler: Batch limit reached, switching to AMV mode', {
+        addressesScraped: addressesScrapedThisBatch
+      });
+    }
+  }
+
+  if (schedulerEnabled) {
+    log.info('Scheduler: cycle finished — scheduling next', {
+      inMs: RUN_INTERVAL_MS,
+      nextMode: currentMode
+    });
+    scheduleNextRun(RUN_INTERVAL_MS);
+  } else {
+    log.info('Scheduler: disabled after run completion.');
   }
 }
 

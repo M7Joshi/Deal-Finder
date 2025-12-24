@@ -10,6 +10,9 @@ import Property from '../../models/Property.js';
 import RawProperty from '../../models/rawProperty.js';
 import ScrapedDeal from '../../models/ScrapedDeal.js';
 
+// Import batch limit checker
+import { incrementAddressCount, shouldPauseScraping } from '../runAutomation.js';
+
 export async function upsertRaw({ address, city, state, zip, price, beds, baths, sqft, raw, agentName, agentEmail }) {
   {
     const fullAddress = address || '';
@@ -61,6 +64,9 @@ export async function upsertRaw({ address, city, state, zip, price, beds, baths,
             beds: num(beds) || null,
             baths: num(baths) || null,
             sqft: num(sqft) || null,
+            // Save agent details from Redfin
+            agentName: agentName || null,
+            agentEmail: agentEmail || null,
             source: 'redfin',
             scrapedAt: new Date(),
           },
@@ -71,11 +77,16 @@ export async function upsertRaw({ address, city, state, zip, price, beds, baths,
         },
         { upsert: true }
       );
+      // Increment batch counter for Redfin addresses
+      incrementAddressCount();
     } catch (e) {
       // Silent fail - don't break the main flow
     }
   }
 }
+
+// Export for runner to check batch limit
+export { shouldPauseScraping };
 
 export async function upsertProperty({ prop_id, address, city, state, zip, price, beds, baths, sqft, built, raw, agentName, agentEmail, agentPhone }) {
   {
@@ -140,6 +151,10 @@ export async function upsertProperty({ prop_id, address, city, state, zip, price
             beds: num(beds) || null,
             baths: num(baths) || null,
             sqft: num(sqft) || null,
+            // Save agent details from Redfin
+            agentName: agentName || null,
+            agentEmail: agentEmail || null,
+            agentPhone: agentPhone || null,
             source: 'redfin',
             scrapedAt: new Date(),
           },

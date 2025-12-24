@@ -17,6 +17,7 @@ import BofaViewer from "./screens/BofaViewer.tsx";
 import ScrapedDeals from "./screens/ScrapedDeals.tsx";
 import AgentFetcher from "./screens/AgentFetcher.tsx";
 import ManageSubadmins from "./screens/ManageSubadmins.tsx";
+import PendingAMV from "./screens/PendingAMV.tsx";
 import Login from "./components/Login/Login.tsx";
 import { verify, clearToken } from "./helpers";
 
@@ -59,6 +60,7 @@ function Protected({ children }) {
 // ---- SIDEBAR + LAYOUT ----
 const navItems = [
   { label: "Deals", to: "/deals" },  // Everyone can see this
+  { label: "Pending AMV", to: "/pending-amv" },  // Shows addresses waiting for BofA AMV
   { label: "All Addresses", to: "/all-addresses" },  // Everyone can see this
   { label: "Manage Subadmins", to: "/manage-subadmins", adminOnly: true },
   { label: "Privy Fetcher", to: "/privy-fetcher" },  // Everyone can see this
@@ -281,6 +283,8 @@ export default function App() {
             <Route index element={<Navigate to="/deals" replace />} />
             {/* Deals - accessible to everyone */}
             <Route path="deals" element={<Deals />} />
+            {/* Pending AMV - shows addresses waiting for BofA valuation */}
+            <Route path="pending-amv" element={<PendingAMV />} />
             {/* Pages accessible to everyone */}
             <Route path="all-addresses" element={<ScrapedDeals />} />
             <Route path="privy-fetcher" element={<PrivyFetcher />} />

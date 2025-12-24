@@ -36,6 +36,9 @@ import {
   getProgressSummary,
 } from '../progressTracker.js';
 
+// Import batch limit checker from runAutomation
+import { incrementAddressCount, shouldPauseScraping } from '../../runAutomation.js';
+
 // --- Quick Filters / Tags support (URL mode) ---
 // human label -> URL param key as used by Privy
 const DEFAULT_TAGS = [
@@ -893,12 +896,26 @@ await page.evaluate(() => {
                     },
                     { upsert: true }
                   );
+                  // Increment batch counter and check if we should pause
+                  const hitLimit = incrementAddressCount();
+                  if (hitLimit) {
+                    logPrivy.info('Batch limit reached - will pause scraping for AMV phase');
+                  }
                 } catch (e) {
                   logPrivy.warn('Failed to save to ScrapedDeal', { fullAddress: prop?.fullAddress || null, error: e?.message });
                 }
                 urlSaved += 1;
                 stateSaved += 1;
                 allProperties.push(prop);
+
+                // Check if we should pause scraping (batch limit reached)
+                if (shouldPauseScraping()) {
+                  logPrivy.warn('Batch limit reached - stopping scrape to allow AMV processing', {
+                    urlSaved,
+                    stateSaved
+                  });
+                  break; // Exit the property loop
+                }
               } catch (error) {
                 logPrivy.warn('Failed to upsert property', {
                   fullAddress: prop?.fullAddress || 'Unknown Address',
@@ -906,6 +923,12 @@ await page.evaluate(() => {
                   state,
                 });
               }
+            }
+
+            // Check batch limit after processing each URL
+            if (shouldPauseScraping()) {
+              logPrivy.warn('Batch limit reached - exiting URL loop');
+              return; // Exit the withDeadline callback
             }
 
             LC.info('Properties saved for URL', { saved: urlSaved, stateSaved, quickTag: tag || 'none' });
@@ -921,11 +944,28 @@ await page.evaluate(() => {
         }
       } // end urlVariants loop
 
+      // Check batch limit after each city
+      if (shouldPauseScraping()) {
+        logPrivy.warn('Batch limit reached after city - pausing for AMV phase', {
+          city: extractCityFromUrl(url),
+          state
+        });
+        saveProgress(progress); // Save progress before exiting
+        return allProperties;
+      }
+
       // Mark this city as completed in progress tracker
       const cityName = extractCityFromUrl(url);
       markCityComplete(progress, state, cityIndex, url);
       LState.info(`City completed: ${cityName}`, { cityIndex, totalCities: stateUrls.length });
     } // end cities loop
+
+    // Check batch limit after each state
+    if (shouldPauseScraping()) {
+      logPrivy.warn('Batch limit reached after state - pausing for AMV phase', { state });
+      saveProgress(progress);
+      return allProperties;
+    }
 
     // Mark state as fully completed
     markStateComplete(progress, state);

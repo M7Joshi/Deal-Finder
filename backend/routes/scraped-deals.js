@@ -141,6 +141,59 @@ async function autoSendAgentEmail(deal) {
   }
 }
 
+// GET /api/scraped-deals/pending-amv - Get deals pending AMV and scraper status
+router.get('/pending-amv', async (req, res) => {
+  try {
+    // Import scraper status
+    let scraperStatus = { mode: 'unknown', addressesScrapedThisBatch: 0, batchLimit: 500 };
+    try {
+      const { getScraperStatus } = await import('../vendors/runAutomation.js');
+      scraperStatus = getScraperStatus();
+    } catch {}
+
+    // Count deals pending AMV
+    const pendingAMV = await ScrapedDeal.countDocuments({
+      $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+    });
+
+    // Count deals with AMV
+    const withAMV = await ScrapedDeal.countDocuments({
+      amv: { $gt: 0 }
+    });
+
+    // Get recent pending deals (for display)
+    const recentPending = await ScrapedDeal.find({
+      $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+    })
+      .sort({ scrapedAt: -1 })
+      .limit(50)
+      .select('fullAddress state listingPrice scrapedAt source')
+      .lean();
+
+    // Group pending by state
+    const pendingByState = await ScrapedDeal.aggregate([
+      { $match: { $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }] } },
+      { $group: { _id: '$state', count: { $sum: 1 } } },
+      { $sort: { count: -1 } }
+    ]);
+
+    res.json({
+      ok: true,
+      scraperStatus,
+      stats: {
+        pendingAMV,
+        withAMV,
+        total: pendingAMV + withAMV
+      },
+      pendingByState,
+      recentPending
+    });
+  } catch (err) {
+    L.error('Failed to get pending AMV status', { error: err?.message });
+    res.status(500).json({ ok: false, error: err?.message });
+  }
+});
+
 // GET /api/scraped-deals - Get all scraped deals (filtered by user's states)
 router.get('/', async (req, res) => {
   try {

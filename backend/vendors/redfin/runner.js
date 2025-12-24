@@ -5,7 +5,10 @@ import { parseDetailHtml } from './detailParser.js';
 import { getCityUrls } from './sitemapEnumerator.js';
 import { FILTERS, passesAll } from './filters.js';
 import { propIdFromUrl, toNumberOrNull, parseBeds, parseBaths, cityFromAddress } from './normalize.js';
-import { upsertRaw, upsertProperty } from './save.js';
+import { upsertRaw, upsertProperty, shouldPauseScraping } from './save.js';
+
+// Import control object for abort checking
+import { control } from '../runAutomation.js';
 
 function uniqueByUrl(arr) {
   const seen = new Set();
@@ -160,6 +163,16 @@ console.log(`Found ${listings.length} index listings (all pages)`);
 
       saved++;
       console.log(`✔ Saved ${prop_id} | ${address || '(no address)'} | $${price ?? 'NA'} | ${beds ?? '?'}bd/${baths ?? '?'}ba | ${sqft ?? '?'} sqft`);
+
+      // Check if we should stop (batch limit reached or abort requested)
+      if (control.abort) {
+        console.log('[Redfin] Abort signal received, stopping city scrape');
+        break;
+      }
+      if (shouldPauseScraping()) {
+        console.log('[Redfin] Batch limit reached (500 addresses), pausing to process AMV');
+        break;
+      }
     } catch (e) {
       detailErrors++;
       console.warn(`Detail failed for ${it.url}: ${e.message}`);
@@ -175,6 +188,16 @@ export async function runAllCities() {
   console.log(`Total cities: ${cities.length}`);
 
   for (const c of cities) {
+    // Check abort/batch limit before each city
+    if (control.abort) {
+      console.log('[Redfin] Abort signal received, stopping all cities');
+      break;
+    }
+    if (shouldPauseScraping()) {
+      console.log('[Redfin] Batch limit reached, stopping to process AMV');
+      break;
+    }
+
     await runCity(c.url);
   }
 }

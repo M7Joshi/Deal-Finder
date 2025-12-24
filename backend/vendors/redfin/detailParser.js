@@ -47,8 +47,44 @@ export function parseDetailHtml(html) {
   const hoaMatch = bodyText.match(/HOA(?:\s*Fees?)?:?\s*(Yes|No)/i);
   if (hoaMatch) out.hoa = hoaMatch[1];
 
+  // Extract agent name from agent section
   const agentNode = $('[class*="Agent"], [data-testid*="agent"]').first().text().trim();
   if (agentNode) out.agentName = agentNode.split('\n')[0];
+
+  // Try to extract agent name from "Listing agent: Name (phone)" pattern
+  const listingAgentMatch = bodyText.match(/Listing\s+agent:\s*([A-Za-z]+(?:\s+[A-Za-z]+)*)\s*\((\d{3}[-.\s]?\d{3}[-.\s]?\d{4})\)/i);
+  if (listingAgentMatch) {
+    out.agentName = listingAgentMatch[1].trim();
+    out.agentPhone = listingAgentMatch[2].trim();
+  }
+
+  // Extract phone from various patterns
+  if (!out.agentPhone) {
+    // Look for phone in contact section
+    const phoneMatch = bodyText.match(/(?:Phone|Tel|Call|Contact)[:.]?\s*(\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/i);
+    if (phoneMatch) {
+      out.agentPhone = phoneMatch[1].trim();
+    }
+  }
+
+  // Extract email from mailto links
+  $('a[href^="mailto:"]').each((_, el) => {
+    if (out.agentEmail) return;
+    const href = $(el).attr('href') || '';
+    const email = href.replace('mailto:', '').split('?')[0].trim();
+    // Skip Redfin emails
+    if (email &&
+        !email.toLowerCase().includes('redfin.com') &&
+        !email.toLowerCase().includes('noreply')) {
+      out.agentEmail = email;
+    }
+  });
+
+  // Try to find brokerage
+  const brokerageMatch = bodyText.match(/(?:Listing\s+provided\s+courtesy\s+of|Listed\s+by|Brokerage)[:.]?\s*([^(]+?)(?:\s*\(|$)/i);
+  if (brokerageMatch) {
+    out.brokerage = brokerageMatch[1].trim();
+  }
 
   return out;
 }
