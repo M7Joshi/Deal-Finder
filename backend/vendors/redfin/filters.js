@@ -2,11 +2,11 @@ import { DateTime } from 'luxon';
 const DISABLE = process.env.REDFIN_DISABLE_FILTERS === '1';
 
 export const FILTERS = {
-  priceMin: 50000,      // Match frontend: $50k minimum
-  priceMax: 500000,     // Match frontend: $500k maximum
-  sqftMin: 1000,        // 1000 sqft minimum
+  priceMin: 50000,      // $50k minimum
+  priceMax: 500000,     // $500k maximum
+  sqftMin: 500,         // 500 sqft minimum (was 1000)
   sqftMax: 50000,
-  hoaNoOnly: true,      // Only no-HOA properties
+  hoaNoOnly: false,     // Allow properties with HOA (was true)
   dateRange: 'all',     // 'all'|'1d'|'7d'|'14d'|'30d'
 };
 
