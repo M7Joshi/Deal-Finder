@@ -538,11 +538,11 @@ function scheduleNextRun(delayMs = RUN_INTERVAL_MS) {
   schedulerTimer = setTimeout(schedulerTick, Math.max(0, delayMs));
 }
 
-function bootstrapScheduler() {
+async function bootstrapScheduler() {
   const immediate = process.env.RUN_IMMEDIATELY === 'true';
 
   // Log the batch-based scheduler configuration
-  log.info('Scheduler bootstrap (BATCH MODE - scrape 500, then AMV)', {
+  log.info('Scheduler bootstrap (BATCH MODE - scrape 100, then AMV)', {
     RUN_INTERVAL_MS,
     SCRAPE_BATCH_LIMIT,
     immediate,
@@ -556,6 +556,22 @@ function bootstrapScheduler() {
     log.info('Scheduler disabled — will not run.');
     return;
   }
+
+  // Check if there are pending AMV addresses - if so, run immediately regardless of RUN_IMMEDIATELY setting
+  try {
+    await connectDB();
+    const pendingAMV = await ScrapedDeal.countDocuments({
+      $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+    });
+    if (pendingAMV > 0) {
+      log.info('Scheduler bootstrap: Found pending AMV addresses, starting immediately', { pendingAMV });
+      scheduleNextRun(0); // Start immediately
+      return;
+    }
+  } catch (e) {
+    log.warn('Scheduler bootstrap: Could not check pending AMV', { error: e?.message });
+  }
+
   scheduleNextRun(immediate ? 0 : RUN_INTERVAL_MS);
 }
 
@@ -1719,7 +1735,7 @@ export function startSchedulerManually() {
 
   // Always call bootstrapScheduler - it handles the actual scheduling
   // The old check was preventing startup when schedulerEnabled was already true
-  bootstrapScheduler();
+  bootstrapScheduler().catch(e => log.error('bootstrapScheduler error', { error: e?.message }));
 
   log.info('=== startSchedulerManually complete ===');
 }
@@ -1738,7 +1754,7 @@ if (IS_WORKER) {
     process.on('SIGINT', () => { try { release(); } catch {}; process.exit(0); });
     process.on('SIGTERM', () => { try { release(); } catch {}; process.exit(0); });
     // Primary worker: start scheduler immediately
-    bootstrapScheduler();
+    bootstrapScheduler().catch(e => log.error('bootstrapScheduler error', { error: e?.message }));
   }
 }
 // Hidden hook used by routes to request a graceful stop
