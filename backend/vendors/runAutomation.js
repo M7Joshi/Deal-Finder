@@ -976,10 +976,19 @@ const selectedStates = stateList; // keep var for logs if needed
           logPrivy.start(`Running PrivyBot automation across ${stateList.length} state(s)…`, { states: stateList.slice(0, 10), note: 'showing first 10 for brevity' });
 
           const runOneState = async (stateCode, { mode = 'auto' } = {}) => {
+            // Check for abort before processing each state
+            if (control.abort) {
+              logPrivy.warn(`Stop requested — skipping state ${stateCode}`);
+              return;
+            }
             const MAX_ATTEMPTS = Number(process.env.PRIVY_MAX_RETRIES || 3); // Increased from 2 to 3
             const RETRY_DELAY_MS = Number(process.env.PRIVY_RETRY_DELAY_MS || 5000); // Wait before retry
             let attempt = 0;
             while (attempt < MAX_ATTEMPTS) {
+              if (control.abort) {
+                logPrivy.warn(`Stop requested — aborting retries for ${stateCode}`);
+                return;
+              }
               attempt++;
               const proxyInfo = await nextProxyInfo(stateCode);
               // Use a persistent, per-state profile so device appears stable across runs
@@ -1100,6 +1109,11 @@ const selectedStates = stateList; // keep var for logs if needed
 
           // --- Batch all states in groups of maxStates (5 at a time by default) ---
           for (let i = 0; i < stateList.length; i += maxStates) {
+            // Check for abort before starting each batch
+            if (control.abort) {
+              logPrivy.warn('Stop requested — aborting Privy state batches');
+              break;
+            }
             const chunk = stateList.slice(i, i + maxStates);
             logPrivy.info(`Running Privy batch ${i / maxStates + 1}`, { states: chunk });
 
@@ -1166,6 +1180,7 @@ const selectedStates = stateList; // keep var for logs if needed
     if (jobs.has('redfin')) {
       tasks.push((async () => {
         try {
+          if (control.abort) { log.warn('Stop requested — skipping Redfin'); return; }
           log.info('Running Redfin automation…');
           // Safe defaults for first runs / to punch through early 403s; override via env if needed
           if (!process.env.REDFIN_FORCE_RENDER) process.env.REDFIN_FORCE_RENDER = '1';
