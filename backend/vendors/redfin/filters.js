@@ -2,12 +2,12 @@ import { DateTime } from 'luxon';
 const DISABLE = process.env.REDFIN_DISABLE_FILTERS === '1';
 
 export const FILTERS = {
-  priceMin: 400000,
-  priceMax: 75000000,
-  sqftMin: 1000,
+  priceMin: 50000,      // Match frontend: $50k minimum
+  priceMax: 500000,     // Match frontend: $500k maximum
+  sqftMin: 1000,        // 1000 sqft minimum
   sqftMax: 50000,
-  hoaNoOnly: true,
-  dateRange: 'all', // 'all'|'1d'|'7d'|'14d'|'30d'
+  hoaNoOnly: true,      // Only no-HOA properties
+  dateRange: 'all',     // 'all'|'1d'|'7d'|'14d'|'30d'
 };
 
 function withinPrice(p, min, max) {
