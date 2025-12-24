@@ -496,7 +496,7 @@ let schedulerEnabled = !DISABLE_SCHEDULER;
 // Track how many addresses scraped in current batch
 let addressesScrapedThisBatch = 0;
 let currentMode = 'scrape'; // 'scrape' or 'amv'
-let scrapeSource = 'redfin'; // 'redfin' first, then 'privy' after first AMV cycle
+let scrapeSource = 'privy'; // 'privy' first, then 'redfin' after first AMV cycle
 
 // Export for tracking
 export function getScraperStatus() {
@@ -641,11 +641,16 @@ async function schedulerTick() {
       // Alternate between redfin and privy after each AMV cycle
       const previousSource = scrapeSource;
       scrapeSource = scrapeSource === 'redfin' ? 'privy' : 'redfin';
-      log.info('Scheduler: AMV complete, switching to SCRAPE mode', {
+      log.info('Scheduler: AMV complete, switching to SCRAPE mode IMMEDIATELY', {
         stillPending,
         previousSource,
         nextSource: scrapeSource
       });
+      // Start next scrape cycle immediately (no delay)
+      if (schedulerEnabled) {
+        scheduleNextRun(0);
+      }
+      return; // Don't schedule again below with long delay
     }
   } else {
     currentMode = 'scrape';
