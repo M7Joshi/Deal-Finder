@@ -496,11 +496,13 @@ let schedulerEnabled = !DISABLE_SCHEDULER;
 // Track how many addresses scraped in current batch
 let addressesScrapedThisBatch = 0;
 let currentMode = 'scrape'; // 'scrape' or 'amv'
+let scrapeSource = 'redfin'; // 'redfin' first, then 'privy' after first AMV cycle
 
 // Export for tracking
 export function getScraperStatus() {
   return {
     mode: currentMode,
+    scrapeSource,
     addressesScrapedThisBatch,
     batchLimit: SCRAPE_BATCH_LIMIT,
     schedulerEnabled
@@ -617,10 +619,17 @@ async function schedulerTick() {
     });
 
     if (stillPending === 0 || stillPending < 50) {
-      // AMV done, switch back to scrape mode
+      // AMV done, switch back to scrape mode and alternate source
       currentMode = 'scrape';
       resetBatchCounter();
-      log.info('Scheduler: AMV complete, switching to SCRAPE mode', { stillPending });
+      // Alternate between redfin and privy after each AMV cycle
+      const previousSource = scrapeSource;
+      scrapeSource = scrapeSource === 'redfin' ? 'privy' : 'redfin';
+      log.info('Scheduler: AMV complete, switching to SCRAPE mode', {
+        stillPending,
+        previousSource,
+        nextSource: scrapeSource
+      });
     }
   } else {
     currentMode = 'scrape';
@@ -631,8 +640,9 @@ async function schedulerTick() {
     });
 
     try {
-      // Run only scraping jobs
-      await runAutomation(new Set(['privy', 'redfin']));
+      // Run only ONE scraping source at a time (redfin first, then privy after AMV cycle)
+      log.info(`Scheduler: Running ${scrapeSource.toUpperCase()} scraper only`);
+      await runAutomation(new Set([scrapeSource]));
     } catch (e) {
       log.error('Scheduler: Scrape run threw', { error: e?.message || String(e) });
     }
