@@ -214,19 +214,19 @@ export async function runAutomation(payload = {}) {
 }
 
 export async function getServiceStatus() {
-  const res = await apiFetch(routes.service.status);
+  const res = await apiFetch(routes.automation.service.status);
   return res.json();
 }
 export async function startService() {
-  const res = await apiFetch(routes.service.start, { method: "POST" });
+  const res = await apiFetch(routes.automation.service.start, { method: "POST" });
   return res.json();
 }
 export async function stopService() {
-  const res = await apiFetch(routes.service.stop, { method: "POST" });
+  const res = await apiFetch(routes.automation.service.stop, { method: "POST" });
   return res.json();
 }
 export async function restartService() {
-  const res = await apiFetch(routes.service.restart, { method: "POST" });
+  const res = await apiFetch(routes.automation.service.restart, { method: "POST" });
   return res.json();
 }
 
