@@ -795,9 +795,31 @@ const scrapePropertiesV1 = async (page) => {
   const progress = loadProgress();
   logPrivy.info('Privy scraper starting with progress', getProgressSummary(progress));
 
-  // Get states sorted alphabetically
-  const allStates = Object.keys(urls).sort();
-  logPrivy.info(`Total states available: ${allStates.length}`);
+  // Blocked states - excluded from scraping (match Redfin's BLOCKED_STATES)
+  // SD, AK, ND, WY, HI, UT, NM, OH, MT
+  const BLOCKED_STATES = ['SD', 'AK', 'ND', 'WY', 'HI', 'UT', 'NM', 'OH', 'MT'];
+
+  // State code to full name mapping for proper alphabetical sorting
+  const STATE_NAMES = {
+    'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas', 'CA': 'California',
+    'CO': 'Colorado', 'CT': 'Connecticut', 'DE': 'Delaware', 'FL': 'Florida', 'GA': 'Georgia',
+    'HI': 'Hawaii', 'ID': 'Idaho', 'IL': 'Illinois', 'IN': 'Indiana', 'IA': 'Iowa',
+    'KS': 'Kansas', 'KY': 'Kentucky', 'LA': 'Louisiana', 'ME': 'Maine', 'MD': 'Maryland',
+    'MA': 'Massachusetts', 'MI': 'Michigan', 'MN': 'Minnesota', 'MS': 'Mississippi', 'MO': 'Missouri',
+    'MT': 'Montana', 'NE': 'Nebraska', 'NV': 'Nevada', 'NH': 'New Hampshire', 'NJ': 'New Jersey',
+    'NM': 'New Mexico', 'NY': 'New York', 'NC': 'North Carolina', 'ND': 'North Dakota', 'OH': 'Ohio',
+    'OK': 'Oklahoma', 'OR': 'Oregon', 'PA': 'Pennsylvania', 'RI': 'Rhode Island', 'SC': 'South Carolina',
+    'SD': 'South Dakota', 'TN': 'Tennessee', 'TX': 'Texas', 'UT': 'Utah', 'VT': 'Vermont',
+    'VA': 'Virginia', 'WA': 'Washington', 'WV': 'West Virginia', 'WI': 'Wisconsin', 'WY': 'Wyoming'
+  };
+
+  // Get states sorted alphabetically by FULL NAME (not abbreviation), excluding blocked states
+  const allStates = Object.keys(urls)
+    .filter(s => !BLOCKED_STATES.includes(s))
+    .sort((a, b) => (STATE_NAMES[a] || a).localeCompare(STATE_NAMES[b] || b));
+
+  logPrivy.info(`Total states available: ${allStates.length} (excluded ${BLOCKED_STATES.length} blocked states)`);
+  logPrivy.info(`States order: ${allStates.map(s => STATE_NAMES[s] || s).join(', ')}`);
 
   // Process states alphabetically, resuming from progress
   for (const state of allStates) {
