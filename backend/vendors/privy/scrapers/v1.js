@@ -100,6 +100,35 @@ function parseQuickStatsToDetails(quickStats = []) {
 }
 
 // --- Agent extraction helpers ---
+
+// Extended agent selectors - try multiple possible Privy UI variations
+const AGENT_SELECTORS = {
+  name: [
+    '.agent-name',
+    '[data-testid="agent-name"]',
+    '.listing-agent .name',
+    '.agent-info .name',
+    '.contact-name',
+    '.realtor-name',
+    '.listing-agent-name',
+    '.agent-details .name',
+    '[class*="agent"] [class*="name"]',
+    '.property-agent .name',
+  ],
+  email: [
+    'a[href^="mailto:"]',
+    '.agent-email a',
+    '[data-testid="agent-email"] a',
+    '.contact-email a',
+  ],
+  phone: [
+    'a[href^="tel:"]',
+    '.agent-phone a',
+    '[data-testid="agent-phone"] a',
+    '.contact-phone a',
+  ]
+};
+
 async function extractAgentFromContext(ctx) {
   const text = async (sel) => {
     try { return await ctx.$eval(sel, el => (el.textContent || '').trim()); } catch { return null; }
@@ -110,25 +139,142 @@ async function extractAgentFromContext(ctx) {
       return v && v.startsWith(starts) ? v.slice(starts.length) : null;
     } catch { return null; }
   };
-  let name = await text(agentNameSelector);
-  let email = await href(agentEmailSelector, 'mailto:');
-  let phone = await href(agentPhoneSelector, 'tel:');
+
+  // Try multiple selectors for name
+  let name = null;
+  for (const sel of AGENT_SELECTORS.name) {
+    name = await text(sel);
+    if (name) break;
+  }
+
+  // Try multiple selectors for email
+  let email = null;
+  for (const sel of AGENT_SELECTORS.email) {
+    email = await href(sel, 'mailto:');
+    if (email) break;
+  }
+
+  // Try multiple selectors for phone
+  let phone = null;
+  for (const sel of AGENT_SELECTORS.phone) {
+    phone = await href(sel, 'tel:');
+    if (phone) break;
+  }
+
   return { name, email, phone };
 }
 
+// Extract agent using full page text patterns (like Redfin approach)
+async function extractAgentFromPageText(page) {
+  try {
+    return await page.evaluate(() => {
+      const result = { name: null, email: null, phone: null };
+      const bodyText = (document.body.textContent || '').replace(/\s+/g, ' ');
+
+      // Pattern 1: "Listed by Agent Name" or "Listing Agent: Agent Name"
+      const listedByPattern = /(?:Listed by|Listing Agent[:\s]+)([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})/i;
+      const listedByMatch = bodyText.match(listedByPattern);
+      if (listedByMatch) {
+        result.name = listedByMatch[1].trim();
+      }
+
+      // Pattern 2: "Agent: Name" or "Contact: Name"
+      const agentPattern = /(?:Agent|Contact|Realtor)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})/i;
+      if (!result.name) {
+        const agentMatch = bodyText.match(agentPattern);
+        if (agentMatch) {
+          result.name = agentMatch[1].trim();
+        }
+      }
+
+      // Email pattern - find all emails, filter out system ones
+      const emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+      const allEmails = bodyText.match(emailPattern) || [];
+      for (const email of allEmails) {
+        const lower = email.toLowerCase();
+        // Skip system/platform emails
+        if (lower.includes('privy') ||
+            lower.includes('noreply') ||
+            lower.includes('support') ||
+            lower.includes('info@') ||
+            lower.includes('admin') ||
+            lower.includes('example.com') ||
+            lower.includes('test.com')) {
+          continue;
+        }
+        result.email = email;
+        break;
+      }
+
+      // Phone pattern - properly formatted US numbers
+      const phonePatterns = [
+        /\((\d{3})\)\s*(\d{3})[-.](\d{4})/,  // (404) 550-5560
+        /(\d{3})[-.](\d{3})[-.](\d{4})/       // 470-685-1179
+      ];
+      for (const pattern of phonePatterns) {
+        const match = bodyText.match(pattern);
+        if (match) {
+          if (match[0].startsWith('(')) {
+            result.phone = `(${match[1]}) ${match[2]}-${match[3]}`;
+          } else {
+            result.phone = `${match[1]}-${match[2]}-${match[3]}`;
+          }
+          break;
+        }
+      }
+
+      // Also try mailto/tel links
+      if (!result.email || !result.phone) {
+        const links = Array.from(document.querySelectorAll('a[href^="mailto:"], a[href^="tel:"]'));
+        for (const link of links) {
+          const href = (link.getAttribute('href') || '').trim();
+          if (href.startsWith('mailto:') && !result.email) {
+            const email = href.slice(7).split('?')[0];
+            const lower = email.toLowerCase();
+            if (!lower.includes('privy') && !lower.includes('noreply')) {
+              result.email = email;
+            }
+          }
+          if (href.startsWith('tel:') && !result.phone) {
+            result.phone = href.slice(4);
+          }
+        }
+      }
+
+      return result;
+    });
+  } catch (e) {
+    return { name: null, email: null, phone: null };
+  }
+}
+
 async function extractAgentWithFallback(page, cardHandle) {
-  // Try on-card first
+  // Try on-card first with multiple selectors
   const onCard = await extractAgentFromContext(cardHandle);
   if (onCard.name || onCard.email || onCard.phone) return onCard;
-  // Open details (new panel or page)
-  try { await cardHandle.click({ delay: 20 }); } catch {}
-  await sleep(600);
-  // Try common detail roots
+
+  // Open details panel/modal by clicking the card
+  try { await cardHandle.click({ delay: 50 }); } catch {}
+
+  // Wait longer for detail panel to load (Privy SPA can be slow)
+  await sleep(1500);
+
+  // Wait for potential modal/drawer to appear
+  try {
+    await page.waitForSelector('.modal, .drawer, .sidebar, .detail-panel, [class*="modal"], [class*="drawer"]', { timeout: 2000 });
+  } catch {}
+
+  // Try common detail roots (main page + any iframes)
   const roots = [page, ...page.frames()];
   for (const r of roots) {
     const got = await extractAgentFromContext(r);
     if (got.name || got.email || got.phone) return got;
   }
+
+  // Try full page text pattern extraction (like Redfin)
+  const fromText = await extractAgentFromPageText(page);
+  if (fromText.name || fromText.email || fromText.phone) return fromText;
+
   // Last resort: scan mailto/tel anywhere on page
   try {
     const { email, phone } = await page.evaluate(() => {
@@ -136,13 +282,17 @@ async function extractAgentWithFallback(page, cardHandle) {
       const res = { email: null, phone: null };
       for (const el of a) {
         const h = (el.getAttribute('href') || '').trim();
-        if (h.startsWith('mailto:') && !res.email) res.email = h.slice(7);
+        if (h.startsWith('mailto:') && !res.email) {
+          const email = h.slice(7).split('?')[0];
+          if (!email.toLowerCase().includes('privy')) res.email = email;
+        }
         if (h.startsWith('tel:') && !res.phone) res.phone = h.slice(4);
       }
       return res;
     });
     return { name: null, email, phone };
   } catch {}
+
   return { name: null, email: null, phone: null };
 }
 
@@ -487,6 +637,34 @@ async function collectAllCardsWithScrolling(page, {
       (items, s1, s2, sp, statSel) => {
         const bySelText = (root, sel) => root.querySelector(sel)?.textContent?.trim() || '';
         const isVisible = (el) => !!(el && (el.offsetParent !== null || getComputedStyle(el).display !== 'none'));
+
+        // Agent selectors to try on each card
+        const agentNameSels = ['.agent-name', '[data-testid="agent-name"]', '.listing-agent .name', '.contact-name', '.realtor-name'];
+        const getAgentName = (el) => {
+          for (const sel of agentNameSels) {
+            const found = el.querySelector(sel);
+            if (found?.textContent?.trim()) return found.textContent.trim();
+          }
+          return null;
+        };
+
+        // Get mailto/tel links from card
+        const getAgentContact = (el) => {
+          let email = null, phone = null;
+          const mailtoLink = el.querySelector('a[href^="mailto:"]');
+          if (mailtoLink) {
+            const href = mailtoLink.getAttribute('href') || '';
+            email = href.replace('mailto:', '').split('?')[0].trim();
+            if (email.toLowerCase().includes('privy')) email = null;
+          }
+          const telLink = el.querySelector('a[href^="tel:"]');
+          if (telLink) {
+            const href = telLink.getAttribute('href') || '';
+            phone = href.replace('tel:', '').trim();
+          }
+          return { email, phone };
+        };
+
         return items
           .filter(isVisible)
           .map((el) => {
@@ -495,7 +673,20 @@ async function collectAllCardsWithScrolling(page, {
             const address = line1 && line2 ? `${line1}, ${line2}` : (line1 || line2 || '');
             const price = bySelText(el, sp);
             const quickStats = Array.from(el.querySelectorAll(statSel)).map(li => li.textContent.trim());
-            return { fullAddress: address, address, price, quickStats };
+
+            // Extract agent info while card is visible
+            const agentName = getAgentName(el);
+            const { email: agentEmail, phone: agentPhone } = getAgentContact(el);
+
+            return {
+              fullAddress: address,
+              address,
+              price,
+              quickStats,
+              agentName,
+              agentEmail,
+              agentPhone
+            };
           })
           .filter(x => x.fullAddress && typeof x.fullAddress === 'string');
       },
@@ -802,44 +993,43 @@ await page.evaluate(() => {
               const priceNum = toNumber(prop.price);
               const details = { ...parseQuickStatsToDetails(prop.quickStats || []) };
 
-              // Augment details with agent contacts (best-effort) — try to find the card DOM node for this address
-              try {
-                const handle = await findCardHandleByAddress(page, {
-                  listContainerSelector: propertyListContainerSelector,
-                  itemSelector: propertyContentSelector,
-                  line1Selector: addressLine1Selector,
-                  line2Selector: addressLine2Selector
-                }, prop.fullAddress);
+              // Use agent info already captured during card collection (more reliable since cards are visible)
+              if (prop.agentName || prop.agentEmail || prop.agentPhone) {
+                details.agent_name  = prop.agentName  || null;
+                details.agent_email = prop.agentEmail || null;
+                details.agent_phone = prop.agentPhone || null;
+              }
 
-                if (handle) {
-                  const agent = await extractAgentWithFallback(page, handle);
-                  if (agent?.name || agent?.email || agent?.phone) {
-                    details.agent_name  = agent.name  || null;
-                    details.agent_email = agent.email || null;
-                    details.agent_phone = agent.phone || null;
-                  }
-                } else {
-                  // fallback: scan mailto/tel anywhere on page (view-level)
-                  try {
-                    const res = await page.evaluate(() => {
-                      const out = { email: null, phone: null };
-                      const a = Array.from(document.querySelectorAll('a[href^="mailto:"],a[href^="tel:"]'));
-                      for (const el of a) {
-                        const h = (el.getAttribute('href') || '').trim();
-                        if (h.startsWith('mailto:') && !out.email) out.email = h.slice(7);
-                        if (h.startsWith('tel:') && !out.phone) out.phone = h.slice(4);
-                      }
-                      return out;
-                    });
-                    if (res.email || res.phone) {
-                      details.agent_name  = details.agent_name  ?? null;
-                      details.agent_email = details.agent_email ?? res.email ?? null;
-                      details.agent_phone = details.agent_phone ?? res.phone ?? null;
+              // If no agent info from card, try fallback extraction (slower but more thorough)
+              if (!details.agent_name && !details.agent_email && !details.agent_phone) {
+                try {
+                  // Try to find the card and click it for detail panel
+                  const handle = await findCardHandleByAddress(page, {
+                    listContainerSelector: propertyListContainerSelector,
+                    itemSelector: propertyContentSelector,
+                    line1Selector: addressLine1Selector,
+                    line2Selector: addressLine2Selector
+                  }, prop.fullAddress);
+
+                  if (handle) {
+                    const agent = await extractAgentWithFallback(page, handle);
+                    if (agent?.name || agent?.email || agent?.phone) {
+                      details.agent_name  = agent.name  || null;
+                      details.agent_email = agent.email || null;
+                      details.agent_phone = agent.phone || null;
                     }
-                  } catch {}
+                  } else {
+                    // Fallback: use page-level text pattern extraction
+                    const fromText = await extractAgentFromPageText(page);
+                    if (fromText?.name || fromText?.email || fromText?.phone) {
+                      details.agent_name  = fromText.name  || null;
+                      details.agent_email = fromText.email || null;
+                      details.agent_phone = fromText.phone || null;
+                    }
+                  }
+                } catch (e) {
+                  logPrivy.warn('Agent extraction fallback failed (non-fatal)', { error: e?.message, fullAddress: prop?.fullAddress || null });
                 }
-              } catch (e) {
-                logPrivy.warn('Agent extraction failed (non-fatal)', { error: e?.message, fullAddress: prop?.fullAddress || null });
               }
 
               normalized.push({
@@ -931,7 +1121,15 @@ await page.evaluate(() => {
               return; // Exit the withDeadline callback
             }
 
-            LC.info('Properties saved for URL', { saved: urlSaved, stateSaved, quickTag: tag || 'none' });
+            // Log agent extraction stats
+            const withAgent = normalized.filter(p => p.details?.agent_name || p.details?.agent_email || p.details?.agent_phone).length;
+            LC.info('Properties saved for URL', {
+              saved: urlSaved,
+              stateSaved,
+              quickTag: tag || 'none',
+              withAgentInfo: withAgent,
+              agentRate: normalized.length ? `${Math.round(withAgent / normalized.length * 100)}%` : '0%'
+            });
           });
           // (No early return here; continue to next URL variant/state)
         } catch (err) {
