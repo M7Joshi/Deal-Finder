@@ -9,7 +9,7 @@ import {
   LinearProgress, Box,
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
-import { apiFetch } from '../helpers';
+import { apiFetch, startService, stopService, getServiceStatus } from '../helpers';
 
 
 const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -272,6 +272,65 @@ export default function Deals() {
   const [autoFetchLimit, setAutoFetchLimit] = useState(10);
   const [autoFetching, setAutoFetching] = useState(false);
   const [autoFetchStatus, setAutoFetchStatus] = useState<string | null>(null);
+
+  // Backend Automation control state
+  const [automationRunning, setAutomationRunning] = useState(false);
+  const [automationStatus, setAutomationStatus] = useState<string | null>(null);
+  const [automationLoading, setAutomationLoading] = useState(false);
+
+  // Check automation status on mount and periodically
+  const checkAutomationStatus = useCallback(async () => {
+    try {
+      const res = await getServiceStatus();
+      setAutomationRunning(res?.running ?? false);
+    } catch (e) {
+      console.error('Failed to check automation status:', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkAutomationStatus();
+    const interval = setInterval(checkAutomationStatus, 30000); // Check every 30s
+    return () => clearInterval(interval);
+  }, [checkAutomationStatus]);
+
+  // Start automation handler
+  const handleStartAutomation = async () => {
+    setAutomationLoading(true);
+    setAutomationStatus(null);
+    try {
+      const res = await startService();
+      if (res?.ok || res?.running) {
+        setAutomationRunning(true);
+        setAutomationStatus('✅ Automation started successfully');
+      } else {
+        setAutomationStatus(`❌ Failed to start: ${res?.error || 'Unknown error'}`);
+      }
+    } catch (e: any) {
+      setAutomationStatus(`❌ Error: ${e?.message || 'Failed to start automation'}`);
+    } finally {
+      setAutomationLoading(false);
+    }
+  };
+
+  // Stop automation handler
+  const handleStopAutomation = async () => {
+    setAutomationLoading(true);
+    setAutomationStatus(null);
+    try {
+      const res = await stopService();
+      if (res?.ok || !res?.running) {
+        setAutomationRunning(false);
+        setAutomationStatus('⏹️ Automation stopped');
+      } else {
+        setAutomationStatus(`❌ Failed to stop: ${res?.error || 'Unknown error'}`);
+      }
+    } catch (e: any) {
+      setAutomationStatus(`❌ Error: ${e?.message || 'Failed to stop automation'}`);
+    } finally {
+      setAutomationLoading(false);
+    }
+  };
 
   // User's allowed states (from API response)
   const [userStates, setUserStates] = useState<string[] | 'all'>('all');
@@ -1052,6 +1111,98 @@ const cleanAddress = (address?: string | null): string => {
         <Card title="Total Properties" value={totals.properties} />
         <Card title="Total Deals" value={totals.deals} />
         <Card title="Not Deals" value={totals.nonDeals} />
+      </div>
+
+      {/* Backend Automation Control */}
+      <div
+        style={{
+          background: '#fff',
+          border: '2px solid #3b82f6',
+          borderRadius: 12,
+          padding: 16,
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, color: '#1d4ed8', fontSize: 16 }}>
+            Backend Automation Service
+          </div>
+          <Chip
+            label={automationRunning ? 'Running' : 'Stopped'}
+            color={automationRunning ? 'success' : 'default'}
+            size="small"
+          />
+        </div>
+
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Button
+            variant="contained"
+            onClick={handleStartAutomation}
+            disabled={automationLoading || automationRunning}
+            sx={{
+              backgroundColor: '#22c55e',
+              '&:hover': { backgroundColor: '#16a34a' },
+              '&:disabled': { backgroundColor: '#9ca3af' },
+              textTransform: 'none',
+              fontWeight: 600,
+              px: 3,
+              py: 1,
+            }}
+          >
+            {automationLoading && !automationRunning ? 'Starting...' : 'Start Automation'}
+          </Button>
+
+          <Button
+            variant="contained"
+            onClick={handleStopAutomation}
+            disabled={automationLoading || !automationRunning}
+            sx={{
+              backgroundColor: '#ef4444',
+              '&:hover': { backgroundColor: '#dc2626' },
+              '&:disabled': { backgroundColor: '#9ca3af' },
+              textTransform: 'none',
+              fontWeight: 600,
+              px: 3,
+              py: 1,
+            }}
+          >
+            {automationLoading && automationRunning ? 'Stopping...' : 'Stop Automation'}
+          </Button>
+
+          <Button
+            variant="outlined"
+            onClick={checkAutomationStatus}
+            disabled={automationLoading}
+            sx={{
+              borderColor: '#3b82f6',
+              color: '#3b82f6',
+              '&:hover': { borderColor: '#1d4ed8', backgroundColor: '#eff6ff' },
+              textTransform: 'none',
+              fontWeight: 600,
+              px: 2,
+            }}
+          >
+            Refresh Status
+          </Button>
+        </div>
+
+        {automationStatus && (
+          <div style={{
+            marginTop: 12,
+            padding: 10,
+            background: automationStatus.includes('❌') ? '#fef2f2' : '#f0fdf4',
+            border: `1px solid ${automationStatus.includes('❌') ? '#fecaca' : '#86efac'}`,
+            borderRadius: 8,
+            color: automationStatus.includes('❌') ? '#dc2626' : '#16a34a',
+            fontSize: 14,
+          }}>
+            {automationStatus}
+          </div>
+        )}
+
+        <div style={{ marginTop: 12, color: '#6b7280', fontSize: 13 }}>
+          Controls the backend automation worker that continuously fetches from Privy & Redfin, gets BofA valuations, and saves to database.
+        </div>
       </div>
 
       {/* Auto Fetch Section */}
