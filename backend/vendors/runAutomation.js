@@ -586,7 +586,12 @@ async function schedulerTick() {
 
     try {
       // Run only AMV jobs
-      await runAutomation(new Set(['bofa', 'scraped_deals_amv']));
+      const amvJobs = new Set(['bofa', 'scraped_deals_amv']);
+      log.info('Scheduler: About to call runAutomation with AMV jobs', {
+        jobs: Array.from(amvJobs)
+      });
+      await runAutomation(amvJobs);
+      log.info('Scheduler: runAutomation AMV completed');
     } catch (e) {
       log.error('Scheduler: AMV run threw', { error: e?.message || String(e) });
     }
@@ -908,6 +913,17 @@ async function runAutomation(jobsInput = SELECTED_JOBS) {
 
   const jobs = toJobSet(jobsInput);
   const jobCount = Math.max(1, jobs.size);
+
+  // Debug logging for job selection
+  log.info('runAutomation: Jobs selected', {
+    inputType: jobsInput instanceof Set ? 'Set' : Array.isArray(jobsInput) ? 'Array' : typeof jobsInput,
+    inputRaw: jobsInput instanceof Set ? Array.from(jobsInput) : jobsInput,
+    jobsResolved: Array.from(jobs),
+    jobCount,
+    hasScrapedDealsAmv: jobs.has('scraped_deals_amv'),
+    hasBofa: jobs.has('bofa')
+  });
+
   if (isRunning) {
     log.warn('runAutomation is already running. Skipping this execution.');
     return;
@@ -1241,6 +1257,11 @@ const selectedStates = stateList; // keep var for logs if needed
 
     // --- ScrapedDeal AMV Fetcher: Get BofA AMV for ScrapedDeal entries without AMV ---
     // This runs during the AMV phase to enrich deals with valuations from BofA
+    log.info('ScrapedDeal AMV: Checking if job should run...', {
+      hasScrapedDealsAmv: jobs.has('scraped_deals_amv'),
+      hasBofa: jobs.has('bofa'),
+      allJobs: Array.from(jobs)
+    });
     if (jobs.has('scraped_deals_amv') || jobs.has('bofa')) {
       tasks.push((async () => {
         try {
