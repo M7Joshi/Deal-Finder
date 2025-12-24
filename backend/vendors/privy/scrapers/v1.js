@@ -704,7 +704,18 @@ async function collectAllCardsWithScrolling(page, {
               agentPhone
             };
           })
-          .filter(x => x.fullAddress && typeof x.fullAddress === 'string');
+          .filter(x => x.fullAddress && typeof x.fullAddress === 'string')
+          // Validate address format - must start with number (street address) and not contain garbage patterns
+          .filter(x => {
+            const addr = x.fullAddress.trim();
+            // Must start with a number (typical street address: "123 Main St")
+            if (!/^\d+\s+\w/.test(addr)) return false;
+            // Reject malformed patterns from wrong DOM elements
+            if (/HRS?\s*AGO|ABOUT THIS HOME|WALKTHROUGH/i.test(addr)) return false;
+            // Must be reasonable length (not too short, not absurdly long)
+            if (addr.length < 10 || addr.length > 200) return false;
+            return true;
+          });
       },
       line1Selector, line2Selector, priceSelector, statSelector
     );
@@ -869,9 +880,17 @@ const scrapePropertiesV1 = async (page) => {
 
     let stateSaved = 0;
 
+    // Track consecutive city failures to skip stuck cities
+    const MAX_CITY_RETRIES = 2; // Max retries before moving to next city
+    let cityRetryCount = 0;
+
     for (let cityIndex = startIndex; cityIndex < stateUrls.length; cityIndex++) {
       const url = stateUrls[cityIndex];
       if (!url) continue;
+
+      // Reset retry count for new city
+      cityRetryCount = 0;
+      let citySavedTotal = 0;
 
       // Build {base + each tag} variants for this state URL
       const includeBase = String(process.env.PRIVY_INCLUDE_BASE || 'false').toLowerCase() === 'true';
@@ -881,7 +900,11 @@ const scrapePropertiesV1 = async (page) => {
         urlVariants.push({ url: withQuickTag(url, param), tag: label });
       }
 
+      let skipToNextCity = false; // Flag to signal skipping to next city
+
       for (const { url: targetUrl, tag } of urlVariants) {
+        if (skipToNextCity) break; // Check if we should skip to next city
+
         // keep the SPA/session warm between navigations
         await page.evaluate(() => {
           try { localStorage.setItem('keepalive', String(Date.now())); } catch (e) {}
@@ -1025,6 +1048,27 @@ await page.evaluate(() => {
 
             const validProperties = properties.filter(prop => prop.fullAddress && typeof prop.fullAddress === 'string');
             const parsed = parseAddresses(validProperties);
+
+            // If no valid properties found after parsing, count as a failed attempt
+            if (parsed.length === 0) {
+              cityRetryCount++;
+              if (cityRetryCount >= MAX_CITY_RETRIES) {
+                LC.warn('No valid addresses found after parsing - moving to next city', {
+                  city: extractCityFromUrl(url),
+                  retries: cityRetryCount,
+                  rawCount: properties.length,
+                  validCount: validProperties.length
+                });
+                skipToNextCity = true;
+                return; // Exit callback
+              }
+              LC.warn('No valid addresses found - will retry', {
+                retry: cityRetryCount,
+                maxRetries: MAX_CITY_RETRIES,
+                rawCount: properties.length
+              });
+              return; // Exit callback, try next tag variant
+            }
 
             const normalized = [];
             for (const prop of parsed) {
@@ -1192,14 +1236,30 @@ await page.evaluate(() => {
               agentRate: normalized.length ? `${Math.round(withAgent / normalized.length * 100)}%` : '0%'
             });
 
-            // If all properties were from wrong state, force a page reload to clear cache
+            // Track successful saves for this city
+            citySavedTotal += urlSaved;
+
+            // If all properties were from wrong state, increment retry counter
             if (skippedWrongState > 0 && urlSaved === 0) {
-              LC.warn('All properties from wrong state - Privy cache issue detected, reloading page');
+              cityRetryCount++;
+              if (cityRetryCount >= MAX_CITY_RETRIES) {
+                LC.warn('Max retries reached for city - moving to next city', {
+                  city: extractCityFromUrl(url),
+                  retries: cityRetryCount,
+                  skippedWrongState
+                });
+                skipToNextCity = true;
+                return; // Exit callback
+              }
+              LC.warn('All properties from wrong state - Privy cache issue, reloading page', {
+                retry: cityRetryCount,
+                maxRetries: MAX_CITY_RETRIES
+              });
               await page.reload({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
               await randomWait(2000, 4000);
             }
           });
-          // (No early return here; continue to next URL variant/state)
+          // (Continue to next URL variant/state unless skipToNextCity is set)
         } catch (err) {
           if (err?.message === 'PRIVY_SESSION_EXPIRED' || err?.message === 'PRIVY_SESSION_UNRECOVERABLE') {
             L.error('Privy session expired and could not be recovered — aborting remaining URLs');

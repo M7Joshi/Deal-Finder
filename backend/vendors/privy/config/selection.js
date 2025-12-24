@@ -6,8 +6,10 @@ export const mapNavSelector = '#map-nav, .map__nav, .mapboxgl-map, ';
 // exclude "" to avoid false positives
 export const propertyListContainerSelector = '.view-container, .grid-view-container, [data-test="property-list"]';
 export const propertyContentSelector = 'div .property-module .content, .property-card, [data-test="property-card"]';
-export const addressLine1Selector = 'address-block > .address > .address-line1, .address > .address-line1';
-export const addressLine2Selector = 'address-block > .address > .address-line2, .address > .address-line2';
+// Address selectors - try multiple patterns to handle DOM changes
+// Primary: .address-line1/.address-line2 | Fallbacks: data-testid, h2 patterns
+export const addressLine1Selector = 'address-block > .address > .address-line1, .address > .address-line1, .address-line1, [data-testid="address-line1"], .property-address .line1, h2.address';
+export const addressLine2Selector = 'address-block > .address > .address-line2, .address > .address-line2, .address-line2, [data-testid="address-line2"], .property-address .line2, .city-state-zip';
 export const priceSelector = '.price-block > .price';
 export const propertyStatsSelector = 'ul.quickstats-horiz > li.quickstat';
 export const userEmailSelector = '#user_email';
