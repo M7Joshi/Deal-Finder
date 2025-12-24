@@ -510,6 +510,10 @@ export function getScraperStatus() {
 // Increment counter when address is scraped (called from Privy scraper)
 export function incrementAddressCount() {
   addressesScrapedThisBatch++;
+  // Log every 50 addresses for visibility
+  if (addressesScrapedThisBatch % 50 === 0) {
+    log.info(`[BatchCounter] Progress: ${addressesScrapedThisBatch}/${SCRAPE_BATCH_LIMIT} addresses scraped`);
+  }
   return addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT;
 }
 
@@ -575,9 +579,20 @@ async function schedulerTick() {
     $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
   });
 
+  // Debug: Log the decision point
+  const shouldEnterAMV = pendingAMV > 0 && (addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT || currentMode === 'amv');
+  log.info('Scheduler: MODE DECISION', {
+    pendingAMV,
+    addressesScrapedThisBatch,
+    batchLimit: SCRAPE_BATCH_LIMIT,
+    currentMode,
+    batchLimitReached: addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT,
+    shouldEnterAMV
+  });
+
   // Decide mode based on pending AMV count
   // If we have pending AMV addresses, process them first
-  if (pendingAMV > 0 && (addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT || currentMode === 'amv')) {
+  if (shouldEnterAMV) {
     currentMode = 'amv';
     log.info('Scheduler: AMV MODE - processing pending addresses', {
       pendingAMV,
