@@ -422,38 +422,24 @@ envVarGroups:
         value: "6000"
 
 services:
-  # ---- Web API (Express) ----
+  # ---- Combined API + Worker (single process) ----
+  # This runs both API server and automation scheduler in one process
+  # so the Stop button works properly
   - type: web
     name: dealfinder-api
     env: docker
     plan: starter
     autoDeploy: true
     dockerfilePath: backend/Dockerfile
-    # If your Dockerfile already defines CMD to start the API, you can omit startCommand.
-    startCommand: npm run api
+    startCommand: node start-combined.js
     envVars:
       - fromGroup: dealfinder-prod
       - key: NODE_ENV
         value: production
       - key: AUTOMATION_WORKER
         value: "0"
-    # Optional: if you have a health endpoint
-    # healthCheckPath: /health
-
-  # ---- Background worker ----
-  - type: worker
-    name: dealfinder-worker
-    env: docker
-    plan: starter
-    autoDeploy: true
-    dockerfilePath: backend/Dockerfile
-    startCommand: npm run worker
-    envVars:
-      - fromGroup: dealfinder-prod
-      - key: NODE_ENV
-        value: production
-      - key: AUTOMATION_WORKER
-        value: "1"
+      - key: RUN_IMMEDIATELY
+        value: "true"
 
   # ---- Frontend (React) ----
   - type: web
