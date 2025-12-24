@@ -472,14 +472,43 @@ function parseSelectedJobs(rawInput) {
 const __REQ = getRequestedJobsRaw();
 const SELECTED_JOBS = parseSelectedJobs(__REQ.raw);
 
-// --- Simple sequential scheduler: run once; when finished, schedule next ---
-// Run every 3 minutes by default (180000 ms)
-const RUN_INTERVAL_MS = Number(process.env.RUN_INTERVAL_MS || 3 * 60 * 1000); // default 3 minutes
+// --- Alternating scheduler: Privy (10 min) -> BofA (10 min) -> repeat ---
+// Each phase runs for 10 minutes by default
+const PHASE_DURATION_MS = Number(process.env.PHASE_DURATION_MS || 10 * 60 * 1000); // 10 minutes per phase
+const RUN_INTERVAL_MS = Number(process.env.RUN_INTERVAL_MS || 3 * 60 * 1000); // interval within phase
 const DISABLE_SCHEDULER =
   String(process.env.DISABLE_SCHEDULER || '').toLowerCase() === '1' ||
   RUN_INTERVAL_MS <= 0;
 let schedulerTimer = null;
 let schedulerEnabled = !DISABLE_SCHEDULER;
+
+// Alternating phase tracker: 'scrape' (Privy/Redfin) or 'amv' (BofA)
+let currentPhase = 'scrape'; // Start with scraping addresses
+let phaseStartTime = Date.now();
+
+function getCurrentPhase() {
+  const elapsed = Date.now() - phaseStartTime;
+  if (elapsed >= PHASE_DURATION_MS) {
+    // Switch phases
+    currentPhase = currentPhase === 'scrape' ? 'amv' : 'scrape';
+    phaseStartTime = Date.now();
+    log.info(`Scheduler: Switching to ${currentPhase.toUpperCase()} phase`, {
+      phase: currentPhase,
+      phaseDurationMs: PHASE_DURATION_MS
+    });
+  }
+  return currentPhase;
+}
+
+function getPhaseJobs(phase) {
+  if (phase === 'scrape') {
+    // Address scraping phase: Privy and Redfin
+    return new Set(['privy', 'redfin']);
+  } else {
+    // AMV fetching phase: BofA for ScrapedDeals
+    return new Set(['bofa', 'scraped_deals_amv']);
+  }
+}
 
 function scheduleNextRun(delayMs = RUN_INTERVAL_MS) {
   try { if (schedulerTimer) clearTimeout(schedulerTimer); } catch {}
@@ -494,15 +523,19 @@ function bootstrapScheduler() {
   const immediate = process.env.RUN_IMMEDIATELY === 'true';
   const bootReq = getRequestedJobsRaw();
   const bootResolved = Array.from(parseSelectedJobs(bootReq.raw));
-  log.info('Scheduler bootstrap', {
+
+  // Log the alternating scheduler configuration
+  log.info('Scheduler bootstrap (ALTERNATING MODE)', {
+    PHASE_DURATION_MS,
     RUN_INTERVAL_MS,
     immediate,
     worker: true,
-    requestedJobs: bootReq.raw,
-    requestedSource: bootReq.source,
-    resolvedJobs: bootResolved,
-     disabled: DISABLE_SCHEDULER
+    scrapePhaseJobs: Array.from(getPhaseJobs('scrape')),
+    amvPhaseJobs: Array.from(getPhaseJobs('amv')),
+    startingPhase: currentPhase,
+    disabled: DISABLE_SCHEDULER
   });
+
   if (DISABLE_SCHEDULER) {
     // One-shot: run immediately and do NOT schedule a follow-up
     schedulerEnabled = false;
@@ -520,16 +553,37 @@ async function schedulerTick() {
     log.info('Scheduler: a run is already in progress — will check again shortly.');
     return scheduleNextRun(5000);
   }
-  log.info('Scheduler: starting runAutomation');
+
+  // Get current phase and determine which jobs to run
+  const phase = getCurrentPhase();
+  const phaseJobs = getPhaseJobs(phase);
+
+  log.info(`Scheduler: starting ${phase.toUpperCase()} phase`, {
+    phase,
+    jobs: Array.from(phaseJobs),
+    phaseElapsedMs: Date.now() - phaseStartTime,
+    phaseDurationMs: PHASE_DURATION_MS
+  });
+
   try {
-    const { raw } = getRequestedJobsRaw();
-    await runAutomation(parseSelectedJobs(raw));
+    await runAutomation(phaseJobs);
   } catch (e) {
     log.error('Scheduler: runAutomation threw', { error: e?.message || String(e) });
   } finally {
     if (schedulerEnabled) {
-      log.info('Scheduler: run finished — scheduling next', { inMs: RUN_INTERVAL_MS });
-      scheduleNextRun(RUN_INTERVAL_MS);
+      // Check if phase should switch
+      const elapsed = Date.now() - phaseStartTime;
+      const remainingInPhase = Math.max(0, PHASE_DURATION_MS - elapsed);
+
+      // If less than RUN_INTERVAL_MS left in phase, wait for phase switch
+      const nextDelay = remainingInPhase < RUN_INTERVAL_MS ? remainingInPhase + 1000 : RUN_INTERVAL_MS;
+
+      log.info('Scheduler: run finished — scheduling next', {
+        inMs: nextDelay,
+        currentPhase: phase,
+        remainingInPhase
+      });
+      scheduleNextRun(nextDelay);
     } else {
       log.info('Scheduler: disabled after run completion.');
     }
