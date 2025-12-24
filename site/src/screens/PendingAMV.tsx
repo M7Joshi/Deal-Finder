@@ -116,12 +116,43 @@ export default function PendingAMV() {
     }
   };
 
+  const handleCleanupInvalid = async () => {
+    if (!window.confirm('This will remove addresses that look like descriptions (not real addresses). Continue?')) {
+      return;
+    }
+    setClearing(true);
+    try {
+      const res = await apiFetch('/api/scraped-deals/cleanup-invalid', { method: 'POST' });
+      const data = await res.json();
+      if (data.ok) {
+        alert(`Removed ${data.deleted} invalid addresses. ${data.after} valid addresses remain.`);
+        loadData();
+      } else {
+        alert('Failed to cleanup: ' + (data.error || 'Unknown error'));
+      }
+    } catch (err: any) {
+      alert('Failed to cleanup: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
     <div style={{ padding: 24, background: '#f8fafc', minHeight: '100vh' }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#111' }}>Pending AMV Queue</h2>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <Button
+            variant="outlined"
+            size="small"
+            color="warning"
+            onClick={handleCleanupInvalid}
+            disabled={clearing}
+            sx={{ textTransform: 'none' }}
+          >
+            {clearing ? 'Cleaning...' : 'Cleanup Invalid'}
+          </Button>
           <Button
             variant="outlined"
             size="small"

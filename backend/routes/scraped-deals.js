@@ -484,6 +484,56 @@ router.post('/clear-all', async (req, res) => {
   }
 });
 
+// POST /api/scraped-deals/cleanup-invalid - Remove records with invalid/malformed addresses
+router.post('/cleanup-invalid', async (req, res) => {
+  try {
+    // Find and delete records where fullAddress looks like description text
+    // Invalid addresses typically:
+    // - Start with numbers followed by words like "from", "Welcome", "Located"
+    // - Contain words like "bedroom", "bath", "sqft" without proper street format
+    // - Are very long (descriptions) instead of addresses
+    // - Don't have a proper state code (2 letters)
+
+    const invalidPatterns = [
+      // Addresses that start with description-like text
+      { fullAddress: { $regex: /^\d+\s+(from|Welcome|Located|This|Beautiful|Lovely|Spacious|Great|Amazing|Stunning)/i } },
+      // Addresses that contain bedroom/bath counts as main text
+      { fullAddress: { $regex: /^\d*\s*(Bedroom|Bath|bed|bath|sqft|sq ft)/i } },
+      // Addresses longer than 200 chars (likely descriptions)
+      { $expr: { $gt: [{ $strLenCP: '$fullAddress' }, 200] } },
+      // Addresses that don't contain a comma (no city/state separation)
+      { fullAddress: { $not: /,/ } },
+      // Addresses that are just fragments like "St" or "Ave"
+      { fullAddress: { $regex: /^(St|Ave|Rd|Dr|Ln|Ct|Blvd|Way|Pl|Cir)\s*,?\s*\d*\s*(Bedroom|Bath)?/i } },
+    ];
+
+    // Count before deletion
+    const countBefore = await ScrapedDeal.countDocuments({});
+
+    // Delete invalid records
+    const result = await ScrapedDeal.deleteMany({ $or: invalidPatterns });
+
+    const countAfter = await ScrapedDeal.countDocuments({});
+
+    L.info('Cleaned up invalid addresses', {
+      deleted: result.deletedCount,
+      before: countBefore,
+      after: countAfter
+    });
+
+    res.json({
+      ok: true,
+      deleted: result.deletedCount,
+      before: countBefore,
+      after: countAfter,
+      message: `Removed ${result.deletedCount} invalid/malformed addresses`
+    });
+  } catch (err) {
+    L.error('Failed to cleanup invalid addresses', { error: err?.message });
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to cleanup' });
+  }
+});
+
 // GET /api/scraped-deals/stats - Get stats for dashboard (filtered by user's states)
 router.get('/stats', async (req, res) => {
   try {
