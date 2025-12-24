@@ -187,19 +187,26 @@ async function extractAgentFromPageText(page) {
         }
       }
 
-      // Email pattern - find all emails, filter out system ones
+      // Email pattern - find all emails, filter out system ones and user's own email
       const emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
       const allEmails = bodyText.match(emailPattern) || [];
+
+      // Get the logged-in user's email to exclude (from header/profile)
+      const userEmailEl = document.querySelector('.user-email, [data-testid="user-email"], .profile-email, .account-email, [class*="user"] [class*="email"]');
+      const userEmail = userEmailEl?.textContent?.trim()?.toLowerCase() || '';
+
       for (const email of allEmails) {
         const lower = email.toLowerCase();
-        // Skip system/platform emails
+        // Skip system/platform emails and logged-in user's own email
         if (lower.includes('privy') ||
             lower.includes('noreply') ||
             lower.includes('support') ||
             lower.includes('info@') ||
             lower.includes('admin') ||
             lower.includes('example.com') ||
-            lower.includes('test.com')) {
+            lower.includes('test.com') ||
+            lower.includes('mioym') ||  // Skip mioym emails (your company)
+            (userEmail && lower === userEmail)) {  // Skip logged-in user's email
           continue;
         }
         result.email = email;
@@ -648,14 +655,23 @@ async function collectAllCardsWithScrolling(page, {
           return null;
         };
 
-        // Get mailto/tel links from card
+        // Get mailto/tel links from card (filter out system/user emails)
         const getAgentContact = (el) => {
           let email = null, phone = null;
           const mailtoLink = el.querySelector('a[href^="mailto:"]');
           if (mailtoLink) {
             const href = mailtoLink.getAttribute('href') || '';
-            email = href.replace('mailto:', '').split('?')[0].trim();
-            if (email.toLowerCase().includes('privy')) email = null;
+            const candidateEmail = href.replace('mailto:', '').split('?')[0].trim();
+            const lower = candidateEmail.toLowerCase();
+            // Skip system/platform emails and mioym emails
+            if (!lower.includes('privy') &&
+                !lower.includes('noreply') &&
+                !lower.includes('mioym') &&
+                !lower.includes('support') &&
+                !lower.includes('info@') &&
+                !lower.includes('admin')) {
+              email = candidateEmail;
+            }
           }
           const telLink = el.querySelector('a[href^="tel:"]');
           if (telLink) {
@@ -1063,12 +1079,34 @@ await page.evaluate(() => {
             }
 
             let urlSaved = 0;
+            let skippedWrongState = 0;
             for (const prop of normalized) {
               try {
                 if (!prop || !prop.fullAddress || typeof prop.fullAddress !== 'string') {
                   logPrivy.warn('Skipping invalid property', { fullAddress: prop?.fullAddress || null, state });
                   continue;
                 }
+
+                // Validate that the address matches the expected state
+                // Extract state from address (e.g., "123 Main St, City, AL 12345" -> "AL")
+                const addressParts = prop.fullAddress.split(',').map(p => p.trim());
+                const lastPart = addressParts[addressParts.length - 1] || '';
+                const stateMatch = lastPart.match(/\b([A-Z]{2})\b/);
+                const addressState = stateMatch ? stateMatch[1] : null;
+
+                if (addressState && addressState !== state) {
+                  // This address is from a different state - skip it (stale data from cache)
+                  skippedWrongState++;
+                  if (skippedWrongState <= 3) {
+                    logPrivy.warn('Skipping address from wrong state (stale cache)', {
+                      expectedState: state,
+                      actualState: addressState,
+                      fullAddress: prop.fullAddress
+                    });
+                  }
+                  continue;
+                }
+
                 await upsertRawProperty(prop);
                 // Mirror numeric & agent details into the main properties collection
                 try {
@@ -1143,15 +1181,23 @@ await page.evaluate(() => {
               return; // Exit the withDeadline callback
             }
 
-            // Log agent extraction stats
+            // Log agent extraction stats and skipped count
             const withAgent = normalized.filter(p => p.details?.agent_name || p.details?.agent_email || p.details?.agent_phone).length;
             LC.info('Properties saved for URL', {
               saved: urlSaved,
               stateSaved,
+              skippedWrongState,
               quickTag: tag || 'none',
               withAgentInfo: withAgent,
               agentRate: normalized.length ? `${Math.round(withAgent / normalized.length * 100)}%` : '0%'
             });
+
+            // If all properties were from wrong state, force a page reload to clear cache
+            if (skippedWrongState > 0 && urlSaved === 0) {
+              LC.warn('All properties from wrong state - Privy cache issue detected, reloading page');
+              await page.reload({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+              await randomWait(2000, 4000);
+            }
           });
           // (No early return here; continue to next URL variant/state)
         } catch (err) {

@@ -37,6 +37,30 @@ function applyUrlFilters(url) {
   return url.replace(/\/?$/, '') + '/filter/' + seg;
 }
 
+// Extract state code from Redfin city URL
+// URL format: https://www.redfin.com/city/30869/FL/Orlando -> "FL"
+function extractStateFromCityUrl(cityUrl) {
+  try {
+    // Pattern: /city/{id}/{STATE}/{CityName}
+    const match = cityUrl.match(/\/city\/\d+\/([A-Z]{2})\//i);
+    return match ? match[1].toUpperCase() : '';
+  } catch {
+    return '';
+  }
+}
+
+// Extract city name from Redfin city URL
+// URL format: https://www.redfin.com/city/30869/FL/Orlando -> "Orlando"
+function extractCityFromCityUrl(cityUrl) {
+  try {
+    // Pattern: /city/{id}/{STATE}/{CityName}
+    const match = cityUrl.match(/\/city\/\d+\/[A-Z]{2}\/([^\/]+)/i);
+    return match ? match[1].replace(/-/g, ' ') : '';
+  } catch {
+    return '';
+  }
+}
+
 async function enumerateIndexPages(cityUrl) {
   const maxPages = Number(process.env.MAX_INDEX_PAGES_PER_CITY || '1');
   const forceFirstRender = String(process.env.REDFIN_FORCE_RENDER || '1') === '1';
@@ -87,7 +111,11 @@ async function enumerateIndexPages(cityUrl) {
 export async function runCity(cityUrl) {
   const maxListings = Number(process.env.MAX_LISTINGS_PER_CITY || '500');
 
-  console.log(`\n=== City: ${cityUrl} ===`);
+  // Extract state and city from the URL for proper storage
+  const stateCode = extractStateFromCityUrl(cityUrl);
+  const cityName = extractCityFromCityUrl(cityUrl);
+
+  console.log(`\n=== City: ${cityName}, ${stateCode} (${cityUrl}) ===`);
 
 // Fetch page 1..N and merge
 const listings = await enumerateIndexPages(cityUrl);
@@ -172,7 +200,7 @@ console.log(`Found ${listings.length} index listings (all pages)`);
       }
 
       await upsertRaw({
-        address, city, state: '', zip: '',
+        address, city: city || cityName, state: stateCode, zip: '',
         price, beds, baths, sqft,
         raw: d.raw || {},
         agentName,
@@ -181,7 +209,7 @@ console.log(`Found ${listings.length} index listings (all pages)`);
 
       await upsertProperty({
         prop_id,
-        address, city, state: '', zip: '',
+        address, city: city || cityName, state: stateCode, zip: '',
         price, beds, baths, sqft, built: d.built ?? null,
         raw: d.raw || {},
         agentName,
