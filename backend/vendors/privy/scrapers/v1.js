@@ -1,5 +1,5 @@
-import { 
-  propertyCountSelector, 
+import {
+  propertyCountSelector,
   mapNavSelector,
   propertyListContainerSelector,
   propertyContentSelector,
@@ -25,6 +25,16 @@ import { clickClustersRecursively } from '../clusterCrawlerGoogleMaps.js';
 import { toNumber } from '../../../utils/normalize.js';
 
 import { applyFilters } from '../filters/filterService.js';
+
+// Import progress tracker for resumable, alphabetical scraping
+import {
+  loadProgress,
+  saveProgress,
+  markCityComplete,
+  markStateComplete,
+  getNextStateToProcess,
+  getProgressSummary,
+} from '../progressTracker.js';
 
 // --- Quick Filters / Tags support (URL mode) ---
 // human label -> URL param key as used by Privy
@@ -167,6 +177,20 @@ function shuffle(array) {
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
+}
+
+/**
+ * Extract city name from Privy URL for logging and sorting
+ */
+function extractCityFromUrl(url) {
+  try {
+    const u = new URL(url);
+    const searchText = u.searchParams.get('search_text') || '';
+    // Decode and clean up: "Albany%2C+NY" -> "Albany, NY"
+    return decodeURIComponent(searchText).replace(/\+/g, ' ');
+  } catch {
+    return url;
+  }
 }
 
 const NAV_TIMEOUT = Number(process.env.PRIVY_NAV_TIMEOUT_MS || 120000);
@@ -562,25 +586,59 @@ const scrapePropertiesV1 = async (page) => {
     throw new Error(`❌ URLs file not found at ${urlsFilePath}`);
   }
   const urls = JSON.parse(fs.readFileSync(urlsFilePath, 'utf-8'));
+
   // Match the size params used in your Privy URLs so virtualization behaves consistently
-try {
-  await page.setViewport({ width: 1947, height: 1029, deviceScaleFactor: 1 });
-} catch {}
-try {
-  await enableRequestBlocking(page);
-} catch {}
+  try {
+    await page.setViewport({ width: 1947, height: 1029, deviceScaleFactor: 1 });
+  } catch {}
+  try {
+    await enableRequestBlocking(page);
+  } catch {}
+
   const allProperties = [];
 
-  const randomizedStates = shuffle(Object.keys(urls));
+  // Load progress to resume from where we left off
+  const progress = loadProgress();
+  logPrivy.info('Privy scraper starting with progress', getProgressSummary(progress));
 
-  for (const state of randomizedStates) {
+  // Get states sorted alphabetically
+  const allStates = Object.keys(urls).sort();
+  logPrivy.info(`Total states available: ${allStates.length}`);
+
+  // Process states alphabetically, resuming from progress
+  for (const state of allStates) {
+    // Skip already completed states in this cycle
+    if (progress.completedStates.includes(state)) {
+      logPrivy.info(`Skipping already completed state: ${state}`);
+      continue;
+    }
+
     const LState = logPrivy.with({ state });
-    LState.start('Processing state');
+    LState.start('Processing state (alphabetical order)');
 
-    const stateUrls = shuffle(urls[state] || []);
+    // Get cities for this state, sorted alphabetically by city name
+    const stateUrls = (urls[state] || []).slice().sort((a, b) => {
+      const cityA = extractCityFromUrl(a).toLowerCase();
+      const cityB = extractCityFromUrl(b).toLowerCase();
+      return cityA.localeCompare(cityB);
+    });
+
+    // Determine starting index (resume from where we left off)
+    let startIndex = 0;
+    if (progress.currentState === state && progress.lastCityIndex >= 0) {
+      startIndex = progress.lastCityIndex + 1;
+      LState.info(`Resuming state from city index ${startIndex}`);
+    } else {
+      // Mark as current state
+      progress.currentState = state;
+      progress.lastCityIndex = -1;
+      saveProgress(progress);
+    }
+
     let stateSaved = 0;
 
-    for (const url of stateUrls) {
+    for (let cityIndex = startIndex; cityIndex < stateUrls.length; cityIndex++) {
+      const url = stateUrls[cityIndex];
       if (!url) continue;
 
       // Build {base + each tag} variants for this state URL
@@ -858,11 +916,23 @@ await page.evaluate(() => {
           continue;
         }
       } // end urlVariants loop
-    }
-    LState.info('State scrape complete', { stateSaved });
+
+      // Mark this city as completed in progress tracker
+      const cityName = extractCityFromUrl(url);
+      markCityComplete(progress, state, cityIndex, url);
+      LState.info(`City completed: ${cityName}`, { cityIndex, totalCities: stateUrls.length });
+    } // end cities loop
+
+    // Mark state as fully completed
+    markStateComplete(progress, state);
+    LState.info('State scrape complete', { stateSaved, state });
   }
 
-  logPrivy.success('Scrape complete', { total: allProperties.length });
+  // Log final progress summary
+  logPrivy.success('Scrape complete', {
+    total: allProperties.length,
+    progress: getProgressSummary(progress)
+  });
   return allProperties;
 };
 
