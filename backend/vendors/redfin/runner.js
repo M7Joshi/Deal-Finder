@@ -6,9 +6,14 @@ import { getCityUrls } from './sitemapEnumerator.js';
 import { FILTERS, passesAll } from './filters.js';
 import { propIdFromUrl, toNumberOrNull, parseBeds, parseBaths, cityFromAddress } from './normalize.js';
 import { upsertRaw, upsertProperty, shouldPauseScraping } from './save.js';
+import { extractAgentDetails } from './agentExtractor.js';
 
 // Import control object for abort checking
 import { control } from '../runAutomation.js';
+
+// Whether to use deep scraping for agent details (slower but more accurate)
+// Set REDFIN_ENRICH_AGENTS=1 to enable Puppeteer-based agent extraction
+const USE_AGENT_ENRICHMENT = String(process.env.REDFIN_ENRICH_AGENTS || '1') === '1';
 
 function uniqueByUrl(arr) {
   const seen = new Set();
@@ -143,12 +148,35 @@ console.log(`Found ${listings.length} index listings (all pages)`);
       const city    = cityFromAddress(address);
       const prop_id = propIdFromUrl(it.url);
 
+      // Try to get agent details from basic parse first
+      let agentName = d.agentName ?? null;
+      let agentEmail = d.agentEmail ?? null;
+      let agentPhone = d.agentPhone ?? null;
+      let brokerage = d.brokerage ?? null;
+
+      // Use Puppeteer deep scraping for agent details if enabled (more accurate)
+      if (USE_AGENT_ENRICHMENT && it.url) {
+        try {
+          console.log(`[Redfin] Deep scraping agent details for: ${it.url}`);
+          const enriched = await extractAgentDetails(it.url);
+          if (enriched) {
+            agentName = enriched.agentName || agentName;
+            agentPhone = enriched.phone || agentPhone;
+            agentEmail = enriched.email || agentEmail;
+            brokerage = enriched.brokerage || brokerage;
+            console.log(`[Redfin] Agent enriched: ${agentName} | ${agentPhone} | ${brokerage}`);
+          }
+        } catch (enrichErr) {
+          console.warn(`[Redfin] Agent enrichment failed for ${it.url}: ${enrichErr.message}`);
+        }
+      }
+
       await upsertRaw({
         address, city, state: '', zip: '',
         price, beds, baths, sqft,
         raw: d.raw || {},
-        agentName: d.agentName ?? null,
-        agentEmail: d.agentEmail ?? null
+        agentName,
+        agentEmail
       });
 
       await upsertProperty({
@@ -156,13 +184,14 @@ console.log(`Found ${listings.length} index listings (all pages)`);
         address, city, state: '', zip: '',
         price, beds, baths, sqft, built: d.built ?? null,
         raw: d.raw || {},
-        agentName: d.agentName ?? null,
-        agentEmail: d.agentEmail ?? null,
-        agentPhone: d.agentPhone ?? null,
+        agentName,
+        agentEmail,
+        agentPhone,
+        brokerage,
       });
 
       saved++;
-      console.log(`✔ Saved ${prop_id} | ${address || '(no address)'} | $${price ?? 'NA'} | ${beds ?? '?'}bd/${baths ?? '?'}ba | ${sqft ?? '?'} sqft`);
+      console.log(`✔ Saved ${prop_id} | ${address || '(no address)'} | $${price ?? 'NA'} | ${beds ?? '?'}bd/${baths ?? '?'}ba | Agent: ${agentName || 'N/A'} | Phone: ${agentPhone || 'N/A'}`);
 
       // Check if we should stop (batch limit reached or abort requested)
       if (control.abort) {

@@ -88,7 +88,7 @@ export async function upsertRaw({ address, city, state, zip, price, beds, baths,
 // Export for runner to check batch limit
 export { shouldPauseScraping };
 
-export async function upsertProperty({ prop_id, address, city, state, zip, price, beds, baths, sqft, built, raw, agentName, agentEmail, agentPhone }) {
+export async function upsertProperty({ prop_id, address, city, state, zip, price, beds, baths, sqft, built, raw, agentName, agentEmail, agentPhone, brokerage }) {
   {
     const fullAddress = address || '';
     const fullAddress_ci = fullAddress.trim().toLowerCase();
@@ -119,6 +119,7 @@ export async function upsertProperty({ prop_id, address, city, state, zip, price
       agentName: agentName ?? null,
       agentEmail: agentEmail ?? null,
       agentPhone: agentPhone ?? null,
+      brokerage: brokerage ?? null,
       // flag downstream pipelines to (re)pull vendor valuations if needed
       needs_vendor_valuations: true
     };
@@ -151,10 +152,11 @@ export async function upsertProperty({ prop_id, address, city, state, zip, price
             beds: num(beds) || null,
             baths: num(baths) || null,
             sqft: num(sqft) || null,
-            // Save agent details from Redfin
+            // Save agent details from Redfin (deep scraped via Puppeteer)
             agentName: agentName || null,
             agentEmail: agentEmail || null,
             agentPhone: agentPhone || null,
+            brokerage: brokerage || null,
             source: 'redfin',
             scrapedAt: new Date(),
           },

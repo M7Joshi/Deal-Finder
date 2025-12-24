@@ -582,13 +582,22 @@ async function schedulerTick() {
   });
 
   // Debug: Log the decision point
-  const shouldEnterAMV = pendingAMV > 0 && (addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT || currentMode === 'amv');
+  // IMPORTANT: If we have significant pending AMV (>100), prioritize AMV mode even on restart
+  // This prevents the scheduler from scraping more addresses when there's a backlog
+  const AMV_BACKLOG_THRESHOLD = 100;
+  const hasAMVBacklog = pendingAMV >= AMV_BACKLOG_THRESHOLD;
+  const shouldEnterAMV = pendingAMV > 0 && (
+    hasAMVBacklog ||  // Always process AMV if backlog exists (even after restart)
+    addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT ||
+    currentMode === 'amv'
+  );
   log.info('Scheduler: MODE DECISION', {
     pendingAMV,
     addressesScrapedThisBatch,
     batchLimit: SCRAPE_BATCH_LIMIT,
     currentMode,
     batchLimitReached: addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT,
+    hasAMVBacklog,
     shouldEnterAMV
   });
 
@@ -1615,17 +1624,21 @@ if (jobs.has('home_valuations')) {
       log.info('Chase job skipped (not selected)');
     }
 
-    // --- Standalone BofA job ---
-    if (jobs.has('bofa')) {
+    // --- Standalone BofA job (for Property collection - legacy) ---
+    // NOTE: For batch scheduler, we use scraped_deals_amv which processes ScrapedDeal collection
+    // Only run standalone BofA job when explicitly requested AND scraped_deals_amv is not running
+    if (jobs.has('bofa') && !jobs.has('scraped_deals_amv')) {
       tasks.push((async () => {
         try {
-          log.start('Running BofA job…');
+          log.start('Running BofA job (legacy Property collection)…');
           await runBofaJob();
           log.success('BofA job finished.');
         } catch (e) {
           log.error('Error in BofA job', { error: e?.message || String(e) });
         }
       })());
+    } else if (jobs.has('bofa') && jobs.has('scraped_deals_amv')) {
+      log.info('BofA job skipped (scraped_deals_amv handles ScrapedDeal AMV)');
     } else {
       log.info('BofA job skipped (not selected)');
     }

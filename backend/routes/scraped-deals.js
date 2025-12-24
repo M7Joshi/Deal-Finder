@@ -195,15 +195,30 @@ router.get('/pending-amv', async (req, res) => {
 });
 
 // GET /api/scraped-deals - Get all scraped deals (filtered by user's states)
+// NOTE: Only returns addresses that have AMV data (excludes pending AMV addresses)
+// Use /pending-amv endpoint to see addresses waiting for BofA AMV
 router.get('/', async (req, res) => {
   try {
-    const { source, state, limit = 100, skip = 0 } = req.query;
+    const { source, state, limit = 100, skip = 0, includePending } = req.query;
 
     // Start with user's state filter from middleware
     const filter = { ...req.stateFilter };
     if (source) filter.source = source;
     // Allow further state filtering only within user's allowed states
     if (state) filter.state = String(state).toUpperCase();
+
+    // By default, only show addresses that have AMV data (not pending)
+    // Set includePending=true to see all addresses including those without AMV
+    if (includePending !== 'true') {
+      // Exclude addresses without AMV (pending BofA fetch)
+      // AMV > 0 means has value, AMV = -1 means BofA has no data (still show these)
+      // Use $and to combine multiple conditions on same field
+      filter.$and = [
+        { amv: { $exists: true } },
+        { amv: { $ne: null } },
+        { amv: { $ne: 0 } }
+      ];
+    }
 
     const deals = await ScrapedDeal.find(filter)
       .sort({ createdAt: -1 })
