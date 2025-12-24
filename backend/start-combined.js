@@ -1,49 +1,35 @@
 // start-combined.js
-// Runs both API server and automation worker in a single process
+// Runs both API server and automation worker in a SINGLE process
+// This ensures the stop signal works for both API and automation
 
-import { spawn } from 'child_process';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import './server.js'; // Start API server (AUTOMATION_WORKER not set = API mode)
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Give API a moment to initialize, then import runAutomation to start the scheduler
+setTimeout(async () => {
+  console.log('[Combined] Starting automation scheduler in same process...');
 
-console.log('[Combined] Starting API server and Automation worker...');
+  try {
+    // Import runAutomation.js and manually start the scheduler
+    // Since we're in the same process, control.abort will work!
+    const { startSchedulerManually } = await import('./vendors/runAutomation.js');
 
-// Start API server (AUTOMATION_WORKER=0)
-const api = spawn('node', ['server.js'], {
-  cwd: __dirname,
-  env: { ...process.env, AUTOMATION_WORKER: '0' },
-  stdio: 'inherit'
-});
+    // Start the scheduler manually (since AUTOMATION_WORKER isn't set)
+    startSchedulerManually();
 
-// Give API a moment to start, then start worker
-setTimeout(() => {
-  console.log('[Combined] Starting automation worker...');
-
-  // Start Worker (AUTOMATION_WORKER=1)
-  const worker = spawn('node', ['server.js'], {
-    cwd: __dirname,
-    env: { ...process.env, AUTOMATION_WORKER: '1' },
-    stdio: 'inherit'
-  });
-
-  worker.on('exit', (code) => {
-    console.log(`[Combined] Worker exited with code ${code}`);
-  });
-}, 5000);
-
-api.on('exit', (code) => {
-  console.log(`[Combined] API exited with code ${code}`);
-  process.exit(code);
-});
+    console.log('[Combined] Automation scheduler started in same process');
+    console.log('[Combined] Stop button will now work for both API and automation!');
+  } catch (e) {
+    console.error('[Combined] Failed to start automation:', e.message);
+  }
+}, 3000);
 
 // Handle signals
 process.on('SIGTERM', () => {
   console.log('[Combined] SIGTERM received, shutting down...');
-  api.kill('SIGTERM');
+  process.exit(0);
 });
 
 process.on('SIGINT', () => {
   console.log('[Combined] SIGINT received, shutting down...');
-  api.kill('SIGINT');
+  process.exit(0);
 });

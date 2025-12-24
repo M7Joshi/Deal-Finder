@@ -1581,6 +1581,17 @@ if (jobs.has('home_valuations')) {
   }
 }
 
+// Export function to manually start scheduler (for single-process mode)
+export function startSchedulerManually() {
+  if (schedulerEnabled) {
+    log.info('Scheduler already enabled');
+    return;
+  }
+  log.info('Starting scheduler manually (single-process mode)');
+  schedulerEnabled = true;
+  bootstrapScheduler();
+}
+
 // Bootstrap the sequential scheduler (only in worker mode is now handled above)
 if (!IS_WORKER) {
   log.info('Scheduler bootstrap skipped (API mode)', { worker: false });
