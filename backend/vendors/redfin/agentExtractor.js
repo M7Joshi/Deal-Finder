@@ -7,44 +7,101 @@ puppeteer.use(StealthPlugin());
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+// ============ SHARED BROWSER FOR SPEED ============
+// Reuse a single browser instance instead of launching new one each time
+let sharedBrowser = null;
+let browserLaunchPromise = null;
+let pageCount = 0;
+const MAX_PAGES_BEFORE_RESTART = 50; // Restart browser every 50 pages to prevent memory leaks
+
+async function getSharedBrowser() {
+  // Check if browser needs restart (memory management)
+  if (sharedBrowser && pageCount >= MAX_PAGES_BEFORE_RESTART) {
+    console.log('[AgentExtractor] Restarting browser after', pageCount, 'pages');
+    try { await sharedBrowser.close(); } catch {}
+    sharedBrowser = null;
+    pageCount = 0;
+  }
+
+  // Return existing browser if connected
+  if (sharedBrowser && sharedBrowser.isConnected()) {
+    return sharedBrowser;
+  }
+
+  // Prevent multiple simultaneous browser launches
+  if (browserLaunchPromise) {
+    return browserLaunchPromise;
+  }
+
+  console.log('[AgentExtractor] Launching shared browser...');
+  browserLaunchPromise = puppeteer.launch({
+    headless: 'new',
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--disable-gpu',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-sync',
+      '--disable-translate',
+      '--metrics-recording-only',
+      '--no-first-run'
+    ]
+  });
+
+  sharedBrowser = await browserLaunchPromise;
+  browserLaunchPromise = null;
+  pageCount = 0;
+
+  console.log('[AgentExtractor] Shared browser ready');
+  return sharedBrowser;
+}
+
+// Close shared browser (call when done with batch)
+export async function closeSharedBrowser() {
+  if (sharedBrowser) {
+    try {
+      await sharedBrowser.close();
+      console.log('[AgentExtractor] Shared browser closed');
+    } catch {}
+    sharedBrowser = null;
+    pageCount = 0;
+  }
+}
+
 /**
  * Extract agent details from a Redfin property detail page
  * @param {string} propertyUrl - Full URL to the Redfin property page
  * @returns {Object} Agent details including name, phone, email, brokerage
  */
 export async function extractAgentDetails(propertyUrl) {
-  let browser = null;
+  let page = null;
 
   try {
     console.log(`[AgentExtractor] Extracting agent details from: ${propertyUrl}`);
 
-    browser = await puppeteer.launch({
-      headless: 'new',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--disable-gpu'
-      ]
-    });
+    const browser = await getSharedBrowser();
+    page = await browser.newPage();
+    pageCount++;
 
-    const page = await browser.newPage();
     await page.setUserAgent(USER_AGENT);
 
-    // Navigate to property page
+    // Navigate to property page (reduced timeout for speed)
     await page.goto(propertyUrl, {
-      waitUntil: 'networkidle2',
-      timeout: 60000
+      waitUntil: 'domcontentloaded', // Faster than networkidle2
+      timeout: 30000
     });
 
-    await sleep(3000);
+    // Reduced initial wait (agent info loads quickly)
+    await sleep(1500);
 
-    // Scroll to bottom of page to ensure all content is loaded (including agent info at bottom)
+    // Quick scroll to bottom to trigger lazy loading
     await page.evaluate(async () => {
       await new Promise((resolve) => {
         let totalHeight = 0;
-        const distance = 500;
+        const distance = 800; // Larger jumps for speed
         const timer = setInterval(() => {
           const scrollHeight = document.body.scrollHeight;
           window.scrollBy(0, distance);
@@ -54,12 +111,12 @@ export async function extractAgentDetails(propertyUrl) {
             clearInterval(timer);
             resolve();
           }
-        }, 100);
+        }, 50); // Faster interval
       });
     });
 
-    // Wait for any lazy-loaded content
-    await sleep(2000);
+    // Reduced wait for lazy-loaded content
+    await sleep(1000);
 
     // Extract agent information
     const agentInfo = await page.evaluate(() => {
@@ -176,6 +233,29 @@ export async function extractAgentDetails(propertyUrl) {
         }
       }
 
+      // LAST RESORT for email: Search for email pattern in page text
+      if (!result.email) {
+        // Match common email patterns, excluding system emails
+        const emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+        const allEmails = normalizedText.match(emailPattern) || [];
+        for (const email of allEmails) {
+          const lower = email.toLowerCase();
+          // Skip system/platform emails
+          if (lower.includes('redfin.com') ||
+              lower.includes('redfin.net') ||
+              lower.includes('noreply') ||
+              lower.includes('fmls.com') ||
+              lower.includes('mls.com') ||
+              lower.includes('example.com') ||
+              lower.includes('test.com')) {
+            continue;
+          }
+          result.email = email;
+          result._debug.emailSource = 'textPattern';
+          break;
+        }
+      }
+
       // Extract license
       const licenseEl = document.querySelector('.agent-basic-details--license');
       if (licenseEl) {
@@ -242,18 +322,25 @@ export async function extractAgentDetails(propertyUrl) {
       if (agentInfo._debug.phoneSource) {
         console.log(`[AgentExtractor] Phone source: ${agentInfo._debug.phoneSource}`);
       }
+      if (agentInfo._debug.emailSource) {
+        console.log(`[AgentExtractor] Email source: ${agentInfo._debug.emailSource}`);
+      }
       delete agentInfo._debug;
     }
 
-    await browser.close();
+    // Close just the page, not the browser (reuse browser for next extraction)
+    if (page) {
+      try { await page.close(); } catch {}
+    }
 
     console.log(`[AgentExtractor] Found agent:`, agentInfo);
     return agentInfo;
 
   } catch (error) {
     console.error(`[AgentExtractor] Error extracting agent details:`, error.message);
-    if (browser) {
-      try { await browser.close(); } catch {}
+    // Close just the page on error, keep browser alive
+    if (page) {
+      try { await page.close(); } catch {}
     }
     return {
       agentName: null,

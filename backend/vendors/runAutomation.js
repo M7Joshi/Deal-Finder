@@ -483,10 +483,10 @@ function parseSelectedJobs(rawInput) {
 const __REQ = getRequestedJobsRaw();
 const SELECTED_JOBS = parseSelectedJobs(__REQ.raw);
 
-// --- Batch-based scheduler: Scrape 500 addresses, then fetch AMV for all ---
+// --- Batch-based scheduler: Scrape addresses, then fetch AMV for all ---
 // This prevents building up a huge backlog of addresses without AMV
 const RUN_INTERVAL_MS = Number(process.env.RUN_INTERVAL_MS || 1 * 60 * 1000); // 1 minute between cycles
-const SCRAPE_BATCH_LIMIT = Number(process.env.SCRAPE_BATCH_LIMIT || 500); // Max addresses to scrape before AMV
+const SCRAPE_BATCH_LIMIT = Number(process.env.SCRAPE_BATCH_LIMIT || 100); // Max addresses to scrape before AMV (100 for testing)
 const DISABLE_SCHEDULER =
   String(process.env.DISABLE_SCHEDULER || '').toLowerCase() === '1' ||
   RUN_INTERVAL_MS <= 0;
@@ -582,9 +582,9 @@ async function schedulerTick() {
   });
 
   // Debug: Log the decision point
-  // IMPORTANT: If we have significant pending AMV (>100), prioritize AMV mode even on restart
+  // IMPORTANT: If we have significant pending AMV (>50), prioritize AMV mode even on restart
   // This prevents the scheduler from scraping more addresses when there's a backlog
-  const AMV_BACKLOG_THRESHOLD = 100;
+  const AMV_BACKLOG_THRESHOLD = Math.max(50, Math.floor(SCRAPE_BATCH_LIMIT / 2));
   const hasAMVBacklog = pendingAMV >= AMV_BACKLOG_THRESHOLD;
   const shouldEnterAMV = pendingAMV > 0 && (
     hasAMVBacklog ||  // Always process AMV if backlog exists (even after restart)

@@ -6,7 +6,7 @@ import { getCityUrls } from './sitemapEnumerator.js';
 import { FILTERS, passesAll } from './filters.js';
 import { propIdFromUrl, toNumberOrNull, parseBeds, parseBaths, cityFromAddress } from './normalize.js';
 import { upsertRaw, upsertProperty, shouldPauseScraping } from './save.js';
-import { extractAgentDetails } from './agentExtractor.js';
+import { extractAgentDetails, closeSharedBrowser } from './agentExtractor.js';
 
 // Import control object for abort checking
 import { control } from '../runAutomation.js';
@@ -199,7 +199,7 @@ console.log(`Found ${listings.length} index listings (all pages)`);
         break;
       }
       if (shouldPauseScraping()) {
-        console.log('[Redfin] Batch limit reached (500 addresses), pausing to process AMV');
+        console.log('[Redfin] Batch limit reached, pausing to process AMV');
         break;
       }
     } catch (e) {
@@ -216,17 +216,22 @@ export async function runAllCities() {
   const cities = await getCityUrls(maxCities);
   console.log(`Total cities: ${cities.length}`);
 
-  for (const c of cities) {
-    // Check abort/batch limit before each city
-    if (control.abort) {
-      console.log('[Redfin] Abort signal received, stopping all cities');
-      break;
-    }
-    if (shouldPauseScraping()) {
-      console.log('[Redfin] Batch limit reached, stopping to process AMV');
-      break;
-    }
+  try {
+    for (const c of cities) {
+      // Check abort/batch limit before each city
+      if (control.abort) {
+        console.log('[Redfin] Abort signal received, stopping all cities');
+        break;
+      }
+      if (shouldPauseScraping()) {
+        console.log('[Redfin] Batch limit reached, stopping to process AMV');
+        break;
+      }
 
-    await runCity(c.url);
+      await runCity(c.url);
+    }
+  } finally {
+    // Clean up shared browser when done with all cities
+    await closeSharedBrowser();
   }
 }
