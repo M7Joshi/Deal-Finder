@@ -386,6 +386,7 @@ async function submitOtpForm(page) {
 }
 
 async function trustThisDeviceIfPresent(page) {
+  // This is optional - don't block or fail if checkbox not found
   const candidates = [
     'input[type="checkbox"][name*="trust" i]',
     'input[type="checkbox"][id*="trust" i]',
@@ -393,25 +394,23 @@ async function trustThisDeviceIfPresent(page) {
     'input[type="checkbox"][id*="remember" i]',
     'label[for*="trust" i]',
     'label[for*="remember" i]',
-    '//label[contains(., "Trust this device")]',
-    '//label[contains(., "Remember this device")]',
-    '//label[contains(., "Don\'t ask again")]',
-    '//span[contains(., "Trust this device")]',
-    '//span[contains(., "Remember this device")]',
-    '//div[contains(@class, "checkbox")]//input',
   ];
   try {
-    const found = await waitForAnySelector(page, candidates, { timeout: 2000, visible: true });
+    // Very short timeout - don't wait long, just check if it's there
+    const found = await waitForAnySelector(page, candidates, { timeout: 500, visible: true });
     if (found) {
       log.info('Found "Trust this device" checkbox, clicking it');
       try {
         await found.handle.click({ delay: 40 });
         log.info('Clicked "Trust this device" checkbox');
       } catch (e) {
-        log.warn('Failed to click trust checkbox', { error: e?.message });
+        // Non-fatal - just log and continue
+        log.debug('Could not click trust checkbox (non-fatal)', { error: e?.message });
       }
     }
-  } catch {}
+  } catch {
+    // Checkbox not found - that's fine, continue without it
+  }
 }
 
 // ---------- auth probes ----------
