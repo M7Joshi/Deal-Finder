@@ -59,13 +59,21 @@ function extractAddress(container) {
   // Try comprehensive regex first
   const match = cardText.match(ADDRESS_RE);
   if (match) {
-    return match[0].trim().replace(/[,.]$/, '');
+    const candidate = match[0].trim().replace(/[,.]$/, '');
+    // Skip if it looks like a description (contains "sq ft", "beds", "baths", etc.)
+    if (!/sq\s*ft|beds?|baths?|residence|offers|layout|about\s*this/i.test(candidate)) {
+      return candidate;
+    }
   }
 
   // Strategy 3: Simpler regex fallback
   const simpleMatch = cardText.match(ADDRESS_SIMPLE_RE);
   if (simpleMatch) {
-    return simpleMatch[0].trim().replace(/[,.\s]$/, '');
+    const candidate = simpleMatch[0].trim().replace(/[,.\s]$/, '');
+    // Skip if it looks like a description
+    if (!/sq\s*ft|beds?|baths?|residence|offers|layout|about\s*this/i.test(candidate)) {
+      return candidate;
+    }
   }
 
   // Strategy 4: Look for any element with class containing "Address" but be strict
@@ -78,6 +86,29 @@ function extractAddress(container) {
     }
   }
 
+  return null;
+}
+
+// Extract address from URL like /AL/Auburn/1471-S-Donahue-Dr-36832/home/123
+function extractAddressFromUrl(url) {
+  try {
+    const pathname = new URL(url).pathname;
+    // Pattern: /STATE/City/Address-With-Dashes-Zip/home/id
+    const match = pathname.match(/\/([A-Z]{2})\/([^/]+)\/([^/]+)-(\d{5})\/home\/\d+/i);
+    if (match) {
+      const city = match[2].replace(/-/g, ' ');
+      const addressPart = match[3].replace(/-/g, ' ');
+      const zip = match[4];
+      return `${addressPart}, ${city}, ${match[1]} ${zip}`;
+    }
+    // Try simpler pattern without zip
+    const simpleMatch = pathname.match(/\/([A-Z]{2})\/([^/]+)\/([^/]+)\/home\/\d+/i);
+    if (simpleMatch) {
+      const city = simpleMatch[2].replace(/-/g, ' ');
+      const addressPart = simpleMatch[3].replace(/-/g, ' ');
+      return `${addressPart}, ${city}, ${simpleMatch[1]}`;
+    }
+  } catch {}
   return null;
 }
 
@@ -110,7 +141,8 @@ export function parseIndexHtml(html) {
     const price = parsePrice(priceText);
 
     // ✅ Use improved address extraction with multiple fallbacks
-    const address = extractAddress(container);
+    const fullUrl = new URL(href, 'https://www.redfin.com').toString();
+    const address = extractAddress(container) || extractAddressFromUrl(fullUrl);
 
     const statsText = container
       .find('[class*="Stats"], [data-rf-test-id*="homecard"]')
@@ -123,7 +155,7 @@ export function parseIndexHtml(html) {
     const mSqft  = statsText.match(/([\d,]+)\s*Sq\.?\s*Ft/i);
 
     results.push({
-      url: new URL(href, 'https://www.redfin.com').toString(),
+      url: fullUrl,
       priceText,         // keep for diagnostics
       price,             // <-- use THIS in your saver: Number | null
       address,
