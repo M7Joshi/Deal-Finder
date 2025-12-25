@@ -10,6 +10,8 @@
  */
 
 import { ImapFlow } from 'imapflow';
+import fs from 'fs';
+import path from 'path';
 import { log as rootLog } from '../utils/logger.js';
 
 const log = rootLog.child('emailOtpFetcher');
@@ -18,8 +20,47 @@ const log = rootLog.child('emailOtpFetcher');
 const GMAIL_USER = process.env.GMAIL_IMAP_USER || process.env.PRIVY_EMAIL;
 const GMAIL_APP_PASSWORD = process.env.GMAIL_IMAP_APP_PASSWORD;
 
+// Persist lastSeenUid to survive restarts
+const LAST_UID_FILE = process.env.OTP_LAST_UID_FILE ||
+  (process.env.NODE_ENV === 'production' ? '/var/data/otp-last-uid.json' : 'var/otp-last-uid.json');
+
 // Track last seen email UID to avoid reusing old OTPs
 let lastSeenUid = 0;
+
+// Load lastSeenUid from disk on startup
+function loadLastSeenUid() {
+  try {
+    if (fs.existsSync(LAST_UID_FILE)) {
+      const data = JSON.parse(fs.readFileSync(LAST_UID_FILE, 'utf8'));
+      if (data.lastSeenUid && typeof data.lastSeenUid === 'number') {
+        lastSeenUid = data.lastSeenUid;
+        log.info('Loaded lastSeenUid from disk', { lastSeenUid, savedAt: data.savedAt });
+      }
+    }
+  } catch (e) {
+    log.warn('Failed to load lastSeenUid from disk', { error: e.message });
+  }
+}
+
+// Save lastSeenUid to disk
+function saveLastSeenUid() {
+  try {
+    const dir = path.dirname(LAST_UID_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(LAST_UID_FILE, JSON.stringify({
+      lastSeenUid,
+      savedAt: new Date().toISOString()
+    }), 'utf8');
+    log.debug('Saved lastSeenUid to disk', { lastSeenUid });
+  } catch (e) {
+    log.warn('Failed to save lastSeenUid to disk', { error: e.message });
+  }
+}
+
+// Load on module init
+loadLastSeenUid();
 
 // Regex patterns to extract 6-digit OTP codes
 const OTP_PATTERNS = [
@@ -260,6 +301,7 @@ export async function fetchOtpFromEmail({
             if (!isPrivyEmail) {
               log.debug('Email does not appear to be from Privy, skipping', { uid: latestUid });
               lastSeenUid = latestUid;
+              saveLastSeenUid();
               continue;
             }
 
@@ -275,6 +317,7 @@ export async function fetchOtpFromEmail({
 
               // Update last seen UID to avoid reusing this OTP
               lastSeenUid = latestUid;
+              saveLastSeenUid();
 
               // Mark email as read
               try {
@@ -287,6 +330,7 @@ export async function fetchOtpFromEmail({
             } else {
               log.warn('Found new Privy email but could not extract OTP', { uid: latestUid });
               lastSeenUid = latestUid;
+              saveLastSeenUid();
             }
           }
         }

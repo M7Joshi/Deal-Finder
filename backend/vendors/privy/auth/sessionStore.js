@@ -1,7 +1,9 @@
 import fs from 'fs';
 import path from 'node:path';
 
-const STORE = process.env.PRIVY_SESSION_FILE || path.join(process.cwd(), 'var/privy-session.json');
+// Use /var/data on Render (persistent disk) or local var/ for development
+const STORE = process.env.PRIVY_SESSION_FILE ||
+  (process.env.NODE_ENV === 'production' ? '/var/data/privy-session.json' : path.join(process.cwd(), 'var/privy-session.json'));
 
 export function hasFreshPrivySession(maxAgeMs = 24 * 60 * 60 * 1000) {
   try {
@@ -28,7 +30,12 @@ export async function saveSessionCookies(page) {
       STORE,
       JSON.stringify({ cookies, savedAt: new Date().toISOString() }, null, 2)
     );
-  } catch {
-    // silently ignore errors
+    console.log(`[SessionStore] Saved ${cookies.length} cookies to ${STORE}`);
+  } catch (e) {
+    console.warn(`[SessionStore] Failed to save cookies: ${e.message}`);
   }
+}
+
+export function getSessionStorePath() {
+  return STORE;
 }
