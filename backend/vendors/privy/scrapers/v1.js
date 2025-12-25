@@ -1020,28 +1020,27 @@ const scrapePropertiesV1 = async (page) => {
       const url = stateUrls[cityIndex];
       if (!url) continue;
 
+      // Get city name for logging
+      const cityName = stateCities[cityIndex] || extractCityFromUrl(url);
+
       // Reset retry count for new city
       cityRetryCount = 0;
       let citySavedTotal = 0;
 
-      // Build {base + each tag} variants for this state URL
-      const includeBase = String(process.env.PRIVY_INCLUDE_BASE || 'false').toLowerCase() === 'true';
-      const urlVariants = [];
-      if (includeBase) urlVariants.push({ url, tag: null });
-      for (const [label, param] of QUICK_TAGS) {
-        urlVariants.push({ url: withQuickTag(url, param), tag: label });
+      // SIMPLIFIED: Just use the base URL with all filters (no tag variants)
+      // The buildPrivyUrl already includes all necessary filters
+      const targetUrl = url;
+
+      // Check for abort signal before processing
+      if (control.abort) {
+        logPrivy.warn('🛑 Stop requested - aborting URL processing');
+        return []; // Exit immediately
       }
 
-      let skipToNextCity = false; // Flag to signal skipping to next city
+      LState.info(`📍 Processing city: ${cityName} (${cityIndex + 1}/${stateUrls.length})`);
 
-      for (const { url: targetUrl, tag } of urlVariants) {
-        if (skipToNextCity) break; // Check if we should skip to next city
-
-        // Check for abort signal before processing each URL variant
-        if (control.abort) {
-          logPrivy.warn('🛑 Stop requested - aborting URL processing');
-          return []; // Exit immediately
-        }
+      {
+        // Single scrape per city - get ALL addresses with filters applied
 
         // keep the SPA/session warm between navigations
         await page.evaluate(() => {
@@ -1049,7 +1048,7 @@ const scrapePropertiesV1 = async (page) => {
         }).catch(() => {});
 
         // Scoped logger auto-includes state + url on every line
-        const L = LState.with({ url: targetUrl, quickTag: tag || 'none' });
+        const L = LState.with({ url: targetUrl, city: cityName });
         try {
           L.http('Navigating');
           await navigateWithSession(page, targetUrl, { retries: 2 });
@@ -1099,7 +1098,7 @@ await page.evaluate(() => {
             });
 
             const LC = L.with({ count: loadedCount ?? 'unknown' });
-            LC.info('Scraping properties from URL', { quickTag: tag || 'none' });
+            LC.info('Scraping properties from URL', { city: cityName });
 
             // 2) Collect cards currently mounted
             await page.waitForSelector(propertyListContainerSelector);
@@ -1205,7 +1204,7 @@ await page.evaluate(() => {
                 maxRetries: MAX_CITY_RETRIES,
                 rawCount: properties.length
               });
-              return; // Exit callback, try next tag variant
+              return; // Exit callback, try next city
             }
 
             const normalized = [];
@@ -1375,7 +1374,7 @@ await page.evaluate(() => {
               saved: urlSaved,
               stateSaved,
               skippedWrongState,
-              quickTag: tag || 'none',
+              city: cityName,
               withAgentInfo: withAgent,
               agentRate: normalized.length ? `${Math.round(withAgent / normalized.length * 100)}%` : '0%'
             });
@@ -1384,7 +1383,7 @@ await page.evaluate(() => {
             citySavedTotal += urlSaved;
 
             // If all properties were from wrong state, this is a stale cache issue
-            // Don't retry - just skip to next city/tag since Privy's SPA cache is corrupted
+            // Don't retry - just skip to next city since Privy's SPA cache is corrupted
             if (skippedWrongState > 0 && urlSaved === 0) {
               LC.warn('All properties from wrong state - Privy SPA cache stale, skipping to next', {
                 city: extractCityFromUrl(url),
@@ -1408,10 +1407,10 @@ await page.evaluate(() => {
             L.error('Privy session expired and could not be recovered — aborting remaining URLs');
             throw err;
           }
-          L.warn('Timeout or error on URL — skipping', { error: err.message, quickTag: tag || 'none' });
+          L.warn('Timeout or error on URL — skipping', { error: err.message, city: cityName });
           continue;
         }
-      } // end urlVariants loop
+      } // end city processing block
 
       // Check batch limit after each city
       if (shouldPauseScraping()) {
@@ -1424,7 +1423,6 @@ await page.evaluate(() => {
       }
 
       // Mark this city as completed in progress tracker
-      const cityName = extractCityFromUrl(url);
       markCityComplete(progress, state, cityIndex, url);
       LState.info(`City completed: ${cityName}`, { cityIndex, totalCities: stateUrls.length });
     } // end cities loop
