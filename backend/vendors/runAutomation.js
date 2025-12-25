@@ -578,9 +578,15 @@ async function bootstrapScheduler() {
 // Simple linear scheduler:
 // Step 1: Redfin scrapes addresses
 // Step 2: BofA gets valuations
-// Step 3: Privy scrapes addresses
-// Step 4: BofA gets valuations
+// Step 3: Cooldown (rest)
+// Step 4: Privy scrapes addresses
+// Step 5: BofA gets valuations
+// Step 6: Cooldown (rest)
 // Repeat...
+
+// Cooldown period between cycles (in milliseconds)
+// Default: 1 minute. Set COOLDOWN_MS env var to override.
+const COOLDOWN_MS = Number(process.env.COOLDOWN_MS || 60000);
 
 async function schedulerTick() {
   if (!schedulerEnabled) return;
@@ -599,7 +605,7 @@ async function schedulerTick() {
     return scheduleNextRun(5000);
   }
 
-  // Simple linear flow: scrapeSource -> bofa -> alternate scrapeSource -> bofa -> repeat
+  // Simple linear flow: scrapeSource -> bofa -> cooldown -> alternate scrapeSource -> bofa -> cooldown -> repeat
   // scrapeSource starts as 'redfin', then alternates to 'privy'
 
   log.info('Scheduler: LINEAR FLOW', {
@@ -644,13 +650,15 @@ async function schedulerTick() {
     currentMode = 'scrape';
     resetBatchCounter();
 
-    log.info('Scheduler: BofA done, switching scraper', {
+    log.info('Scheduler: BofA done, cooling down before next scraper', {
       previousSource,
-      nextSource: scrapeSource
+      nextSource: scrapeSource,
+      cooldownMs: COOLDOWN_MS
     });
 
     if (schedulerEnabled) {
-      scheduleNextRun(0); // Run next scraper immediately
+      // REST/COOLDOWN before starting next scraper
+      scheduleNextRun(COOLDOWN_MS);
     }
     return;
   }
