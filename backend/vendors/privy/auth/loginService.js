@@ -773,14 +773,44 @@ export async function loginToPrivy(page) {
       return true;
     }
 
-    // === OTP branch detection (now includes /sessions/*) ===
-    let onOtpScreen =
-      looksLikeOtpUrl(currentUrl) ||
-      !!(await waitForAnySelector(page, OTP_INPUT_SELECTORS, { timeout: 1500, visible: true }));
+    // === OTP branch detection ===
+    // IMPORTANT: Only trigger OTP flow if we actually SEE an OTP input field.
+    // Don't rely on URL patterns alone - Privy may pass through /sessions/ briefly
+    // before auto-redirecting to /dashboard when session is trusted.
 
-    // If we’re on sessions/* without visible inputs, coerce to OTP
-    if (!onOtpScreen && /\/sessions\//.test(currentUrl) && !/\/dashboard/.test(currentUrl)) {
-      L.warn('Stuck on sessions/* interstitial; coercing into OTP…');
+    // First, give Privy a moment to auto-redirect if session is trusted
+    await randomWait(1500, 2500);
+    const urlAfterWait = page.url();
+
+    // If we landed on dashboard after waiting, skip OTP entirely
+    if (/\/dashboard/.test(urlAfterWait)) {
+      L.success('Auto-redirected to dashboard (session trusted); skipping OTP flow');
+      try { await sessionStore.saveSessionCookies(page); } catch (e) { log.warn('Could not persist Privy session cookies', { error: e?.message }); }
+      try { cancelOtpUnified('auto logged in'); } catch {}
+      __privyLoginInFlight = false;
+      return true;
+    }
+
+    // Only check for OTP if we're actually seeing OTP inputs (not just URL pattern)
+    let onOtpScreen = !!(await waitForAnySelector(page, OTP_INPUT_SELECTORS, { timeout: 3000, visible: true }));
+
+    // If no OTP inputs found but stuck on /sessions/*, try to coerce into OTP
+    if (!onOtpScreen && /\/sessions\//.test(urlAfterWait) && !/\/dashboard/.test(urlAfterWait)) {
+      L.warn('On sessions/* without visible OTP inputs; checking if OTP is needed…');
+      // Wait a bit more - Privy SPA might still be loading
+      await randomWait(2000, 3000);
+
+      // Check URL again - might have auto-redirected
+      const urlAfterExtraWait = page.url();
+      if (/\/dashboard/.test(urlAfterExtraWait)) {
+        L.success('Auto-redirected to dashboard after extra wait; skipping OTP');
+        try { await sessionStore.saveSessionCookies(page); } catch (e) { log.warn('Could not persist Privy session cookies', { error: e?.message }); }
+        try { cancelOtpUnified('auto logged in'); } catch {}
+        __privyLoginInFlight = false;
+        return true;
+      }
+
+      // Still not on dashboard - try to find OTP inputs
       onOtpScreen = await coerceIntoOtp(page);
       L.info('coerceIntoOtp result', { ok: onOtpScreen, at: page.url() });
     }
