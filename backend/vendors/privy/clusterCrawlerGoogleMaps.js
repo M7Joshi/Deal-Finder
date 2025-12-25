@@ -70,9 +70,13 @@ const clickClustersRecursively = async (
   if (viewsVisible.length > 0) {
     console.log('🎉 View containers loaded!');
     await scrapeProperties(page, browser);
-    // Reset iteration counter after successful scrape - we're done with this view
-    __clusterIterations = 0;
-    return true; // Return immediately after scraping - don't zoom and recurse
+    // After scraping, close the view and continue with more clusters
+    try {
+      // Click somewhere on the map to close the property list view
+      await page.mouse.click(400, 300);
+      await wait(500);
+    } catch {}
+    // Don't return - continue processing more clusters
   }
 
   const clusters = await getClustersWithKeys(page);
@@ -107,8 +111,12 @@ const clickClustersRecursively = async (
       if (viewsAfterClick.length > 0) {
         console.log("🎯 Target views loaded after clicking cluster!");
         await scrapeProperties(page);
-        __clusterIterations = 0; // Reset after successful scrape
-        return true; // Done with this cluster - return success
+        // Close the view and continue with more clusters
+        try {
+          await page.mouse.click(400, 300);
+          await wait(500);
+        } catch {}
+        // Don't return - continue processing remaining clusters
       }
     } catch (err) {
       console.warn(`⚠️ Could not click cluster ${key}: ${err.message}`);
