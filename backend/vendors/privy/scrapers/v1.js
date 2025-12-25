@@ -1508,19 +1508,22 @@ await page.evaluate(() => {
             citySavedTotal += urlSaved;
 
             // If all properties were from wrong state, this is a stale cache issue
-            // Don't retry - just skip to next city since Privy's SPA cache is corrupted
+            // Force a hard reload to clear the SPA's in-memory cache
             if (skippedWrongState > 0 && urlSaved === 0) {
-              LC.warn('All properties from wrong state - Privy SPA cache stale, skipping to next', {
+              LC.warn('All properties from wrong state - Privy SPA cache stale, forcing hard reload', {
                 city: extractCityFromUrl(url),
                 skippedWrongState,
                 expectedState: state
               });
-              // Clear cache and skip - don't retry as it will just loop
+              // Aggressive cache clearing: storage + hard reload
               try {
                 await page.evaluate(() => {
                   sessionStorage.clear();
                   localStorage.clear();
                 });
+                // Force navigate away then back to clear SPA memory cache
+                await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 5000 }).catch(() => {});
+                await new Promise(r => setTimeout(r, 1000));
               } catch {}
               skipToNextCity = true;
               return; // Exit callback - move to next city
