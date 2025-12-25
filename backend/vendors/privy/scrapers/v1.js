@@ -445,25 +445,48 @@ async function navigateWithSession(page, url, { retries = 1 } = {}) {
     // ROBUST FIX: Force a completely clean SPA state before navigation
     // This ensures Privy's React/Redux state is fully reset (not showing stale data from other states)
     try {
-      // 1. Navigate to blank page to destroy React app state
+      // 1. Clear browser cache AND disable cache via CDP FIRST
+      try {
+        const client = await page.createCDPSession();
+        await client.send('Network.clearBrowserCache');
+        await client.send('Network.setCacheDisabled', { cacheDisabled: true });
+        await client.detach();
+      } catch {}
+
+      // 2. Navigate to blank page to destroy React app state
       await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 5000 }).catch(() => {});
 
-      // 2. Clear ALL browser storage (but keep auth cookies)
+      // 3. Clear ALL browser storage AND service workers
       await page.evaluate(() => {
         try {
           localStorage.clear();
           sessionStorage.clear();
+          // Clear IndexedDB
+          if (indexedDB && indexedDB.databases) {
+            indexedDB.databases().then(dbs => {
+              dbs.forEach(db => indexedDB.deleteDatabase(db.name));
+            }).catch(() => {});
+          }
+          // Unregister service workers
+          if (navigator.serviceWorker) {
+            navigator.serviceWorker.getRegistrations().then(registrations => {
+              registrations.forEach(reg => reg.unregister());
+            }).catch(() => {});
+          }
+          // Clear caches API
+          if (caches) {
+            caches.keys().then(names => {
+              names.forEach(name => caches.delete(name));
+            }).catch(() => {});
+          }
         } catch {}
       });
 
-      // 3. Clear browser cache via CDP to force fresh data fetch
-      try {
-        const client = await page.createCDPSession();
-        await client.send('Network.clearBrowserCache');
-        await client.detach();
-      } catch {}
+      // 4. Wait a moment for cleanup
+      await new Promise(r => setTimeout(r, 500));
     } catch {}
 
+    // Navigate with cache bypass header
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
     const currentUrl = page.url();
 
