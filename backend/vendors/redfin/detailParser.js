@@ -47,15 +47,32 @@ export function parseDetailHtml(html) {
   const hoaMatch = bodyText.match(/HOA(?:\s*Fees?)?:?\s*(Yes|No)/i);
   if (hoaMatch) out.hoa = hoaMatch[1];
 
-  // Extract agent name from agent section
-  const agentNode = $('[class*="Agent"], [data-testid*="agent"]').first().text().trim();
-  if (agentNode) out.agentName = agentNode.split('\n')[0];
-
-  // Try to extract agent name from "Listing agent: Name (phone)" pattern
+  // PRIORITY 1: Extract agent from "Listing agent: Name (phone)" pattern (most reliable)
   const listingAgentMatch = bodyText.match(/Listing\s+agent:\s*([A-Za-z]+(?:\s+[A-Za-z]+)*)\s*\((\d{3}[-.\s]?\d{3}[-.\s]?\d{4})\)/i);
   if (listingAgentMatch) {
     out.agentName = listingAgentMatch[1].trim();
     out.agentPhone = listingAgentMatch[2].trim();
+  }
+
+  // PRIORITY 2: Try specific agent selectors (avoid nav menus)
+  if (!out.agentName) {
+    const specificSelectors = [
+      '.agent-basic-details--heading span',
+      '.listing-agent-name',
+      '.agent-info-content .name',
+      '[data-testid="listing-agent-name"]'
+    ];
+    for (const sel of specificSelectors) {
+      const el = $(sel).first();
+      if (el.length) {
+        const text = el.text().trim();
+        // Validate it looks like a name (2-4 words, no special chars like ▾)
+        if (text && /^[A-Za-z]+(\s+[A-Za-z]+){0,3}$/.test(text) && !text.includes('▾')) {
+          out.agentName = text;
+          break;
+        }
+      }
+    }
   }
 
   // Extract phone from various patterns
