@@ -496,7 +496,7 @@ let schedulerEnabled = !DISABLE_SCHEDULER;
 // Track how many addresses scraped in current batch
 let addressesScrapedThisBatch = 0;
 let currentMode = 'scrape'; // 'scrape' or 'amv'
-let scrapeSource = 'redfin'; // 'redfin' first, then 'privy' after first AMV cycle
+let scrapeSource = 'privy'; // 'privy' first, then 'redfin' after first AMV cycle
 
 // Export for tracking
 export function getScraperStatus() {
