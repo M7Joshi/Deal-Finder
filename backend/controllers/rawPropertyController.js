@@ -1,5 +1,6 @@
 // backend/controllers/rawPropertyController.js
 import RawProperty from '../models/rawProperty.js';
+import ScrapedDeal from '../models/ScrapedDeal.js';
 import { log } from '../utils/logger.js';
 import { upsertProperty } from './propertyController.js';
 // Scoped logger for raw property operations
@@ -124,6 +125,47 @@ export const upsertRawProperty = async (propertyData) => {
     try {
       await mirrorToMainProperty(property);
     } catch {}
+
+    // Also upsert to ScrapedDeals for BofA AMV processing
+    try {
+      const fullAddress = property?.fullAddress || propertyData.fullAddress;
+      const fullAddress_ci = fullAddress.trim().toLowerCase();
+
+      await ScrapedDeal.findOneAndUpdate(
+        { fullAddress_ci },
+        {
+          $setOnInsert: {
+            address: propertyData.address || fullAddress.split(',')[0].trim(),
+            fullAddress,
+            fullAddress_ci,
+            city: propertyData.city || property?.city || null,
+            state: propertyData.state || property?.state || null,
+            zip: propertyData.zip || property?.zip || null,
+            source: 'privy',
+            scrapedAt: new Date(),
+            createdAt: new Date(),
+          },
+          $set: {
+            listingPrice: num(propertyData.price) || num(property?.price) || null,
+            beds: num(propertyData.beds) || num(property?.beds) || null,
+            baths: num(propertyData.baths) || num(property?.baths) || null,
+            sqft: num(propertyData.sqft) || num(property?.sqft) || null,
+            agentName: propertyData.agentName || propertyData.agent_name || property?.agent_name || null,
+            agentEmail: propertyData.agentEmail || propertyData.agent_email || property?.agent_email || null,
+            agentPhone: propertyData.agentPhone || propertyData.agent_phone || property?.agent_phone || null,
+            updatedAt: new Date(),
+          }
+        },
+        { upsert: true, new: true }
+      );
+      L.info('Also upserted to ScrapedDeals', { fullAddress });
+    } catch (scrapedDealErr) {
+      // Don't fail if ScrapedDeal upsert fails (e.g., duplicate key race condition)
+      if (scrapedDealErr.code !== 11000) {
+        L.warn('Failed to upsert to ScrapedDeals', { error: scrapedDealErr.message });
+      }
+    }
+
     return property;
   } catch (error) {
     L.error('Failed to upsert raw property', { fullAddress: propertyData?.fullAddress, error: error.message });

@@ -101,7 +101,15 @@ import {
 } from '../../../state/otpState.js';
 import { fetchOtpFromEmail } from '../../../services/emailOtpFetcher.js';
 
-const PASSWORD             = process.env.PRIVY_PASSWORD;
+// Handle password from .env - strip surrounding quotes if present, handle escapes
+let PASSWORD = process.env.PRIVY_PASSWORD || '';
+// Remove surrounding quotes if present (dotenv usually handles this, but just in case)
+if ((PASSWORD.startsWith('"') && PASSWORD.endsWith('"')) ||
+    (PASSWORD.startsWith("'") && PASSWORD.endsWith("'"))) {
+  PASSWORD = PASSWORD.slice(1, -1);
+}
+// Handle backslash-escaped # (e.g., \# -> #)
+PASSWORD = PASSWORD.replace(/\\#/g, '#');
 
 // Debug: verify password is loaded correctly (including special chars like #)
 if (PASSWORD) {
