@@ -1,7 +1,8 @@
 // Live scraping endpoint - fetches addresses directly from Privy.pro
-// NO DATABASE - just returns raw scraped data for validation
+// Saves to ScrapedDeal for Pending AMV display
 
 import express from 'express';
+import ScrapedDeal from '../models/ScrapedDeal.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
 import { log } from '../utils/logger.js';
 import PrivyBot from '../vendors/privy/privyBot.js';
@@ -1224,6 +1225,60 @@ router.get('/privy', requireAuth, async (req, res) => {
     // Release scraping slot on success
     releaseScrapingSlot();
 
+    // Save to ScrapedDeal for Pending AMV display
+    let savedCount = 0;
+    let skippedCount = 0;
+    for (const addr of finalAddresses) {
+      try {
+        const fullAddress = addr.fullAddress?.trim();
+        if (!fullAddress) continue;
+
+        const fullAddress_ci = fullAddress.toLowerCase();
+
+        // Parse price as number
+        let listingPrice = null;
+        if (addr.price) {
+          const priceStr = String(addr.price).replace(/[^0-9.]/g, '');
+          listingPrice = parseFloat(priceStr) || null;
+        }
+
+        await ScrapedDeal.findOneAndUpdate(
+          { fullAddress_ci },
+          {
+            $setOnInsert: {
+              address: addr.address || fullAddress.split(',')[0].trim(),
+              fullAddress,
+              fullAddress_ci,
+              city: addr.city || null,
+              state: addr.state || stateUpper,
+              zip: addr.zip || null,
+              source: 'privy',
+              scrapedAt: new Date(),
+              createdAt: new Date(),
+            },
+            $set: {
+              listingPrice,
+              beds: addr.quickStats?.beds || null,
+              baths: addr.quickStats?.baths || null,
+              sqft: addr.quickStats?.sqft || null,
+              agentName: addr.agentName || null,
+              agentEmail: addr.agentEmail || null,
+              agentPhone: addr.agentPhone || null,
+              updatedAt: new Date(),
+            }
+          },
+          { upsert: true, new: true }
+        );
+        savedCount++;
+      } catch (saveErr) {
+        if (saveErr.code !== 11000) {
+          L.warn('Failed to save to ScrapedDeal', { address: addr.fullAddress, error: saveErr.message });
+        }
+        skippedCount++;
+      }
+    }
+    L.info(`Saved ${savedCount} addresses to ScrapedDeal (${skippedCount} skipped/duplicates)`);
+
     return res.json({
       ok: true,
       state: stateUpper,
@@ -1235,6 +1290,7 @@ router.get('/privy', requireAuth, async (req, res) => {
       addresses: finalAddresses,
       agentEnrichment: agentEnrichmentStats,
       bofaResults: bofaResults,
+      savedToScrapedDeal: savedCount,
       attempt: attempt // Include which attempt succeeded
     });
 
