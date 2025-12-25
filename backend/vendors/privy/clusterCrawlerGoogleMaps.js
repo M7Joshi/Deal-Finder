@@ -30,9 +30,14 @@ const getClustersWithKeys = async (page) => {
   return clusterData;
 };
 
+// Max time to wait for clusters/properties before moving on (30 seconds)
+const MAX_WAIT_TIME_MS = 30000;
+// Max attempts to click clusters before giving up
+const MAX_CLICK_ATTEMPTS = 10;
+
 /**
- * Simple cluster crawler - no zoom, just click visible clusters once
- * If no clusters or views found, move on to next city
+ * Simple cluster crawler - waits for clusters, clicks them, scrapes properties
+ * If nothing loads after timeout, moves to next city
  */
 const clickClustersRecursively = async (
   page,
@@ -43,37 +48,49 @@ const clickClustersRecursively = async (
   maxZoom = 21,
   minZoom = 3
 ) => {
-  // First check if view containers are already visible (properties list showing)
-  const viewsVisible = await waitForViews(page);
-  if (viewsVisible.length > 0) {
-    console.log('🎉 View containers already loaded - scraping properties');
-    await scrapeProperties(page, browser);
-    return true; // Done with this city
-  }
+  const startTime = Date.now();
+  let clickAttempts = 0;
 
-  // Get visible clusters
-  const clusters = await getClustersWithKeys(page);
+  // Wait and retry loop - give the page time to load
+  while (Date.now() - startTime < MAX_WAIT_TIME_MS && clickAttempts < MAX_CLICK_ATTEMPTS) {
+    // First check if view containers are already visible (properties list showing)
+    const viewsVisible = await waitForViews(page);
+    if (viewsVisible.length > 0) {
+      console.log('🎉 View containers loaded - scraping properties');
+      await scrapeProperties(page, browser);
+      return true; // Done with this city
+    }
 
-  if (clusters.length === 0) {
-    console.log('📭 No clusters found for this city - moving to next city');
-    return false; // No properties in this city, move on
-  }
+    // Get visible clusters
+    const clusters = await getClustersWithKeys(page);
+    const unvisited = clusters.filter(c => !visited.has(c.key));
 
-  console.log(`📍 Found ${clusters.length} cluster(s) - clicking to load properties`);
+    if (unvisited.length === 0 && clusters.length === 0) {
+      // No clusters at all - wait a bit and check again
+      console.log(`⏳ No clusters yet, waiting... (${Math.round((Date.now() - startTime) / 1000)}s elapsed)`);
+      await wait(2000);
+      continue;
+    }
 
-  // Try clicking clusters until we get a view with properties
-  for (const cluster of clusters) {
+    if (unvisited.length === 0) {
+      // We've clicked all visible clusters but no view loaded
+      console.log(`⏳ All ${clusters.length} clusters clicked, waiting for view... (${Math.round((Date.now() - startTime) / 1000)}s elapsed)`);
+      await wait(2000);
+      continue;
+    }
+
+    // Click the first unvisited cluster
+    const cluster = unvisited[0];
     const { key, x, y, count } = cluster;
-
-    if (visited.has(key)) continue;
     visited.add(key);
+    clickAttempts++;
 
     try {
-      console.log(`✅ Clicking cluster with ${count} properties at (${x}, ${y})`);
+      console.log(`✅ Clicking cluster #${clickAttempts} with ${count} properties at (${x}, ${y})`);
       await page.mouse.move(x, y);
-      await wait(200);
+      await wait(300);
       await page.mouse.click(x, y);
-      await wait(1500); // Wait for view to load
+      await wait(2000); // Wait for view to load
 
       const viewsAfterClick = await waitForViews(page);
       if (viewsAfterClick.length > 0) {
@@ -86,8 +103,9 @@ const clickClustersRecursively = async (
     }
   }
 
-  // If we clicked all clusters but no view loaded, move on
-  console.log('📭 Clicked all clusters but no properties view loaded - moving to next city');
+  // Timeout reached - move on to next city
+  const elapsed = Math.round((Date.now() - startTime) / 1000);
+  console.log(`📭 Timeout after ${elapsed}s and ${clickAttempts} clicks - moving to next city`);
   return false;
 };
 
