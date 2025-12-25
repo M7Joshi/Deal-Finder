@@ -72,7 +72,7 @@ function withQuickTag(url, paramKey) {
 
 // Build Privy URL for a city - SAME EXACT parameters as working live-scrape
 // This URL includes ALL filters so we can navigate directly without using filter modal
-function buildPrivyUrl(city, stateCode) {
+function buildPrivyUrl(city, stateCode, cacheBust = true) {
   const base = 'https://app.privy.pro/dashboard';
   const params = new URLSearchParams({
     update_history: 'true',
@@ -104,6 +104,10 @@ function buildPrivyUrl(city, stateCode) {
     sort_by: 'days-on-market',
     sort_dir: 'asc'
   });
+  // Add cache-busting timestamp to force Privy to fetch fresh data
+  if (cacheBust) {
+    params.set('_t', Date.now().toString());
+  }
   return `${base}?${params.toString()}`;
 }
 
@@ -254,73 +258,90 @@ async function extractAgentFromContext(ctx) {
   return { name, email, phone };
 }
 
-// Extract agent using full page text patterns (like Redfin approach)
+// Extract agent using Privy's labeled field patterns (synced from live-scrape.js)
+// Privy shows: "List Agent Direct Phone:", "List Agent Email:", "List Agent Full Name:", etc.
 async function extractAgentFromPageText(page) {
   try {
     return await page.evaluate(() => {
-      const result = { name: null, email: null, phone: null };
-      const bodyText = (document.body.textContent || '').replace(/\s+/g, ' ');
+      const result = { name: null, email: null, phone: null, brokerage: null };
+      const pageText = document.body.innerText || '';
 
-      // Pattern 1: "Listed by Agent Name" or "Listing Agent: Agent Name"
-      const listedByPattern = /(?:Listed by|Listing Agent[:\s]+)([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})/i;
-      const listedByMatch = bodyText.match(listedByPattern);
-      if (listedByMatch) {
-        result.name = listedByMatch[1].trim();
+      // ========== PRIVY-SPECIFIC LABELED FIELDS ==========
+
+      // 1. PHONE: "List Agent Direct Phone: 678-951-7041"
+      const phoneLabeled = pageText.match(/List\s+Agent\s+(?:Direct\s+)?Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
+      if (phoneLabeled) {
+        result.phone = phoneLabeled[1].trim();
+      }
+      // Fallback to office phone only if no agent phone
+      if (!result.phone) {
+        const officePhoneLabeled = pageText.match(/List\s+Office\s+Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
+        if (officePhoneLabeled) {
+          result.phone = officePhoneLabeled[1].trim();
+        }
       }
 
-      // Pattern 2: "Agent: Name" or "Contact: Name"
-      const agentPattern = /(?:Agent|Contact|Realtor)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})/i;
+      // 2. EMAIL: "List Agent Email: amyksellsga@gmail.com"
+      const emailLabeled = pageText.match(/List\s+Agent\s+Email\s*[:\s]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+      if (emailLabeled) {
+        result.email = emailLabeled[1].trim();
+      }
+
+      // 3. NAME: Try multiple Privy formats
+      // "List Agent Full Name: Jesse Burns"
+      const fullNameMatch = pageText.match(/List\s+Agent\s+Full\s+Name\s*[:\s]\s*([^\n]+)/i);
+      if (fullNameMatch) {
+        let extractedName = fullNameMatch[1].trim();
+        extractedName = extractedName.split(/(?:List Agent|Direct Phone|Email|Office)/i)[0].trim();
+        if (extractedName.length > 3) {
+          result.name = extractedName;
+        }
+      }
+
+      // "List Agent First Name: Amy" + "List Agent Last Name: Smith"
       if (!result.name) {
-        const agentMatch = bodyText.match(agentPattern);
-        if (agentMatch) {
-          result.name = agentMatch[1].trim();
+        const firstMatch = pageText.match(/List\s+Agent\s+First\s+Name\s*[:\s]\s*([A-Za-z]+)/i);
+        const lastMatch = pageText.match(/List\s+Agent\s+Last\s+Name\s*[:\s]\s*([A-Za-z]+)/i);
+        if (firstMatch && lastMatch) {
+          result.name = `${firstMatch[1].trim()} ${lastMatch[1].trim()}`;
         }
       }
 
-      // Email pattern - find all emails, filter out system ones and user's own email
-      const emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-      const allEmails = bodyText.match(emailPattern) || [];
-
-      // Get the logged-in user's email to exclude (from header/profile)
-      const userEmailEl = document.querySelector('.user-email, [data-testid="user-email"], .profile-email, .account-email, [class*="user"] [class*="email"]');
-      const userEmail = userEmailEl?.textContent?.trim()?.toLowerCase() || '';
-
-      for (const email of allEmails) {
-        const lower = email.toLowerCase();
-        // Skip system/platform emails and logged-in user's own email
-        if (lower.includes('privy') ||
-            lower.includes('noreply') ||
-            lower.includes('support') ||
-            lower.includes('info@') ||
-            lower.includes('admin') ||
-            lower.includes('example.com') ||
-            lower.includes('test.com') ||
-            lower.includes('mioym') ||  // Skip mioym emails (your company)
-            (userEmail && lower === userEmail)) {  // Skip logged-in user's email
-          continue;
+      // 4. BROKERAGE: "List Office Name: Keller Williams Realty Community Partners"
+      const officeNameMatch = pageText.match(/List\s+Office\s+Name\s*[:\s]\s*([^\n]+)/i);
+      if (officeNameMatch) {
+        let officeName = officeNameMatch[1].trim();
+        officeName = officeName.split(/(?:List Agent|List Office Phone|Direct Phone|Email)/i)[0].trim();
+        if (officeName.length > 2) {
+          result.brokerage = officeName;
         }
-        result.email = email;
-        break;
       }
 
-      // Phone pattern - properly formatted US numbers
-      const phonePatterns = [
-        /\((\d{3})\)\s*(\d{3})[-.](\d{4})/,  // (404) 550-5560
-        /(\d{3})[-.](\d{3})[-.](\d{4})/       // 470-685-1179
-      ];
-      for (const pattern of phonePatterns) {
-        const match = bodyText.match(pattern);
-        if (match) {
-          if (match[0].startsWith('(')) {
-            result.phone = `(${match[1]}) ${match[2]}-${match[3]}`;
-          } else {
-            result.phone = `${match[1]}-${match[2]}-${match[3]}`;
+      // ========== FALLBACK PATTERNS ==========
+      // If Privy-specific patterns didn't work, try generic patterns
+
+      if (!result.email) {
+        const emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+        const allEmails = pageText.match(emailPattern) || [];
+        for (const email of allEmails) {
+          const lower = email.toLowerCase();
+          if (!lower.includes('privy') && !lower.includes('noreply') &&
+              !lower.includes('support') && !lower.includes('mioym') &&
+              !lower.includes('info@') && !lower.includes('admin')) {
+            result.email = email;
+            break;
           }
-          break;
         }
       }
 
-      // Also try mailto/tel links
+      if (!result.phone) {
+        const phoneMatch = pageText.match(/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
+        if (phoneMatch) {
+          result.phone = phoneMatch[0];
+        }
+      }
+
+      // Also try mailto/tel links as last resort
       if (!result.email || !result.phone) {
         const links = Array.from(document.querySelectorAll('a[href^="mailto:"], a[href^="tel:"]'));
         for (const link of links) {
@@ -341,7 +362,7 @@ async function extractAgentFromPageText(page) {
       return result;
     });
   } catch (e) {
-    return { name: null, email: null, phone: null };
+    return { name: null, email: null, phone: null, brokerage: null };
   }
 }
 
@@ -361,6 +382,34 @@ async function extractAgentWithFallback(page, cardHandle) {
     await page.waitForSelector('.modal, .drawer, .sidebar, .detail-panel, [class*="modal"], [class*="drawer"]', { timeout: 2000 });
   } catch {}
 
+  // Scroll down to reveal more content (agent info may be below the fold)
+  try {
+    await page.evaluate(() => {
+      const detailPanel = document.querySelector('.detail-panel, .property-detail, .modal-body, [class*="detail"]');
+      if (detailPanel) {
+        detailPanel.scrollTop = detailPanel.scrollHeight;
+      }
+      window.scrollTo(0, document.body.scrollHeight);
+    });
+    await sleep(500);
+  } catch {}
+
+  // Look for and click "Contact Agent" or similar buttons to reveal email
+  try {
+    await page.evaluate(() => {
+      const contactBtns = document.querySelectorAll('button, a');
+      for (const btn of contactBtns) {
+        const text = btn.textContent?.toLowerCase() || '';
+        if (text.includes('contact') || text.includes('agent') || text.includes('email') || text.includes('show')) {
+          btn.click();
+          return true;
+        }
+      }
+      return false;
+    });
+    await sleep(500);
+  } catch {}
+
   // Try common detail roots (main page + any iframes)
   const roots = [page, ...page.frames()];
   for (const r of roots) {
@@ -368,7 +417,7 @@ async function extractAgentWithFallback(page, cardHandle) {
     if (got.name || got.email || got.phone) return got;
   }
 
-  // Try full page text pattern extraction (like Redfin)
+  // Try full page text pattern extraction using Privy-specific labeled fields
   const fromText = await extractAgentFromPageText(page);
   if (fromText.name || fromText.email || fromText.phone) return fromText;
 
@@ -390,7 +439,7 @@ async function extractAgentWithFallback(page, cardHandle) {
     return { name: null, email, phone };
   } catch {}
 
-  return { name: null, email: null, phone: null };
+  return { name: null, email: null, phone: null, brokerage: null };
 }
 
 // Try to find the card DOM handle that matches a given full address
@@ -540,6 +589,15 @@ async function navigateWithSession(page, url, { retries = 1 } = {}) {
         const client = await page.createCDPSession();
         await client.send('Network.clearBrowserCache');
         await client.send('Network.setCacheDisabled', { cacheDisabled: true });
+        // Also clear cookies that might store map/search state (but keep session cookies)
+        const cookies = await client.send('Network.getAllCookies');
+        const cookiesToDelete = (cookies.cookies || []).filter(c =>
+          c.name.includes('map') || c.name.includes('search') || c.name.includes('cache') ||
+          c.name.includes('state') || c.name.includes('redux')
+        );
+        for (const cookie of cookiesToDelete) {
+          await client.send('Network.deleteCookies', { name: cookie.name, domain: cookie.domain });
+        }
         await client.detach();
       } catch {}
 
@@ -576,8 +634,14 @@ async function navigateWithSession(page, url, { retries = 1 } = {}) {
       await new Promise(r => setTimeout(r, 500));
     } catch {}
 
-    // Navigate with cache bypass header
+    // Navigate with cache bypass - disable cache during navigation
+    try {
+      await page.setCacheEnabled(false);
+    } catch {}
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+    try {
+      await page.setCacheEnabled(true);
+    } catch {}
     const currentUrl = page.url();
 
     // If we hit any login/2FA route, reauthenticate and retry
@@ -1087,6 +1151,43 @@ await page.evaluate(() => {
           } catch (e) {
             L.warn('Filter application failed (continuing)', { error: e?.message || String(e) });
           }
+
+          // CRITICAL: Validate that the search text in the URL matches what Privy is showing
+          // This detects stale SPA cache showing wrong state data
+          try {
+            // Wait for the search/location indicator to update
+            await sleep(2000);
+
+            // Check if the page URL contains our expected state
+            const currentPageUrl = page.url();
+            const urlState = currentPageUrl.match(/search_text=[^&]*%2C\s*([A-Z]{2})/i);
+            if (urlState && urlState[1].toUpperCase() !== state) {
+              L.warn('URL state mismatch detected - forcing hard reload', {
+                expectedState: state,
+                urlState: urlState[1]
+              });
+              // Force a complete page reload with cache bypass
+              await page.reload({ waitUntil: 'networkidle0', timeout: 60000 });
+              await sleep(3000);
+            }
+
+            // Also check if the visible location text matches
+            const visibleLocation = await page.evaluate(() => {
+              // Try to find location text in common places
+              const locationEl = document.querySelector('.search-text, .location-display, [data-testid="location"], input[name="search_text"]');
+              return locationEl?.textContent || locationEl?.value || '';
+            }).catch(() => '');
+
+            if (visibleLocation && !visibleLocation.toUpperCase().includes(state)) {
+              L.warn('Visible location mismatch - Privy may be showing stale data', {
+                expectedState: state,
+                visibleLocation: visibleLocation.slice(0, 50)
+              });
+            }
+          } catch (validationErr) {
+            L.warn('State validation check failed (non-fatal)', { error: validationErr?.message });
+          }
+
           // Use cluster walker to explode big map regions into bite-size lists,
           // then run the exact same per-view routine inside the callback.
           await clickClustersRecursively(page, page.browser(), async () => {
@@ -1232,18 +1333,20 @@ await page.evaluate(() => {
 
                   if (handle) {
                     const agent = await extractAgentWithFallback(page, handle);
-                    if (agent?.name || agent?.email || agent?.phone) {
+                    if (agent?.name || agent?.email || agent?.phone || agent?.brokerage) {
                       details.agent_name  = agent.name  || null;
                       details.agent_email = agent.email || null;
                       details.agent_phone = agent.phone || null;
+                      details.brokerage   = agent.brokerage || null;
                     }
                   } else {
                     // Fallback: use page-level text pattern extraction
                     const fromText = await extractAgentFromPageText(page);
-                    if (fromText?.name || fromText?.email || fromText?.phone) {
+                    if (fromText?.name || fromText?.email || fromText?.phone || fromText?.brokerage) {
                       details.agent_name  = fromText.name  || null;
                       details.agent_email = fromText.email || null;
                       details.agent_phone = fromText.phone || null;
+                      details.brokerage   = fromText.brokerage || null;
                     }
                   }
                 } catch (e) {
@@ -1305,41 +1408,63 @@ await page.evaluate(() => {
                 // Also save to ScrapedDeal for Deals page (auto-calculates isDeal when AMV is added)
                 try {
                   const fullAddress_ci = prop.fullAddress.trim().toLowerCase();
-                  await ScrapedDeal.updateOne(
-                    { fullAddress_ci },
-                    {
-                      $set: {
-                        address: prop.address || prop.fullAddress?.split(',')[0]?.trim(),
-                        fullAddress: prop.fullAddress,
-                        fullAddress_ci,
-                        city: prop.city || null,
-                        state: prop.state || state,
-                        zip: prop.zip || null,
-                        listingPrice: prop.price || prop.listingPrice || null,
-                        beds: prop.beds || null,
-                        baths: prop.baths || null,
-                        sqft: prop.sqft || null,
-                        // Save agent details from Privy
-                        agentName: prop.details?.agent_name || null,
-                        agentEmail: prop.details?.agent_email || null,
-                        agentPhone: prop.details?.agent_phone || null,
-                        source: 'privy',
-                        scrapedAt: new Date(),
+                  const addressLine = prop.address || prop.fullAddress?.split(',')[0]?.trim();
+
+                  // Ensure we have a valid address before saving
+                  if (!addressLine) {
+                    logPrivy.warn('Skipping ScrapedDeal save - no valid address line', { fullAddress: prop.fullAddress });
+                  } else {
+                    const upsertResult = await ScrapedDeal.updateOne(
+                      { fullAddress_ci },
+                      {
+                        $set: {
+                          address: addressLine,
+                          fullAddress: prop.fullAddress,
+                          fullAddress_ci,
+                          city: prop.city || null,
+                          state: prop.state || state,
+                          zip: prop.zip || null,
+                          listingPrice: prop.price || prop.listingPrice || null,
+                          beds: prop.beds || null,
+                          baths: prop.baths || null,
+                          sqft: prop.sqft || null,
+                          // Save agent details from Privy
+                          agentName: prop.details?.agent_name || null,
+                          agentEmail: prop.details?.agent_email || null,
+                          agentPhone: prop.details?.agent_phone || null,
+                          brokerage: prop.details?.brokerage || null,
+                          source: 'privy',
+                          scrapedAt: new Date(),
+                        },
+                        $setOnInsert: {
+                          amv: null,
+                          isDeal: false,
+                        }
                       },
-                      $setOnInsert: {
-                        amv: null,
-                        isDeal: false,
-                      }
-                    },
-                    { upsert: true }
-                  );
+                      { upsert: true }
+                    );
+
+                    // Log success for first few saves to confirm ScrapedDeal is working
+                    if (urlSaved < 3) {
+                      logPrivy.info('✅ ScrapedDeal saved', {
+                        fullAddress: prop.fullAddress,
+                        upserted: upsertResult.upsertedCount > 0,
+                        modified: upsertResult.modifiedCount > 0
+                      });
+                    }
+                  }
+
                   // Increment batch counter and check if we should pause
                   const hitLimit = incrementAddressCount();
                   if (hitLimit) {
                     logPrivy.info('Batch limit reached - will pause scraping for AMV phase');
                   }
                 } catch (e) {
-                  logPrivy.warn('Failed to save to ScrapedDeal', { fullAddress: prop?.fullAddress || null, error: e?.message });
+                  logPrivy.error('❌ Failed to save to ScrapedDeal', {
+                    fullAddress: prop?.fullAddress || null,
+                    error: e?.message,
+                    stack: e?.stack?.split('\n').slice(0, 3).join(' | ')
+                  });
                 }
                 urlSaved += 1;
                 stateSaved += 1;

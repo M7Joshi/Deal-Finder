@@ -274,8 +274,11 @@ export async function applyRequestFiltering(page, rules = {}) {
   if (page.__df_req_interceptor) {
     try { page.off('request', page.__df_req_interceptor); } catch {}
   }
-  const handler = (req) => {
+  const handler = async (req) => {
     try {
+      // Check if request is already handled to avoid "Request is already handled!" errors
+      if (req.isInterceptResolutionHandled?.()) return;
+
       const url = req.url();
       const type = req.resourceType?.() || 'other';
       if (shouldBlock(url, type)) {
@@ -283,7 +286,7 @@ export async function applyRequestFiltering(page, rules = {}) {
       }
       return req.continue().catch(()=>{});
     } catch {
-      try { req.continue(); } catch {}
+      // Silently ignore - request may already be handled
     }
   };
   page.on('request', handler);

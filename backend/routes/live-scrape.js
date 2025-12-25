@@ -349,7 +349,7 @@ const PRIVY_STATE_CITIES = {
 
 // Build Privy URL for a city - EXACT parameters from working Privy URL
 // This URL includes ALL filters so we can navigate directly without using filter modal
-function buildPrivyUrl(city, stateCode) {
+function buildPrivyUrl(city, stateCode, cacheBust = true) {
   const base = 'https://app.privy.pro/dashboard';
   const params = new URLSearchParams({
     update_history: 'true',
@@ -381,6 +381,10 @@ function buildPrivyUrl(city, stateCode) {
     sort_by: 'days-on-market',
     sort_dir: 'asc'
   });
+  // Add cache-busting timestamp to force Privy to fetch fresh data
+  if (cacheBust) {
+    params.set('_t', Date.now().toString());
+  }
   return `${base}?${params.toString()}`;
 }
 
@@ -463,22 +467,16 @@ router.get('/privy', requireAuth, async (req, res) => {
       const seenAddressKeys = new Set();
       let consecutiveEmptyCities = 0; // Track cities with 0 new addresses for early exit
 
-    // CRITICAL: Reset bot if state changed to avoid stale map data
-    if (lastScrapedState && lastScrapedState !== stateUpper && sharedPrivyBot) {
-      L.info(`State changed from ${lastScrapedState} to ${stateUpper} - resetting bot and session`);
+    // CRITICAL: ALWAYS reset bot to avoid stale map data from Privy's aggressive caching
+    // This is the nuclear option - completely restart the browser for each scrape request
+    // to ensure Privy's SPA state is completely fresh
+    if (sharedPrivyBot) {
+      L.info(`Resetting bot for fresh scrape (current state: ${stateUpper}, previous: ${lastScrapedState || 'none'})`);
       try { await sharedPrivyBot.close(); } catch {}
       sharedPrivyBot = null;
       botInitializing = false;
-      // Clear the session file to force fresh login with new state
-      try {
-        const fs = await import('fs');
-        const path = await import('path');
-        const sessionPath = path.default.join(process.cwd(), 'var/privy-session.json');
-        if (fs.default.existsSync(sessionPath)) {
-          fs.default.unlinkSync(sessionPath);
-          L.info('Cleared session file for state change');
-        }
-      } catch (e) { L.warn('Could not clear session file', { error: e?.message }); }
+      // Small delay to ensure browser is fully closed
+      await new Promise(r => setTimeout(r, 500));
     }
 
     // Use shared bot instance to maintain session
@@ -605,204 +603,52 @@ router.get('/privy', requireAuth, async (req, res) => {
     }
 
     // Wait for the page to settle after fresh load
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 2000));
 
-    // SKIP the unreliable search box approach - rely on URL parameters instead
-    // The URL already contains the city in search_text param, which is more reliable
+    // CRITICAL: Do NOT use the search box - it triggers autocomplete that selects wrong locations
+    // The URL parameters already contain the correct city/state - just wait for data to load
+    // The URL has: search_text=Auburn%2C+AL which should be enough
     try {
-      const searchInput = await page.$('input[placeholder*="Search"]');
-      if (searchInput) {
-        // Just verify the search shows correct city, don't re-type
-        await searchInput.click({ clickCount: 3 });
-        await page.keyboard.press('Backspace');
-        await new Promise(r => setTimeout(r, 300)); // Small delay after clearing
+      // Verify we're on the correct page by checking the URL
+      const currentUrl = page.url();
+      L.info(`Current URL after navigation: ${currentUrl.substring(0, 100)}...`);
 
-        await searchInput.type(`${cityToUse}, ${stateUpper}`, { delay: 30 }); // Slower typing to avoid issues
-        L.info(`Typed search: ${cityToUse}, ${stateUpper}`);
+      // Check if the URL still contains our expected state
+      if (!currentUrl.toUpperCase().includes(stateUpper)) {
+        L.warn(`URL doesn't contain expected state ${stateUpper}, forcing reload...`);
+        await page.goto(privyUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+        await new Promise(r => setTimeout(r, 2000));
+      }
 
-        // Wait for autocomplete dropdown and select the CORRECT state option
-        // This fixes the bug where typing "Los Angeles, CA" might select "Los Angeles, TX" if it appears first
-        await new Promise(r => setTimeout(r, 800)); // Wait for autocomplete dropdown to populate
+      // DO NOT type in search box - it causes wrong state selection
+      // Just verify and log
+      L.info(`Relying on URL parameters for ${cityToUse}, ${stateUpper} - NOT using search box`);
 
-        // Try to find and click the dropdown item that matches our state
-        const selectedCorrectState = await page.evaluate((city, state) => {
-          // Common autocomplete dropdown selectors for Privy
-          const dropdownSelectors = [
-            '.autocomplete-dropdown-container',
-            '.search-suggestions',
-            '.suggestions-list',
-            '[class*="autocomplete"]',
-            '[class*="suggestion"]',
-            '[class*="dropdown"]',
-            '.pac-container', // Google Places autocomplete
-            '[role="listbox"]',
-            'ul[class*="search"]',
-            'div[class*="search"] ul',
-            'div[class*="search"] li',
-          ];
+      // Wait for map data to load - the URL params should drive the location
+      await new Promise(r => setTimeout(r, 1500));
 
-          // Find all possible suggestion items
-          let items = [];
-          for (const sel of dropdownSelectors) {
-            const container = document.querySelector(sel);
-            if (container) {
-              // Get all clickable items within the dropdown
-              const possibleItems = container.querySelectorAll('li, div[role="option"], .suggestion-item, [class*="suggestion"], [class*="item"]');
-              if (possibleItems.length > 0) {
-                items = Array.from(possibleItems);
-                break;
-              }
-            }
-          }
+      // Wait for network to be idle (map tiles and data loading)
+      L.info('Waiting for map data to load (network idle)...');
+      try {
+        await page.waitForNetworkIdle({ idleTime: 1500, timeout: 10000 });
+        L.info('✅ Map data loaded (network idle)');
+      } catch {
+        L.info('Network idle timeout, continuing...');
+        await new Promise(r => setTimeout(r, 1500));
+      }
 
-          // If no items found via containers, try direct selectors
-          if (items.length === 0) {
-            items = Array.from(document.querySelectorAll('.pac-item, .suggestion-item, [class*="autocomplete"] li, [class*="suggestion"]'));
-          }
-
-          if (items.length === 0) {
-            return { found: false, reason: 'no dropdown items found' };
-          }
-
-          // Look for an item that contains both the city and the correct state
-          const cityLower = city.toLowerCase();
-          const stateLower = state.toLowerCase();
-          const statePattern = new RegExp(`\\b${state}\\b`, 'i'); // Match state code as whole word (e.g., "CA" not "CALIFORNIA")
-
-          for (const item of items) {
-            const text = (item.textContent || '').toLowerCase();
-            // Check if this item contains our city AND our state code
-            if (text.includes(cityLower) && statePattern.test(item.textContent)) {
-              item.click();
-              return { found: true, clicked: true, text: item.textContent?.trim().substring(0, 60) };
-            }
-          }
-
-          // Second pass: look for state name instead of code (e.g., "California" instead of "CA")
-          const stateNames = {
-            'AL': 'alabama', 'AK': 'alaska', 'AZ': 'arizona', 'AR': 'arkansas', 'CA': 'california',
-            'CO': 'colorado', 'CT': 'connecticut', 'DE': 'delaware', 'FL': 'florida', 'GA': 'georgia',
-            'HI': 'hawaii', 'ID': 'idaho', 'IL': 'illinois', 'IN': 'indiana', 'IA': 'iowa',
-            'KS': 'kansas', 'KY': 'kentucky', 'LA': 'louisiana', 'ME': 'maine', 'MD': 'maryland',
-            'MA': 'massachusetts', 'MI': 'michigan', 'MN': 'minnesota', 'MS': 'mississippi', 'MO': 'missouri',
-            'MT': 'montana', 'NE': 'nebraska', 'NV': 'nevada', 'NH': 'new hampshire', 'NJ': 'new jersey',
-            'NM': 'new mexico', 'NY': 'new york', 'NC': 'north carolina', 'ND': 'north dakota', 'OH': 'ohio',
-            'OK': 'oklahoma', 'OR': 'oregon', 'PA': 'pennsylvania', 'RI': 'rhode island', 'SC': 'south carolina',
-            'SD': 'south dakota', 'TN': 'tennessee', 'TX': 'texas', 'UT': 'utah', 'VT': 'vermont',
-            'VA': 'virginia', 'WA': 'washington', 'WV': 'west virginia', 'WI': 'wisconsin', 'WY': 'wyoming',
-          };
-          const stateName = stateNames[state.toUpperCase()];
-
-          if (stateName) {
-            for (const item of items) {
-              const text = (item.textContent || '').toLowerCase();
-              if (text.includes(cityLower) && text.includes(stateName)) {
-                item.click();
-                return { found: true, clicked: true, text: item.textContent?.trim().substring(0, 60), matchedByName: true };
-              }
-            }
-          }
-
-          // Return info about what we found but couldn't match
-          return {
-            found: false,
-            reason: 'no matching state found in dropdown',
-            itemCount: items.length,
-            firstItems: items.slice(0, 3).map(i => i.textContent?.trim().substring(0, 40))
-          };
-        }, cityToUse, stateUpper);
-
-        L.info(`Autocomplete selection result: ${JSON.stringify(selectedCorrectState)}`);
-
-        // If we couldn't click a dropdown item, fall back to pressing Enter
-        // But also verify the URL after to make sure we got the right state
-        if (!selectedCorrectState.clicked) {
-          L.warn(`Could not find ${stateUpper} in dropdown, falling back to Enter key`);
-          await page.keyboard.press('Enter');
-        }
-
-        // CRITICAL: Wait for the URL to update with the new search_text (confirms city change)
-        L.info('Waiting for URL to update with new city...');
-        const expectedSearchText = `${cityToUse}, ${stateUpper}`.toLowerCase();
-        let urlUpdated = false;
-
-        for (let attempt = 0; attempt < 20; attempt++) {
-          await new Promise(r => setTimeout(r, 500));
-          const currentUrl = page.url();
-          const urlLower = decodeURIComponent(currentUrl).toLowerCase();
-
-          if (urlLower.includes(cityToUse.toLowerCase()) || urlLower.includes(encodeURIComponent(cityToUse).toLowerCase())) {
-            L.info(`✅ URL updated to include ${cityToUse} (attempt ${attempt + 1})`);
-            urlUpdated = true;
-            break;
-          }
-        }
-
-        if (!urlUpdated) {
-          L.warn(`URL did not update to ${cityToUse} after 10s, continuing anyway...`);
-        }
-
-        // VERIFY: Check that we're in the correct state (not a different state with same city name)
-        const finalUrl = decodeURIComponent(page.url()).toLowerCase();
-        const stateInUrl = finalUrl.match(/state=([a-z]{2})/i)?.[1]?.toUpperCase();
-        let wrongStateDetected = false;
-
-        if (stateInUrl && stateInUrl !== stateUpper) {
-          L.warn(`⚠️ WRONG STATE DETECTED! Expected ${stateUpper} but URL shows ${stateInUrl}. Skipping this city.`);
-          L.warn(`This likely happened because Privy autocomplete selected a different state's city.`);
-          wrongStateDetected = true;
-        }
-
-        // Also check if the search_text in URL contains a different state
-        if (!wrongStateDetected) {
-          const searchTextMatch = finalUrl.match(/search_text=([^&]+)/i);
-          if (searchTextMatch) {
-            const searchText = decodeURIComponent(searchTextMatch[1]).toUpperCase();
-            const usStates = ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY'];
-            // Check if search_text ends with a different state code (e.g., "Los Angeles, TX" when we wanted CA)
-            const stateCodeMatch = searchText.match(/,\s*([A-Z]{2})\s*$/);
-            if (stateCodeMatch) {
-              const foundState = stateCodeMatch[1];
-              if (usStates.includes(foundState) && foundState !== stateUpper) {
-                L.warn(`⚠️ WRONG STATE IN SEARCH! search_text shows ${foundState}, expected ${stateUpper}. Skipping city.`);
-                wrongStateDetected = true;
-              }
-            }
-          }
-        }
-
-        if (wrongStateDetected) {
-          L.info(`Skipping ${cityToUse} - wrong state selected in autocomplete`);
-          continue; // Skip to next city in the outer loop
-        }
-
-        L.info(`✅ State verification passed - we're in ${stateUpper}`);
-
-        // Wait for network to be idle (map tiles and data loading) - reduced timeout for speed
-        L.info('Waiting for map data to load (network idle)...');
-        try {
-          await page.waitForNetworkIdle({ idleTime: 1500, timeout: 10000 });
-          L.info('✅ Map data loaded (network idle)');
-        } catch {
-          L.info('Network idle timeout, continuing...');
-          await new Promise(r => setTimeout(r, 1500));
-        }
-
-        // Wait for clusters to appear after map loads - reduced timeout for speed
-        L.info('Waiting for clusters to appear...');
-        try {
-          await page.waitForSelector('.cluster.cluster-deal, .cluster', { timeout: 5000 });
-          L.info('✅ Clusters appeared after search');
-          // Brief wait to ensure clusters are rendered
-          await new Promise(r => setTimeout(r, 800));
-        } catch {
-          L.info('No clusters found, extracting visible properties...');
-          await new Promise(r => setTimeout(r, 1000));
-        }
+      // Wait for clusters to appear after map loads
+      L.info('Waiting for clusters to appear...');
+      try {
+        await page.waitForSelector('.cluster.cluster-deal, .cluster', { timeout: 5000 });
+        L.info('✅ Clusters appeared after search');
+        await new Promise(r => setTimeout(r, 800));
+      } catch {
+        L.info('No clusters found, extracting visible properties...');
+        await new Promise(r => setTimeout(r, 1000));
       }
     } catch (searchErr) {
-      L.warn('Search failed', { error: searchErr?.message });
-      // Brief wait before continuing
+      L.warn('Search/navigation failed', { error: searchErr?.message });
       await new Promise(r => setTimeout(r, 1500));
     }
 
