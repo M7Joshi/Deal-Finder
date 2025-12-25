@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { fetchHtml } from './fetcher.js';
 import { parseIndexHtml } from './indexParser.js';
 import { parseDetailHtml } from './detailParser.js';
-import { getCityUrls } from './sitemapEnumerator.js';
+import { getStates, getCitiesForState } from './sitemapEnumerator.js';
 import { FILTERS, passesAll } from './filters.js';
 import { propIdFromUrl, toNumberOrNull, parseBeds, parseBaths, cityFromAddress } from './normalize.js';
 import { upsertRaw, upsertProperty, shouldPauseScraping } from './save.js';
@@ -240,15 +240,16 @@ console.log(`Found ${listings.length} index listings (all pages)`);
 }
 
 export async function runAllCities() {
-  const maxCities = Number(process.env.MAX_CITIES || '0') || undefined;
-  const cities = await getCityUrls(maxCities);
-  console.log(`Total cities: ${cities.length}`);
+  const states = getStates();
+  console.log(`[Redfin] Processing ${states.length} states (state-by-state with cities)`);
+
+  let totalCitiesProcessed = 0;
 
   try {
-    for (const c of cities) {
-      // Check abort/batch limit before each city
+    for (const state of states) {
+      // Check abort/batch limit before each state
       if (control.abort) {
-        console.log('[Redfin] Abort signal received, stopping all cities');
+        console.log('[Redfin] Abort signal received, stopping');
         break;
       }
       if (shouldPauseScraping()) {
@@ -256,10 +257,40 @@ export async function runAllCities() {
         break;
       }
 
-      await runCity(c.url);
+      console.log(`\n[Redfin] === Processing state: ${state} ===`);
+
+      // Get cities for THIS state and process them immediately
+      const cities = await getCitiesForState(state);
+
+      if (cities.length === 0) {
+        console.log(`[Redfin] No cities found for ${state}, skipping`);
+        continue;
+      }
+
+      // Process each city in this state
+      for (const city of cities) {
+        // Check abort/batch limit before each city
+        if (control.abort) {
+          console.log('[Redfin] Abort signal received, stopping city scrape');
+          break;
+        }
+        if (shouldPauseScraping()) {
+          console.log('[Redfin] Batch limit reached, stopping to process AMV');
+          break;
+        }
+
+        await runCity(city.url);
+        totalCitiesProcessed++;
+      }
+
+      // If we broke out of city loop due to abort/batch, also break state loop
+      if (control.abort || shouldPauseScraping()) {
+        break;
+      }
     }
   } finally {
-    // Clean up shared browser when done with all cities
+    // Clean up shared browser when done
     await closeSharedBrowser();
+    console.log(`[Redfin] Finished. Total cities processed: ${totalCitiesProcessed}`);
   }
 }

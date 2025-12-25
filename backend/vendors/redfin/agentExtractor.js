@@ -20,7 +20,22 @@ async function getSharedBrowser() {
     console.log('[AgentExtractor] Restarting browser after', pageCount, 'pages');
     try { await sharedBrowser.close(); } catch {}
     sharedBrowser = null;
+    browserLaunchPromise = null;
     pageCount = 0;
+  }
+
+  // Check if browser is still connected
+  if (sharedBrowser) {
+    try {
+      if (!sharedBrowser.isConnected()) {
+        console.log('[AgentExtractor] Browser disconnected, will relaunch');
+        sharedBrowser = null;
+        browserLaunchPromise = null;
+      }
+    } catch {
+      sharedBrowser = null;
+      browserLaunchPromise = null;
+    }
   }
 
   // Return existing browser if connected

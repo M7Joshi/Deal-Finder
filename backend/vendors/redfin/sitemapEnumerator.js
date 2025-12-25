@@ -67,6 +67,44 @@ function getCityNameFromUrl(url) {
   }
 }
 
+// Get cities for a single state (used by runner to process state-by-state)
+export async function getCitiesForState(state) {
+  const url = `https://www.redfin.com/state/${state}`;
+  let html;
+  try {
+    html = await fetchHtml(url, { render: false });
+  } catch (e) {
+    console.warn(`[Redfin] State fetch failed: ${state} -> ${e.message}`);
+    return [];
+  }
+
+  const cities = [];
+  const seen = new Set();
+  const $ = cheerio.load(html);
+
+  $('a[href^="/city/"]').each((_, a) => {
+    const href = $(a).attr('href') || '';
+    if (!href || !href.startsWith('/city/')) return;
+    const full = new URL(href, 'https://www.redfin.com').toString();
+    if (!seen.has(full)) {
+      seen.add(full);
+      cities.push({ url: full, lastmod: null, state, cityName: getCityNameFromUrl(full) });
+    }
+  });
+
+  // Sort cities alphabetically within this state
+  cities.sort((a, b) => a.cityName.localeCompare(b.cityName));
+  console.log(`[Redfin] ${state}: found ${cities.length} cities (sorted A-Z)`);
+
+  return cities;
+}
+
+// Get list of states to scrape (exported for runner)
+export function getStates() {
+  return getStatesToScrape();
+}
+
+// Legacy: Get all city URLs at once (still available but not recommended)
 export async function getCityUrls(limit) {
   const pickStates = getStatesToScrape();
   // Sort states alphabetically
