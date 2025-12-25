@@ -52,11 +52,18 @@ async function fetchDirect(url) {
 }
 
 // Public API: `render` is accepted for compatibility; the proxy handles JS as it's configured.
+// Set REDFIN_USE_PROXY=true to enable proxy, otherwise direct fetch is used
 export async function fetchHtml(url, { render = false } = {}) {
+  const useProxy = String(process.env.REDFIN_USE_PROXY || 'false').toLowerCase() === 'true';
+
+  console.log(`[Fetcher] Fetching URL: ${url} (render=${render}, useProxy=${useProxy})`);
+
+  // Default: direct fetch (no proxy needed for Redfin)
+  if (!useProxy) {
+    return await fetchDirect(url);
+  }
+
   let agent;
-
-  console.log(`[Fetcher] Fetching URL: ${url} (render=${render})`);
-
   try {
     agent = getDecodoAgent();
     console.log('[Fetcher] Proxy configured, using Decodo');

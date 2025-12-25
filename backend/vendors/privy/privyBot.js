@@ -8,6 +8,9 @@ import { getChromeProxyForPaid } from '../../services/proxyManager.js';
 import { getVendorProxyPool, toProxyArg } from '../../utils/proxyBuilder.js';
 import * as sessionStore from './auth/sessionStore.js'; // ensure file exists
 
+// Exponential backoff with jitter (same as Redfin fetcher)
+const backoff = (n) => 500 * (2 ** n) + Math.floor(Math.random() * 250);
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 const L = logPrivy.child('privy');
 
@@ -159,7 +162,7 @@ export default class PrivyBot {
           if (isNetworkOrProxyError(e) && i < navAttempts - 1) {
             // Optional: try a paid forwarder lease before falling back to direct
             try { await getChromeProxyForPaid({ service: 'privy', sticky: true, key: 'privy' }); } catch {}
-            await new Promise(r => setTimeout(r, 400 + Math.floor(Math.random() * 800)));
+            await sleep(backoff(i));
             continue;
           }
           throw e;
@@ -176,7 +179,7 @@ export default class PrivyBot {
         } catch (e) {
           if (isNetworkOrProxyError(e) && i < navAttempts - 1) {
             try { await getChromeProxyForPaid({ service: 'privy', sticky: true, key: 'privy' }); } catch {}
-            await new Promise(r => setTimeout(r, 400 + Math.floor(Math.random() * 800)));
+            await sleep(backoff(i));
             continue;
           }
           throw e;
