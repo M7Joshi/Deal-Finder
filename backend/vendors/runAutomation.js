@@ -549,7 +549,7 @@ async function bootstrapScheduler() {
     SCRAPE_BATCH_LIMIT,
     immediate,
     worker: true,
-    startingMode: currentMode,
+    startingPhase: schedulerPhase,
     disabled: DISABLE_SCHEDULER
   });
 
@@ -1750,7 +1750,7 @@ export function startSchedulerManually() {
     schedulerEnabled,
     DISABLE_SCHEDULER,
     RUN_IMMEDIATELY: process.env.RUN_IMMEDIATELY,
-    currentMode
+    schedulerPhase
   });
 
   schedulerEnabled = true;
