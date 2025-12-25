@@ -133,6 +133,11 @@ console.log(`Found ${listings.length} index listings (all pages)`);
   const jitter = () => (BASE_JITTER || (75 + Math.floor(Math.random() * 125)));
 
   for (const it of listings) {
+    // Check for abort signal at start of each listing
+    if (control.abort) {
+      console.log('[Redfin] 🛑 Stop requested - aborting listing processing');
+      break;
+    }
     if (processed >= maxListings) break;
     processed++;
 

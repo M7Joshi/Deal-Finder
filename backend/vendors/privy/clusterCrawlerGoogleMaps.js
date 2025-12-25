@@ -44,6 +44,10 @@ const getCurrentZoom = async (page) => {
   });
 };
 
+// Track iterations to prevent infinite loops
+let __clusterIterations = 0;
+const MAX_CLUSTER_ITERATIONS = 50; // Hard limit on zoom cycles
+
 const clickClustersRecursively = async (
   page,
   browser,
@@ -53,19 +57,22 @@ const clickClustersRecursively = async (
   maxZoom = 21,
   minZoom = 3
 ) => {
+  // GUARD: Prevent infinite zoom loops
+  __clusterIterations++;
+  if (__clusterIterations > MAX_CLUSTER_ITERATIONS) {
+    console.log('🛑 Max cluster iterations reached - stopping to prevent infinite loop');
+    __clusterIterations = 0; // Reset for next city
+    return false;
+  }
+
   const viewsVisible = await waitForViews(page);
 
   if (viewsVisible.length > 0) {
     console.log('🎉 View containers loaded!');
     await scrapeProperties(page, browser);
-    // Simulate a map click and zoom back to level 0
-    await page.mouse.move(400, 300);
-    await page.mouse.click(400, 300);
-    while (zoomLevel > 0) {
-      await zoomMap(page, "out");
-      zoomLevel--;
-    }
-    return await clickClustersRecursively(page, browser, scrapeProperties, visited, 0, maxZoom, minZoom);
+    // Reset iteration counter after successful scrape - we're done with this view
+    __clusterIterations = 0;
+    return true; // Return immediately after scraping - don't zoom and recurse
   }
 
   const clusters = await getClustersWithKeys(page);
@@ -80,6 +87,7 @@ const clickClustersRecursively = async (
       return await clickClustersRecursively(page, browser, scrapeProperties, visited, zoomLevel - 1, maxZoom, minZoom);
     } else {
       console.log("🛑 No more zoom levels or clusters to process.");
+      __clusterIterations = 0; // Reset for next city
       return false;
     }
   }
@@ -99,14 +107,8 @@ const clickClustersRecursively = async (
       if (viewsAfterClick.length > 0) {
         console.log("🎯 Target views loaded after clicking cluster!");
         await scrapeProperties(page);
-        // Simulate a map click and zoom back to level 0
-        await page.mouse.move(400, 1000);
-        await page.mouse.click(400, 1000);
-        while (zoomLevel > 0) {
-          await zoomMap(page, "out");
-          zoomLevel--;
-        }
-        return await clickClustersRecursively(page, browser, scrapeProperties, visited, 0, maxZoom, minZoom);
+        __clusterIterations = 0; // Reset after successful scrape
+        return true; // Done with this cluster - return success
       }
     } catch (err) {
       console.warn(`⚠️ Could not click cluster ${key}: ${err.message}`);

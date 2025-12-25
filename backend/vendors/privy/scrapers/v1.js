@@ -36,8 +36,8 @@ import {
   getProgressSummary,
 } from '../progressTracker.js';
 
-// Import batch limit checker from runAutomation
-import { incrementAddressCount, shouldPauseScraping } from '../../runAutomation.js';
+// Import batch limit checker and abort control from runAutomation
+import { incrementAddressCount, shouldPauseScraping, control } from '../../runAutomation.js';
 
 // --- Quick Filters / Tags support (URL mode) ---
 // human label -> URL param key as used by Privy
@@ -442,6 +442,28 @@ async function ensureDashboardReady(page, { timeout = 60000 } = {}) {
 async function navigateWithSession(page, url, { retries = 1 } = {}) {
   const L = logPrivy.with({ url });
   for (let attempt = 0; attempt <= retries; attempt += 1) {
+    // ROBUST FIX: Force a completely clean SPA state before navigation
+    // This ensures Privy's React/Redux state is fully reset (not showing stale data from other states)
+    try {
+      // 1. Navigate to blank page to destroy React app state
+      await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 5000 }).catch(() => {});
+
+      // 2. Clear ALL browser storage (but keep auth cookies)
+      await page.evaluate(() => {
+        try {
+          localStorage.clear();
+          sessionStorage.clear();
+        } catch {}
+      });
+
+      // 3. Clear browser cache via CDP to force fresh data fetch
+      try {
+        const client = await page.createCDPSession();
+        await client.send('Network.clearBrowserCache');
+        await client.detach();
+      } catch {}
+    } catch {}
+
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
     const currentUrl = page.url();
 
@@ -905,6 +927,12 @@ const scrapePropertiesV1 = async (page) => {
       for (const { url: targetUrl, tag } of urlVariants) {
         if (skipToNextCity) break; // Check if we should skip to next city
 
+        // Check for abort signal before processing each URL variant
+        if (control.abort) {
+          logPrivy.warn('🛑 Stop requested - aborting URL processing');
+          return []; // Exit immediately
+        }
+
         // keep the SPA/session warm between navigations
         await page.evaluate(() => {
           try { localStorage.setItem('keepalive', String(Date.now())); } catch (e) {}
@@ -1125,6 +1153,12 @@ await page.evaluate(() => {
             let urlSaved = 0;
             let skippedWrongState = 0;
             for (const prop of normalized) {
+              // Check for abort signal before processing each property
+              if (control.abort) {
+                logPrivy.warn('🛑 Stop requested - aborting property processing');
+                return; // Exit immediately
+              }
+
               try {
                 if (!prop || !prop.fullAddress || typeof prop.fullAddress !== 'string') {
                   logPrivy.warn('Skipping invalid property', { fullAddress: prop?.fullAddress || null, state });
@@ -1239,24 +1273,23 @@ await page.evaluate(() => {
             // Track successful saves for this city
             citySavedTotal += urlSaved;
 
-            // If all properties were from wrong state, increment retry counter
+            // If all properties were from wrong state, this is a stale cache issue
+            // Don't retry - just skip to next city/tag since Privy's SPA cache is corrupted
             if (skippedWrongState > 0 && urlSaved === 0) {
-              cityRetryCount++;
-              if (cityRetryCount >= MAX_CITY_RETRIES) {
-                LC.warn('Max retries reached for city - moving to next city', {
-                  city: extractCityFromUrl(url),
-                  retries: cityRetryCount,
-                  skippedWrongState
-                });
-                skipToNextCity = true;
-                return; // Exit callback
-              }
-              LC.warn('All properties from wrong state - Privy cache issue, reloading page', {
-                retry: cityRetryCount,
-                maxRetries: MAX_CITY_RETRIES
+              LC.warn('All properties from wrong state - Privy SPA cache stale, skipping to next', {
+                city: extractCityFromUrl(url),
+                skippedWrongState,
+                expectedState: state
               });
-              await page.reload({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-              await randomWait(2000, 4000);
+              // Clear cache and skip - don't retry as it will just loop
+              try {
+                await page.evaluate(() => {
+                  sessionStorage.clear();
+                  localStorage.clear();
+                });
+              } catch {}
+              skipToNextCity = true;
+              return; // Exit callback - move to next city
             }
           });
           // (Continue to next URL variant/state unless skipToNextCity is set)

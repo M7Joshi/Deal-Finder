@@ -28,59 +28,27 @@ function getDecodoAgent() {
   return new HttpsProxyAgent(url);
 }
 
-// Direct fetch without proxy with retry logic (like Privy's safeGoto)
-async function fetchDirect(url, { maxRetries = 3 } = {}) {
+// Direct fetch without proxy (fallback when proxy fails)
+async function fetchDirect(url) {
   console.log(`[Fetcher] Attempting direct fetch: ${url}`);
+  try {
+    const res = await axios.get(url, {
+      headers: defaultHeaders(),
+      timeout: 30000,
+      validateStatus: () => true,
+    });
 
-  let lastErr;
+    console.log(`[Fetcher] Direct fetch status: ${res.status}`);
 
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      const res = await axios.get(url, {
-        headers: defaultHeaders(),
-        timeout: 30000,
-        validateStatus: () => true,
-      });
-
-      console.log(`[Fetcher] Direct fetch attempt ${attempt + 1}/${maxRetries} status: ${res.status}`);
-
-      if (res.status >= 200 && res.status < 300) {
-        console.log(`[Fetcher] Success! Got ${typeof res.data === 'string' ? res.data.length : 0} bytes`);
-        return typeof res.data === 'string' ? res.data : String(res.data);
-      }
-
-      // Retry on common block/error statuses
-      if ([429, 500, 502, 503, 504, 520, 521, 522, 523, 524].includes(res.status)) {
-        lastErr = new Error(`HTTP ${res.status} (direct) for ${url}`);
-        console.warn(`[Fetcher] Got ${res.status}, retrying after backoff (attempt ${attempt + 1}/${maxRetries})...`);
-        await sleep(backoff(attempt));
-        continue;
-      }
-
-      // Non-retryable error
-      throw new Error(`HTTP ${res.status} (direct) for ${url}`);
-    } catch (err) {
-      lastErr = err;
-      // Check if it's a network error worth retrying
-      const isNetworkError = err.code === 'ECONNRESET' ||
-                             err.code === 'ETIMEDOUT' ||
-                             err.code === 'ECONNREFUSED' ||
-                             err.code === 'ENOTFOUND' ||
-                             err.message?.includes('timeout') ||
-                             err.message?.includes('socket hang up');
-
-      if (isNetworkError && attempt < maxRetries - 1) {
-        console.warn(`[Fetcher] Network error: ${err.message}, retrying after backoff (attempt ${attempt + 1}/${maxRetries})...`);
-        await sleep(backoff(attempt));
-        continue;
-      }
-
-      console.error(`[Fetcher] Direct fetch error: ${err.message}`);
-      throw err;
+    if (res.status >= 200 && res.status < 300) {
+      return typeof res.data === 'string' ? res.data : String(res.data);
     }
-  }
 
-  throw lastErr || new Error(`All ${maxRetries} fetch attempts failed for ${url}`);
+    throw new Error(`HTTP ${res.status} (direct) for ${url}`);
+  } catch (err) {
+    console.error(`[Fetcher] Direct fetch error: ${err.message}`);
+    throw err;
+  }
 }
 
 // Public API: `render` is accepted for compatibility; the proxy handles JS as it's configured.

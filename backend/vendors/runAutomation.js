@@ -1719,24 +1719,31 @@ if (IS_WORKER) {
 }
 // Hidden hook used by routes to request a FORCE stop - kills everything immediately
 progressTracker._requestStop = async function requestStop() {
-  log.warn('FORCE STOP requested - killing all automations immediately');
+  log.warn('🛑 FORCE STOP requested - killing all automations immediately');
 
-  // Set abort flag immediately
+  // Set abort flag immediately - this is checked by all scrapers
   control.abort = true;
   schedulerEnabled = false;
   isRunning = false;
 
+  // Update status immediately so UI shows stopped
+  progressTracker.isRunning = false;
+  progressTracker.status = 'stopping';
+
   // Clear all timers and queues
-  try { if (schedulerTimer) clearTimeout(schedulerTimer); } catch {}
+  try { if (schedulerTimer) clearTimeout(schedulerTimer); schedulerTimer = null; } catch {}
   try { if (homeValuationsQueue) homeValuationsQueue.clear(); } catch {}
   try { if (currentListingsQueue) currentListingsQueue.clear(); } catch {}
   try { if (currentGlobalLimiter) currentGlobalLimiter.clear(); } catch {}
-  try { if (maintainPoolHandle) clearInterval(maintainPoolHandle); } catch {}
+  try { if (maintainPoolHandle) clearInterval(maintainPoolHandle); maintainPoolHandle = null; } catch {}
+
+  // Clear the Privy login mutex queue
+  try { privyLoginMutex.clear(); } catch {}
 
   // Reset OTP state
   resetOtpState();
 
-  // Force close all browsers
+  // Force close all browsers - this kills Puppeteer mid-operation
   try {
     await closeSharedBrowser();
     log.info('Shared browser closed');
@@ -1744,8 +1751,14 @@ progressTracker._requestStop = async function requestStop() {
     log.warn('Error closing shared browser', { error: e?.message });
   }
 
+  // Also try to close the Redfin agent extractor browser
+  try {
+    const { closeSharedBrowser: closeRedfinBrowser } = await import('./redfin/agentExtractor.js');
+    await closeRedfinBrowser();
+    log.info('Redfin agent extractor browser closed');
+  } catch {}
+
   // Reset progress tracker to idle state
-  progressTracker.isRunning = false;
   progressTracker.status = 'idle';
   progressTracker.jobs = [];
   progressTracker.error = null;
@@ -1756,7 +1769,10 @@ progressTracker._requestStop = async function requestStop() {
   currentListingsQueue = null;
   currentGlobalLimiter = null;
 
-  log.warn('FORCE STOP complete - all automations killed, status reset to idle');
+  // Reset batch counter
+  resetBatchCounter();
+
+  log.warn('🛑 FORCE STOP complete - all automations killed, status reset to idle');
 };
 
 export default runAutomation;
