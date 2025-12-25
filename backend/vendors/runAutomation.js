@@ -575,15 +575,22 @@ async function bootstrapScheduler() {
   scheduleNextRun(immediate ? 0 : RUN_INTERVAL_MS);
 }
 
+// Simple linear scheduler:
+// Step 1: Redfin scrapes addresses
+// Step 2: BofA gets valuations
+// Step 3: Privy scrapes addresses
+// Step 4: BofA gets valuations
+// Repeat...
+
 async function schedulerTick() {
   if (!schedulerEnabled) return;
 
-  // Ensure database is connected before any DB operations
+  // Ensure database is connected
   try {
     await connectDB();
   } catch (e) {
     log.error('Scheduler: Failed to connect to database', { error: e?.message });
-    scheduleNextRun(10000); // Retry in 10 seconds
+    scheduleNextRun(10000);
     return;
   }
 
@@ -592,118 +599,65 @@ async function schedulerTick() {
     return scheduleNextRun(5000);
   }
 
-  // Check how many addresses need AMV
-  const pendingAMV = await ScrapedDeal.countDocuments({
-    $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
-  });
+  // Simple linear flow: scrapeSource -> bofa -> alternate scrapeSource -> bofa -> repeat
+  // scrapeSource starts as 'redfin', then alternates to 'privy'
 
-  // Check total addresses in database
-  const totalAddresses = await ScrapedDeal.countDocuments({});
-
-  // Debug: Log the decision point
-  // IMPORTANT: If there are ANY pending AMV addresses, process them
-  // This ensures AMV always runs when there's work to do
-  // BUT: If total addresses is very low (fresh start), always scrape first
-  const isFreshStart = totalAddresses < 10; // Less than 10 addresses = fresh start, scrape first
-  // Enter AMV mode if: not fresh start AND (has pending AMV OR batch limit reached OR already in AMV mode)
-  const shouldEnterAMV = !isFreshStart && (
-    pendingAMV > 0 ||  // ANY pending AMV = process them
-    addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT ||
-    currentMode === 'amv'
-  );
-  log.info('Scheduler: MODE DECISION', {
-    totalAddresses,
-    pendingAMV,
-    addressesScrapedThisBatch,
-    batchLimit: SCRAPE_BATCH_LIMIT,
+  log.info('Scheduler: LINEAR FLOW', {
     currentMode,
-    batchLimitReached: addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT,
-    isFreshStart,
-    shouldEnterAMV
+    scrapeSource,
+    addressesScrapedThisBatch
   });
 
-  // Decide mode based on pending AMV count
-  // If we have pending AMV addresses, process them first
-  if (shouldEnterAMV) {
-    currentMode = 'amv';
-    log.info('Scheduler: AMV MODE - processing pending addresses', {
-      pendingAMV,
-      addressesScrapedThisBatch
-    });
+  if (currentMode === 'scrape') {
+    // STEP: Run the current scraper (redfin or privy)
+    log.info(`Scheduler: Running ${scrapeSource.toUpperCase()} scraper`);
 
     try {
-      // Run only AMV jobs
-      const amvJobs = new Set(['bofa', 'scraped_deals_amv']);
-      log.info('Scheduler: About to call runAutomation with AMV jobs', {
-        jobs: Array.from(amvJobs)
-      });
-      await runAutomation(amvJobs);
-      log.info('Scheduler: runAutomation AMV completed');
-    } catch (e) {
-      log.error('Scheduler: AMV run threw', { error: e?.message || String(e) });
-    }
-
-    // Check if AMV is complete (or mostly done)
-    const stillPending = await ScrapedDeal.countDocuments({
-      $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
-    });
-
-    if (stillPending === 0 || stillPending < 50) {
-      // AMV done, switch back to scrape mode and alternate source
-      currentMode = 'scrape';
-      resetBatchCounter();
-      // Alternate between redfin and privy after each AMV cycle
-      const previousSource = scrapeSource;
-      scrapeSource = scrapeSource === 'redfin' ? 'privy' : 'redfin';
-      log.info('Scheduler: AMV complete, switching to SCRAPE mode IMMEDIATELY', {
-        stillPending,
-        previousSource,
-        nextSource: scrapeSource
-      });
-      // Start next scrape cycle immediately (no delay)
-      if (schedulerEnabled) {
-        scheduleNextRun(0);
-      }
-      return; // Don't schedule again below with long delay
-    }
-  } else {
-    currentMode = 'scrape';
-    log.info('Scheduler: SCRAPE MODE - fetching new addresses', {
-      addressesScrapedThisBatch,
-      batchLimit: SCRAPE_BATCH_LIMIT,
-      pendingAMV
-    });
-
-    try {
-      // Run only ONE scraping source at a time (redfin first, then privy after AMV cycle)
-      log.info(`Scheduler: Running ${scrapeSource.toUpperCase()} scraper only`);
       await runAutomation(new Set([scrapeSource]));
     } catch (e) {
-      log.error('Scheduler: Scrape run threw', { error: e?.message || String(e) });
+      log.error(`Scheduler: ${scrapeSource} threw`, { error: e?.message || String(e) });
     }
 
-    // If we hit the batch limit, switch to AMV mode
-    if (addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT) {
-      currentMode = 'amv';
-      log.info('Scheduler: Batch limit reached, switching to AMV mode IMMEDIATELY', {
-        addressesScraped: addressesScrapedThisBatch
-      });
-      // Schedule AMV run immediately (no delay)
-      if (schedulerEnabled) {
-        scheduleNextRun(0);
-      }
-      return; // Don't schedule again below
+    // After scraping, switch to AMV mode
+    currentMode = 'amv';
+    log.info('Scheduler: Scrape done, now running BofA valuations');
+
+    if (schedulerEnabled) {
+      scheduleNextRun(0); // Run BofA immediately
     }
+    return;
+
+  } else if (currentMode === 'amv') {
+    // STEP: Run BofA valuations
+    log.info('Scheduler: Running BofA valuations');
+
+    try {
+      const amvJobs = new Set(['bofa', 'scraped_deals_amv']);
+      await runAutomation(amvJobs);
+    } catch (e) {
+      log.error('Scheduler: BofA threw', { error: e?.message || String(e) });
+    }
+
+    // After AMV, switch scraper source and go back to scrape mode
+    const previousSource = scrapeSource;
+    scrapeSource = scrapeSource === 'redfin' ? 'privy' : 'redfin';
+    currentMode = 'scrape';
+    resetBatchCounter();
+
+    log.info('Scheduler: BofA done, switching scraper', {
+      previousSource,
+      nextSource: scrapeSource
+    });
+
+    if (schedulerEnabled) {
+      scheduleNextRun(0); // Run next scraper immediately
+    }
+    return;
   }
 
+  // Fallback (shouldn't reach here)
   if (schedulerEnabled) {
-    log.info('Scheduler: cycle finished — scheduling next', {
-      inMs: RUN_INTERVAL_MS,
-      nextMode: currentMode
-    });
     scheduleNextRun(RUN_INTERVAL_MS);
-  } else {
-    log.info('Scheduler: disabled after run completion.');
   }
 }
 
