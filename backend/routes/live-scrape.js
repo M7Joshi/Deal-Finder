@@ -747,8 +747,45 @@ router.get('/privy', requireAuth, async (req, res) => {
     }
 
     // Extract addresses AND agent details in ONE PASS from property cards (limited to what we need)
-    const addresses = await page.evaluate((contentSel, line1Sel, line2Sel, priceSel, statsSel, agentNameSel, agentEmailSel, agentPhoneSel, maxToExtract) => {
+    // Uses same approach as v1.js - extract agent from mailto/tel links on cards
+    const addresses = await page.evaluate((contentSel, line1Sel, line2Sel, priceSel, statsSel, maxToExtract) => {
       const results = [];
+
+      // Agent name selectors to try on each card (same as v1.js)
+      const agentNameSels = ['.agent-name', '[data-testid="agent-name"]', '.listing-agent .name', '.contact-name', '.realtor-name'];
+      const getAgentName = (el) => {
+        for (const sel of agentNameSels) {
+          const found = el.querySelector(sel);
+          if (found?.textContent?.trim()) return found.textContent.trim();
+        }
+        return null;
+      };
+
+      // Get mailto/tel links from card (filter out system/user emails) - same as v1.js
+      const getAgentContact = (el) => {
+        let email = null, phone = null;
+        const mailtoLink = el.querySelector('a[href^="mailto:"]');
+        if (mailtoLink) {
+          const href = mailtoLink.getAttribute('href') || '';
+          const candidateEmail = href.replace('mailto:', '').split('?')[0].trim();
+          const lower = candidateEmail.toLowerCase();
+          // Skip system/platform emails
+          if (!lower.includes('privy') &&
+              !lower.includes('noreply') &&
+              !lower.includes('mioym') &&
+              !lower.includes('support') &&
+              !lower.includes('info@') &&
+              !lower.includes('admin')) {
+            email = candidateEmail;
+          }
+        }
+        const telLink = el.querySelector('a[href^="tel:"]');
+        if (telLink) {
+          const href = telLink.getAttribute('href') || '';
+          phone = href.replace('tel:', '').trim();
+        }
+        return { email, phone };
+      };
 
       // Use the config selectors for property cards
       const modules = document.querySelectorAll(contentSel);
@@ -792,17 +829,16 @@ router.get('/privy', requireAuth, async (req, res) => {
               if (quickStats.length > 0) break;
             }
 
-            // ========== DO NOT EXTRACT AGENT FROM CARD VIEW ==========
-            // Agent info will be extracted from detail view using Privy's labeled fields:
-            // "List Agent Direct Phone:", "List Agent Email:", "List Agent First/Last Name:", etc.
-            // This avoids grabbing wrong agent info from the card/list view.
+            // Extract agent info from card using mailto/tel links (same as v1.js)
+            const agentName = getAgentName(module);
+            const { email: agentEmail, phone: agentPhone } = getAgentContact(module);
 
             results.push({
               fullAddress: `${line1}, ${line2}`,
               price,
-              agentName: null,
-              agentEmail: null,
-              agentPhone: null,
+              agentName,
+              agentEmail,
+              agentPhone,
               quickStats
             });
           }
@@ -810,7 +846,7 @@ router.get('/privy', requireAuth, async (req, res) => {
       }
 
       return results;
-    }, propertyContentSelector, addressLine1Selector, addressLine2Selector, priceSelector, propertyStatsSelector, agentNameSelector, agentEmailSelector, agentPhoneSelector, stillNeededBeforeExtract);
+    }, propertyContentSelector, addressLine1Selector, addressLine2Selector, priceSelector, propertyStatsSelector, stillNeededBeforeExtract);
 
     // Count how many already have agent info from card extraction
     const withAgentFromCard = addresses.filter(a => a.agentName || a.agentPhone || a.agentEmail).length;
