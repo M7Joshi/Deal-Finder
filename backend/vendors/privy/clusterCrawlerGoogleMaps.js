@@ -2,9 +2,9 @@
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const waitForViews = async (page) => {
-    // Return all matching containers currently mounted
-    return await page.$$('.view-container, .grid-view-container, .map-view-container');
-  };
+  // Return all matching containers currently mounted
+  return await page.$$('.view-container, .grid-view-container, .map-view-container');
+};
 
 const getClustersWithKeys = async (page) => {
   // Get cluster info with coordinates - don't store handles since they can become stale
@@ -30,24 +30,10 @@ const getClustersWithKeys = async (page) => {
   return clusterData;
 };
 
-const zoomMap = async (page, direction = "in") => {
-  const deltaY = direction === "in" ? -300 : 300;
-  await page.mouse.move(400, 300); // Center of map
-  await page.mouse.wheel({ deltaY });
-  console.log(direction === "in" ? "🔍 Zoomed In" : "🔎 Zoomed Out");
-  await wait(1500); // Allow map to update
-};
-
-const getCurrentZoom = async (page) => {
-  return await page.evaluate(() => {
-    return window.map?.getZoom?.() ?? null;
-  });
-};
-
-// Track iterations to prevent infinite loops
-let __clusterIterations = 0;
-const MAX_CLUSTER_ITERATIONS = 50; // Hard limit on zoom cycles
-
+/**
+ * Simple cluster crawler - no zoom, just click visible clusters once
+ * If no clusters or views found, move on to next city
+ */
 const clickClustersRecursively = async (
   page,
   browser,
@@ -57,74 +43,52 @@ const clickClustersRecursively = async (
   maxZoom = 21,
   minZoom = 3
 ) => {
-  // GUARD: Prevent infinite zoom loops
-  __clusterIterations++;
-  if (__clusterIterations > MAX_CLUSTER_ITERATIONS) {
-    console.log('🛑 Max cluster iterations reached - stopping to prevent infinite loop');
-    __clusterIterations = 0; // Reset for next city
-    return false;
-  }
-
+  // First check if view containers are already visible (properties list showing)
   const viewsVisible = await waitForViews(page);
-
   if (viewsVisible.length > 0) {
-    console.log('🎉 View containers loaded!');
+    console.log('🎉 View containers already loaded - scraping properties');
     await scrapeProperties(page, browser);
-    // After scraping, close the view and continue with more clusters
-    try {
-      // Click somewhere on the map to close the property list view
-      await page.mouse.click(400, 300);
-      await wait(500);
-    } catch {}
-    // Don't return - continue processing more clusters
+    return true; // Done with this city
   }
 
+  // Get visible clusters
   const clusters = await getClustersWithKeys(page);
-  const unvisited = clusters.filter(c => !visited.has(c.key));
 
-  if (unvisited.length === 0) {
-    if (zoomLevel < maxZoom) {
-      await zoomMap(page, "in");
-      return await clickClustersRecursively(page, browser, scrapeProperties, visited, zoomLevel + 1, maxZoom, minZoom);
-    } else if (zoomLevel > minZoom) {
-      await zoomMap(page, "out");
-      return await clickClustersRecursively(page, browser, scrapeProperties, visited, zoomLevel - 1, maxZoom, minZoom);
-    } else {
-      console.log("🛑 No more zoom levels or clusters to process.");
-      __clusterIterations = 0; // Reset for next city
-      return false;
-    }
+  if (clusters.length === 0) {
+    console.log('📭 No clusters found for this city - moving to next city');
+    return false; // No properties in this city, move on
   }
 
-  console.log(`📍 Found ${unvisited.length} unvisited cluster(s) at zoom level ${zoomLevel}`);
-  for (const cluster of unvisited) {
-    const { key, x, y } = cluster;
+  console.log(`📍 Found ${clusters.length} cluster(s) - clicking to load properties`);
+
+  // Try clicking clusters until we get a view with properties
+  for (const cluster of clusters) {
+    const { key, x, y, count } = cluster;
+
+    if (visited.has(key)) continue;
+    visited.add(key);
+
     try {
-      // Use coordinates-based clicking to avoid stale element handles
+      console.log(`✅ Clicking cluster with ${count} properties at (${x}, ${y})`);
       await page.mouse.move(x, y);
-      await wait(100); // Small delay for hover effects
+      await wait(200);
       await page.mouse.click(x, y);
-      visited.add(key);
-      console.log(`✅ Clicked cluster ${key} at (${x}, ${y})`);
-      await wait(1000);
+      await wait(1500); // Wait for view to load
+
       const viewsAfterClick = await waitForViews(page);
       if (viewsAfterClick.length > 0) {
-        console.log("🎯 Target views loaded after clicking cluster!");
-        await scrapeProperties(page);
-        // Close the view and continue with more clusters
-        try {
-          await page.mouse.click(400, 300);
-          await wait(500);
-        } catch {}
-        // Don't return - continue processing remaining clusters
+        console.log('🎯 Properties view loaded - scraping');
+        await scrapeProperties(page, browser);
+        return true; // Done with this city
       }
     } catch (err) {
-      console.warn(`⚠️ Could not click cluster ${key}: ${err.message}`);
+      console.warn(`⚠️ Could not click cluster: ${err.message}`);
     }
   }
 
-  // Recurse again at this zoom level in case new clusters loaded
-  return await clickClustersRecursively(page, browser, scrapeProperties, visited, zoomLevel, maxZoom, minZoom);
+  // If we clicked all clusters but no view loaded, move on
+  console.log('📭 Clicked all clusters but no properties view loaded - moving to next city');
+  return false;
 };
 
 export { clickClustersRecursively };
