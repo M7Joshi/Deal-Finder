@@ -711,7 +711,7 @@ async function collectAllCardsWithScrolling(page, {
             // Must start with a number (typical street address: "123 Main St")
             if (!/^\d+\s+\w/.test(addr)) return false;
             // Reject malformed patterns from wrong DOM elements
-            if (/HRS?\s*AGO|ABOUT THIS HOME|WALKTHROUGH/i.test(addr)) return false;
+            if (/HRS?\s*AGO|DAYS?\s*AGO|ABOUT THIS HOME|WALKTHROUGH|bedrooms?|baths?|sq\s*ft|residence|offers|layout/i.test(addr)) return false;
             // Must be reasonable length (not too short, not absurdly long)
             if (addr.length < 10 || addr.length > 200) return false;
             return true;
