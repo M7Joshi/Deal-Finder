@@ -605,6 +605,39 @@ async function schedulerTick() {
     return scheduleNextRun(5000);
   }
 
+  // PRIORITY: Always clear pending AMV addresses first before scraping new ones
+  try {
+    const pendingAMV = await ScrapedDeal.countDocuments({
+      $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+    });
+
+    if (pendingAMV > 0) {
+      log.info(`Scheduler: Found ${pendingAMV} addresses pending AMV - processing them first before scraping new ones`);
+
+      try {
+        const amvJobs = new Set(['bofa', 'scraped_deals_amv']);
+        await runAutomation(amvJobs);
+      } catch (e) {
+        log.error('Scheduler: AMV processing threw', { error: e?.message || String(e) });
+      }
+
+      // Check again after processing
+      const remainingAMV = await ScrapedDeal.countDocuments({
+        $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+      });
+
+      if (remainingAMV > 0) {
+        log.info(`Scheduler: Still ${remainingAMV} addresses pending AMV - will continue processing`);
+        scheduleNextRun(5000); // Short delay before processing more
+        return;
+      }
+
+      log.info('Scheduler: All pending AMV addresses processed - now can scrape new addresses');
+    }
+  } catch (e) {
+    log.warn('Scheduler: Could not check pending AMV', { error: e?.message });
+  }
+
   // Simple linear flow: scrapeSource -> bofa -> cooldown -> alternate scrapeSource -> bofa -> cooldown -> repeat
   // scrapeSource starts as 'redfin', then alternates to 'privy'
 
