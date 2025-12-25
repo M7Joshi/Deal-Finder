@@ -495,16 +495,17 @@ let schedulerEnabled = !DISABLE_SCHEDULER;
 
 // Track how many addresses scraped in current batch
 let addressesScrapedThisBatch = 0;
-let currentMode = 'scrape'; // 'scrape' or 'amv'
-let scrapeSource = 'privy'; // 'privy' first, then 'redfin' after first AMV cycle
+
+// Scheduler phases (moved here so getScraperStatus can reference it)
+let schedulerPhase = 'redfin'; // 'redfin' | 'break_after_redfin' | 'privy' | 'break_after_privy' | 'bofa' | 'break_after_bofa'
 
 // Export for tracking
 export function getScraperStatus() {
   return {
-    mode: currentMode,
-    scrapeSource,
+    phase: schedulerPhase,
     addressesScrapedThisBatch,
-    batchLimit: SCRAPE_BATCH_LIMIT,
+    scraperLimit: SCRAPER_LIMIT,
+    breakMs: BREAK_MS,
     schedulerEnabled
   };
 }
@@ -524,9 +525,10 @@ export function shouldPauseScraping() {
   return addressesScrapedThisBatch >= SCRAPE_BATCH_LIMIT;
 }
 
-// Reset counter after AMV phase completes (exported for clear-all endpoint)
+// Reset counter and phase after AMV phase completes (exported for clear-all endpoint)
 export function resetBatchCounter() {
   addressesScrapedThisBatch = 0;
+  schedulerPhase = 'redfin'; // Reset to start of cycle
 }
 
 function scheduleNextRun(delayMs = RUN_INTERVAL_MS) {
@@ -575,18 +577,23 @@ async function bootstrapScheduler() {
   scheduleNextRun(immediate ? 0 : RUN_INTERVAL_MS);
 }
 
-// Simple linear scheduler:
-// Step 1: Redfin scrapes addresses
-// Step 2: BofA gets valuations
-// Step 3: Cooldown (rest)
-// Step 4: Privy scrapes addresses
-// Step 5: BofA gets valuations
-// Step 6: Cooldown (rest)
-// Repeat...
+// New Sequential Flow with 2-minute breaks:
+// Step 1: Redfin scrapes up to 100 addresses → Save to Pending AMV
+// Step 2: 2 minute break
+// Step 3: Privy scrapes up to 100 addresses → Save to Pending AMV
+// Step 4: 2 minute break
+// Step 5: BofA fetches AMV for ALL pending addresses
+// Step 6: 2 minute break
+// Step 7: Repeat from Step 1
+//
+// When Pending AMV reaches 100+ addresses:
+// - Pause scraping, process all through BofA
+// - Keep completed addresses (with AMV values)
+// - Continue adding more
 
-// Cooldown period between cycles (in milliseconds)
-// Default: 1 minute. Set COOLDOWN_MS env var to override.
-const COOLDOWN_MS = Number(process.env.COOLDOWN_MS || 60000);
+// Break period between phases (2 minutes = 120000ms)
+const BREAK_MS = Number(process.env.BREAK_MS || 120000);
+const SCRAPER_LIMIT = Number(process.env.SCRAPER_LIMIT || 100);
 
 async function schedulerTick() {
   if (!schedulerEnabled) return;
@@ -605,100 +612,122 @@ async function schedulerTick() {
     return scheduleNextRun(5000);
   }
 
-  // PRIORITY: Always clear pending AMV addresses first before scraping new ones
+  // Check pending AMV count
+  let pendingAMV = 0;
   try {
-    const pendingAMV = await ScrapedDeal.countDocuments({
+    pendingAMV = await ScrapedDeal.countDocuments({
       $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
     });
+  } catch (e) {
+    log.warn('Scheduler: Could not count pending AMV', { error: e?.message });
+  }
 
-    if (pendingAMV > 0) {
-      log.info(`Scheduler: Found ${pendingAMV} addresses pending AMV - processing them first before scraping new ones`);
+  log.info('Scheduler: SEQUENTIAL FLOW', {
+    phase: schedulerPhase,
+    pendingAMV,
+    breakMs: BREAK_MS,
+    scraperLimit: SCRAPER_LIMIT
+  });
 
+  // If we have 100+ pending addresses, skip scraping and go straight to BofA
+  if (pendingAMV >= SCRAPER_LIMIT && !schedulerPhase.startsWith('break') && schedulerPhase !== 'bofa') {
+    log.info(`Scheduler: ${pendingAMV} pending addresses >= ${SCRAPER_LIMIT} - skipping to BofA phase`);
+    schedulerPhase = 'bofa';
+  }
+
+  switch (schedulerPhase) {
+    case 'redfin': {
+      log.info('Scheduler: Phase 1 - REDFIN scraping (limit: ' + SCRAPER_LIMIT + ' addresses)');
       try {
-        const amvJobs = new Set(['bofa', 'scraped_deals_amv']);
-        await runAutomation(amvJobs);
+        await runAutomation(new Set(['redfin']));
       } catch (e) {
-        log.error('Scheduler: AMV processing threw', { error: e?.message || String(e) });
+        log.error('Scheduler: Redfin threw', { error: e?.message || String(e) });
       }
 
-      // Check again after processing
-      const remainingAMV = await ScrapedDeal.countDocuments({
-        $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
-      });
+      schedulerPhase = 'break_after_redfin';
+      log.info(`Scheduler: Redfin done. Taking ${BREAK_MS / 1000}s break before Privy...`);
+      scheduleNextRun(BREAK_MS);
+      return;
+    }
 
-      if (remainingAMV > 0) {
-        log.info(`Scheduler: Still ${remainingAMV} addresses pending AMV - will continue processing`);
-        scheduleNextRun(5000); // Short delay before processing more
+    case 'break_after_redfin': {
+      log.info('Scheduler: Break after Redfin complete. Starting Privy...');
+      schedulerPhase = 'privy';
+      scheduleNextRun(0);
+      return;
+    }
+
+    case 'privy': {
+      log.info('Scheduler: Phase 2 - PRIVY scraping (limit: ' + SCRAPER_LIMIT + ' addresses)');
+      try {
+        await runAutomation(new Set(['privy']));
+      } catch (e) {
+        log.error('Scheduler: Privy threw', { error: e?.message || String(e) });
+      }
+
+      schedulerPhase = 'break_after_privy';
+      log.info(`Scheduler: Privy done. Taking ${BREAK_MS / 1000}s break before BofA...`);
+      scheduleNextRun(BREAK_MS);
+      return;
+    }
+
+    case 'break_after_privy': {
+      log.info('Scheduler: Break after Privy complete. Starting BofA AMV...');
+      schedulerPhase = 'bofa';
+      scheduleNextRun(0);
+      return;
+    }
+
+    case 'bofa': {
+      // Get fresh count of pending addresses
+      const currentPending = await ScrapedDeal.countDocuments({
+        $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+      }).catch(() => 0);
+
+      log.info(`Scheduler: Phase 3 - BofA AMV fetching (${currentPending} pending addresses)`);
+
+      if (currentPending === 0) {
+        log.info('Scheduler: No pending addresses for BofA. Skipping to next cycle.');
+      } else {
+        try {
+          const amvJobs = new Set(['bofa', 'scraped_deals_amv']);
+          await runAutomation(amvJobs);
+        } catch (e) {
+          log.error('Scheduler: BofA threw', { error: e?.message || String(e) });
+        }
+      }
+
+      // Check if there are still pending addresses
+      const stillPending = await ScrapedDeal.countDocuments({
+        $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+      }).catch(() => 0);
+
+      if (stillPending > 0) {
+        log.info(`Scheduler: Still ${stillPending} pending - continuing BofA after short break`);
+        scheduleNextRun(5000); // Short break then continue BofA
         return;
       }
 
-      log.info('Scheduler: All pending AMV addresses processed - now can scrape new addresses');
-    }
-  } catch (e) {
-    log.warn('Scheduler: Could not check pending AMV', { error: e?.message });
-  }
-
-  // Simple linear flow: scrapeSource -> bofa -> cooldown -> alternate scrapeSource -> bofa -> cooldown -> repeat
-  // scrapeSource starts as 'redfin', then alternates to 'privy'
-
-  log.info('Scheduler: LINEAR FLOW', {
-    currentMode,
-    scrapeSource,
-    addressesScrapedThisBatch
-  });
-
-  if (currentMode === 'scrape') {
-    // STEP: Run the current scraper (redfin or privy)
-    log.info(`Scheduler: Running ${scrapeSource.toUpperCase()} scraper`);
-
-    try {
-      await runAutomation(new Set([scrapeSource]));
-    } catch (e) {
-      log.error(`Scheduler: ${scrapeSource} threw`, { error: e?.message || String(e) });
+      schedulerPhase = 'break_after_bofa';
+      log.info(`Scheduler: BofA done. Taking ${BREAK_MS / 1000}s break before next cycle...`);
+      resetBatchCounter();
+      scheduleNextRun(BREAK_MS);
+      return;
     }
 
-    // After scraping, switch to AMV mode
-    currentMode = 'amv';
-    log.info('Scheduler: Scrape done, now running BofA valuations');
-
-    if (schedulerEnabled) {
-      scheduleNextRun(0); // Run BofA immediately
-    }
-    return;
-
-  } else if (currentMode === 'amv') {
-    // STEP: Run BofA valuations
-    log.info('Scheduler: Running BofA valuations');
-
-    try {
-      const amvJobs = new Set(['bofa', 'scraped_deals_amv']);
-      await runAutomation(amvJobs);
-    } catch (e) {
-      log.error('Scheduler: BofA threw', { error: e?.message || String(e) });
+    case 'break_after_bofa': {
+      log.info('Scheduler: Break after BofA complete. Starting new cycle with Redfin...');
+      schedulerPhase = 'redfin';
+      scheduleNextRun(0);
+      return;
     }
 
-    // After AMV, switch scraper source and go back to scrape mode
-    const previousSource = scrapeSource;
-    scrapeSource = scrapeSource === 'redfin' ? 'privy' : 'redfin';
-    currentMode = 'scrape';
-    resetBatchCounter();
-
-    log.info('Scheduler: BofA done, cooling down before next scraper', {
-      previousSource,
-      nextSource: scrapeSource,
-      cooldownMs: COOLDOWN_MS
-    });
-
-    if (schedulerEnabled) {
-      // REST/COOLDOWN before starting next scraper
-      scheduleNextRun(COOLDOWN_MS);
+    default: {
+      log.warn('Scheduler: Unknown phase, resetting to redfin', { phase: schedulerPhase });
+      schedulerPhase = 'redfin';
+      scheduleNextRun(0);
+      return;
     }
-    return;
-  }
-
-  // Fallback (shouldn't reach here)
-  if (schedulerEnabled) {
-    scheduleNextRun(RUN_INTERVAL_MS);
   }
 }
 
