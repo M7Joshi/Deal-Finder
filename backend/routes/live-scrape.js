@@ -720,23 +720,32 @@ router.get('/privy', requireAuth, async (req, res) => {
       } catch {}
     }
 
-    // ========== STEP 0: OPEN DASHBOARD AND WAIT 10 SECONDS ==========
-    L.info(`Opening Privy dashboard...`);
-    await page.goto('https://app.privy.pro/dashboard', { waitUntil: 'networkidle0', timeout: 90000 });
+    // ========== STEP 0: LOGIN AND APPLY FILTER URL ==========
+    // The filter URL with all correct parameters
+    const filterUrl = 'https://app.privy.pro/dashboard?update_history=true&id=&name=&folder_id=&user_property_status=&batch_id=&saved_search=&search_text=&location_type=nationwide&search_shape=&search_shape_id=&geography_shape=&geography_shape_id=&include_surrounding=true&list_key=&email_frequency=&quick_filter_id=&project_type=buy_hold&spread_type=umv&spread=50&isLTRsearch=false&from_email_sender_id=&from_email_sender_feature_ltr=&from_email_sender_user_type=&preferred_only=false&list_price_from=20000&list_price_to=600000&price_per_sqft_from=0&price_per_sqft_to=&street_number=&street=&city=&zip=&county=&state=&lat=&lng=&radius=&cm=&zoom=5&sw_lat=29.658691955488298&sw_lng=-132.09084384947136&ne_lat=48.842479954833586&ne_lng=-66.78810947447136&size%5Bheight%5D=570&size%5Bwidth%5D=1486&gridViewWidth=&dom_from=&dom_to=&stories_from=&stories_to=&beds_from=3&beds_to=&baths_from=&baths_to=&sqft_from=1000&sqft_to=&year_built_from=&year_built_to=&hoa_fee_from=&hoa_fee_to=&unit_count_from=&unit_count_to=&zoned=&hoa=no&remarks=&basement=Any&basement_sqft_from=&basement_sqft_to=&include_condo=false&include_attached=false&include_detached=true&include_multi_family=false&include_active=true&include_under_contract=false&include_sold=false&include_pending=false&date_range=all&source=Any&sort_by=days-on-market&sort_dir=asc&site_id=&city_id=&for_pdf=&fast_match_property_id=';
+
+    L.info('Opening Privy with filter URL...');
+    await page.goto(filterUrl, { waitUntil: 'networkidle0', timeout: 90000 });
 
     // Check if we got redirected to login page
     let currentUrl = page.url();
     if (currentUrl.includes('sign_in')) {
       L.info('Session expired, re-authenticating...');
       await bot.login();
-      await page.goto('https://app.privy.pro/dashboard', { waitUntil: 'networkidle0', timeout: 90000 });
+      // IMPORTANT: After login, go to filter URL (NOT dashboard)
+      L.info('After login, navigating to filter URL...');
+      await page.goto(filterUrl, { waitUntil: 'networkidle0', timeout: 90000 });
     }
 
-    L.info('Waiting 10 seconds on dashboard...');
+    L.info('Waiting 10 seconds for filter URL to apply...');
     await new Promise(r => setTimeout(r, 10000));
 
     // Close any popups/modals that appeared
     await closeAllModals(page);
+
+    // Log actual URL to verify filters applied
+    const actualUrl = page.url();
+    L.info(`Actual URL after filter: ${actualUrl.substring(0, 150)}...`);
 
     // ============ MULTI-CITY LOOP ============
     // Loop through each city until we have enough addresses
@@ -754,40 +763,24 @@ router.get('/privy', requireAuth, async (req, res) => {
       citiesScraped.push(cityToUse);
 
     // ========== STEP 1: APPLY FILTER URL AND WAIT 10 SECONDS ==========
-    const filterUrl = 'https://app.privy.pro/dashboard?update_history=true&id=&name=&folder_id=&user_property_status=&batch_id=&saved_search=&search_text=&location_type=nationwide&search_shape=&search_shape_id=&geography_shape=&geography_shape_id=&include_surrounding=true&list_key=&email_frequency=&quick_filter_id=&project_type=buy_hold&spread_type=umv&spread=50&isLTRsearch=false&from_email_sender_id=&from_email_sender_feature_ltr=&from_email_sender_user_type=&preferred_only=false&list_price_from=20000&list_price_to=600000&price_per_sqft_from=0&price_per_sqft_to=&street_number=&street=&city=&zip=&county=&state=&lat=&lng=&radius=&cm=&zoom=5&sw_lat=29.658691955488298&sw_lng=-132.09084384947136&ne_lat=48.842479954833586&ne_lng=-66.78810947447136&size%5Bheight%5D=570&size%5Bwidth%5D=1486&gridViewWidth=&dom_from=&dom_to=&stories_from=&stories_to=&beds_from=3&beds_to=&baths_from=&baths_to=&sqft_from=1000&sqft_to=&year_built_from=&year_built_to=&hoa_fee_from=&hoa_fee_to=&unit_count_from=&unit_count_to=&zoned=&hoa=no&remarks=&basement=Any&basement_sqft_from=&basement_sqft_to=&include_condo=false&include_attached=false&include_detached=true&include_multi_family=false&include_active=true&include_under_contract=false&include_sold=false&include_pending=false&date_range=all&source=Any&sort_by=days-on-market&sort_dir=asc&site_id=&city_id=&for_pdf=&fast_match_property_id=';
-
-    L.info(`Applying filter URL for city: ${cityToUse}...`);
-    try {
-      await page.goto(filterUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-      L.info('✅ Filter URL applied');
-    } catch (navErr) {
-      L.warn('Filter URL navigation failed, retrying...', { error: navErr?.message });
-      try {
-        await page.goto(filterUrl, { waitUntil: 'load', timeout: 60000 });
-        L.info('✅ Filter URL applied (retry)');
-      } catch (e2) {
-        L.error('Filter URL navigation failed completely', { error: e2?.message });
-      }
-    }
+    L.info(`Applying filter URL...`);
+    await page.goto(filterUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
 
     L.info('Waiting 10 seconds for filters to apply...');
     await new Promise(r => setTimeout(r, 10000));
 
-    // Close any modals/banners that appeared - click cancel
+    // Close any modals/banners that appeared
     await closeAllModals(page);
 
-    // ========== STEP 2: TYPE CITY IN SEARCH BOX AND HIT SEARCH ==========
-    L.info(`Typing city in search box: ${cityToUse}, ${stateUpper}`);
+    // ========== STEP 2: TYPE CITY IN SEARCH BOX AND HIT ENTER ==========
+    L.info(`Searching for city: ${cityToUse}, ${stateUpper}`);
     try {
       // Find the search input
       const searchSelectors = [
         'input[placeholder*="Search"]',
         'input[placeholder*="search"]',
         'input[type="search"]',
-        'input[name="search"]',
-        'input[id*="search" i]',
-        '.search-input input',
-        '#SearchBlock input'
+        'input[name="search"]'
       ];
 
       let searchInput = null;
@@ -797,7 +790,7 @@ router.get('/privy', requireAuth, async (req, res) => {
           if (searchInput) {
             const box = await searchInput.boundingBox();
             if (box && box.width > 0 && box.height > 0) {
-              L.info(`Found search input with selector: ${sel}`);
+              L.info(`Found search input: ${sel}`);
               break;
             }
             searchInput = null;
@@ -806,53 +799,23 @@ router.get('/privy', requireAuth, async (req, res) => {
       }
 
       if (searchInput) {
-        // Clear the search input first
+        // Clear and type city
         await searchInput.click({ clickCount: 3 });
         await new Promise(r => setTimeout(r, 200));
         await page.keyboard.press('Backspace');
         await new Promise(r => setTimeout(r, 100));
 
-        // Type the city name
         await searchInput.type(`${cityToUse}, ${stateUpper}`, { delay: 80 });
         L.info('Typed city in search box');
 
-        // Wait for autocomplete dropdown to appear
-        await new Promise(r => setTimeout(r, 2000));
-
-        // Select first suggestion using ArrowDown + Enter
-        await page.keyboard.press('ArrowDown');
-        await new Promise(r => setTimeout(r, 300));
+        // Just press Enter directly - NO ArrowDown (to avoid dropdown/saved search)
+        await new Promise(r => setTimeout(r, 500));
         await page.keyboard.press('Enter');
-        L.info('Selected city from dropdown');
+        L.info('Pressed Enter to search');
 
-        // Wait a moment then click search button
-        await new Promise(r => setTimeout(r, 1000));
-
-        // Click search button
-        const searchBtnClicked = await page.evaluate(() => {
-          const selectors = [
-            'button[type="submit"]',
-            'button.search-btn',
-            '#SearchBlock-Filter-Button',
-            'button[class*="search"]',
-            'button:has(svg)'
-          ];
-          for (const sel of selectors) {
-            const btn = document.querySelector(sel);
-            if (btn && btn.offsetWidth > 0 && btn.offsetHeight > 0) {
-              btn.click();
-              return true;
-            }
-          }
-          return false;
-        });
-
-        if (searchBtnClicked) {
-          L.info('Clicked search button');
-        } else {
-          await page.keyboard.press('Enter');
-          L.info('Pressed Enter to search');
-        }
+        // Wait for search results
+        L.info('Waiting 10 seconds for search results...');
+        await new Promise(r => setTimeout(r, 10000));
       } else {
         L.warn('Search input not found!');
       }
@@ -860,11 +823,7 @@ router.get('/privy', requireAuth, async (req, res) => {
       L.warn('City search failed', { error: searchErr?.message });
     }
 
-    // Wait 10 seconds for search results
-    L.info('Waiting 10 seconds for search results...');
-    await new Promise(r => setTimeout(r, 10000));
-
-    // Close any modals/banners that appeared - click cancel
+    // Close any modals/banners that appeared
     await closeAllModals(page);
 
     // ========== STEP 2: CLOSE ANY OPEN MODALS/PANELS (including agent profile modals) ==========
