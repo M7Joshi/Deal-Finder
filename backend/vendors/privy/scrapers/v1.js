@@ -1508,25 +1508,42 @@ await page.evaluate(() => {
             citySavedTotal += urlSaved;
 
             // If all properties were from wrong state, this is a stale cache issue
-            // Force a hard reload to clear the SPA's in-memory cache
+            // The Privy SPA keeps React state in memory - we need to completely restart the browser
             if (skippedWrongState > 0 && urlSaved === 0) {
-              LC.warn('All properties from wrong state - Privy SPA cache stale, forcing hard reload', {
+              LC.error('🚨 STALE CACHE DETECTED - All properties from wrong state!', {
                 city: extractCityFromUrl(url),
                 skippedWrongState,
-                expectedState: state
+                expectedState: state,
+                action: 'Marking state complete and restarting browser to clear SPA cache'
               });
-              // Aggressive cache clearing: storage + hard reload
+
+              // Mark this state as complete to move to next state
+              // The stale cache persists for the whole state, so skip remaining cities
+              markStateComplete(progress, state);
+
+              // Force browser restart by closing the page completely
               try {
                 await page.evaluate(() => {
                   sessionStorage.clear();
                   localStorage.clear();
+                  // Clear all caches
+                  if (window.caches) {
+                    caches.keys().then(names => names.forEach(name => caches.delete(name)));
+                  }
                 });
-                // Force navigate away then back to clear SPA memory cache
                 await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 5000 }).catch(() => {});
-                await new Promise(r => setTimeout(r, 1000));
-              } catch {}
-              skipToNextCity = true;
-              return; // Exit callback - move to next city
+                // Close and reopen the browser context to fully clear React state
+                const browser = page.browser();
+                if (browser) {
+                  const context = page.browserContext();
+                  await context.clearCookies().catch(() => {});
+                }
+              } catch (e) {
+                LC.warn('Cache clearing failed', { error: e?.message });
+              }
+
+              // Signal to exit this state entirely
+              throw new Error('STALE_CACHE_SKIP_STATE');
             }
           });
           // (Continue to next URL variant/state unless skipToNextCity is set)
@@ -1534,6 +1551,10 @@ await page.evaluate(() => {
           if (err?.message === 'PRIVY_SESSION_EXPIRED' || err?.message === 'PRIVY_SESSION_UNRECOVERABLE') {
             L.error('Privy session expired and could not be recovered — aborting remaining URLs');
             throw err;
+          }
+          if (err?.message === 'STALE_CACHE_SKIP_STATE') {
+            L.warn('Stale cache detected - skipping remaining cities in this state', { state });
+            break; // Exit the city loop, move to next state
           }
           L.warn('Timeout or error on URL — skipping', { error: err.message, city: cityName });
           continue;
