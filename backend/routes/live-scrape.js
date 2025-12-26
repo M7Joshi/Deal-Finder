@@ -7,6 +7,7 @@ import { requireAuth } from '../middleware/authMiddleware.js';
 import { log } from '../utils/logger.js';
 import PrivyBot from '../vendors/privy/privyBot.js';
 import * as sessionStore from '../vendors/privy/auth/sessionStore.js';
+import { quickLogin } from '../vendors/privy/auth/loginPatch.js';
 import { applyFilters } from '../vendors/privy/filters/filterService.js';
 import {
   propertyListContainerSelector,
@@ -23,6 +24,129 @@ import {
 
 const router = express.Router();
 const L = log.child('live-scrape');
+
+// Helper function to close any open modals/popups (agent profiles, filter panels, Property Search Filter, etc.)
+async function closeAllModals(page) {
+  try {
+    const closedCount = await page.evaluate(() => {
+      let closed = 0;
+
+      // 1. FIRST: Look for Property Search Filter modal (has "Property Search Filter" header and X button)
+      // This is the filter panel that opens when clicking on properties
+      const filterModalHeader = document.querySelector('h1, h2, h3, h4, h5, div');
+      const allElements = document.querySelectorAll('*');
+      for (const el of allElements) {
+        if (el.textContent && el.textContent.includes('Property Search Filter')) {
+          // Found the filter modal - look for X/close button nearby
+          const parent = el.closest('div[class*="modal"], div[class*="panel"], div[class*="filter"], div[style*="position"]') || el.parentElement?.parentElement?.parentElement;
+          if (parent) {
+            // Look for close button (X icon) in the modal header area
+            const closeBtn = parent.querySelector('button, [role="button"], svg[class*="close"], svg[class*="x"], [class*="close"]');
+            if (closeBtn && closeBtn.offsetWidth > 0) {
+              closeBtn.click();
+              closed++;
+              break;
+            }
+            // Also try finding any SVG or button that could be the X
+            const svgBtns = parent.querySelectorAll('svg, button');
+            for (const btn of svgBtns) {
+              const rect = btn.getBoundingClientRect();
+              // X button is usually in top-right corner, small size
+              if (rect.width > 0 && rect.width < 50 && rect.height < 50) {
+                btn.click();
+                closed++;
+                break;
+              }
+            }
+          }
+          break;
+        }
+      }
+
+      // 2. Look for circled X button (common pattern for close buttons)
+      const circledX = document.querySelectorAll('svg circle, [class*="circle"], button svg');
+      circledX.forEach(el => {
+        const parent = el.closest('button, [role="button"]') || el.parentElement;
+        if (parent && parent.offsetWidth > 0 && parent.offsetWidth < 60) {
+          parent.click();
+          closed++;
+        }
+      });
+
+      // 3. Standard modal close selectors
+      const modalSelectors = [
+        '[aria-label="Close"]',
+        '[aria-label="close"]',
+        'button[aria-label*="close" i]',
+        'button[aria-label*="dismiss" i]',
+        '.close-btn',
+        '.modal-close',
+        'button.close',
+        '[data-dismiss="modal"]',
+        '.panel-close',
+        '.filter-close',
+        '[data-testid="close"]',
+        '[data-testid*="close" i]',
+        'button svg[data-icon="xmark"]',
+        'button svg[data-icon="times"]',
+        'button svg[data-icon="close"]',
+        '.modal-header button',
+        '.dialog-close',
+        '.popup-close',
+        '.modal button:has(svg)',
+        '[role="dialog"] button:has(svg)',
+        '[class*="modal"] button[class*="close" i]',
+        '[class*="popup"] button[class*="close" i]',
+        '[class*="overlay"] button[class*="close" i]',
+        '[class*="agent"] button[class*="close" i]',
+        '[class*="profile"] button[class*="close" i]',
+        '[class*="card"] button[class*="close" i]',
+        '[class*="filter"] button',
+        '[class*="Filter"] button',
+      ];
+      for (const sel of modalSelectors) {
+        try {
+          const buttons = document.querySelectorAll(sel);
+          buttons.forEach(btn => {
+            if (btn.offsetWidth > 0 && btn.offsetHeight > 0) {
+              btn.click();
+              closed++;
+            }
+          });
+        } catch {}
+      }
+
+      // 4. Look for Reset button in filter modal (to reset and close)
+      const resetBtns = document.querySelectorAll('button, span, div');
+      resetBtns.forEach(el => {
+        if (el.textContent && el.textContent.trim().toLowerCase() === 'reset') {
+          // Don't click reset - we want to close, not reset
+        }
+      });
+
+      // 5. Also try clicking outside modals/overlays
+      const overlays = document.querySelectorAll('[class*="overlay"], [class*="backdrop"], [class*="modal-bg"]');
+      overlays.forEach(overlay => {
+        if (overlay.offsetWidth > 0 && overlay.offsetHeight > 0) {
+          overlay.click();
+          closed++;
+        }
+      });
+
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      return closed;
+    });
+
+    // Also press Escape at page level multiple times
+    await page.keyboard.press('Escape');
+    await new Promise(r => setTimeout(r, 200));
+    await page.keyboard.press('Escape');
+
+    return closedCount;
+  } catch {
+    return 0;
+  }
+}
 
 // Extract state code from address string
 // Handles various formats: "123 Main St, City, XX 12345", "City, XX", "City XX 12345", etc.
@@ -348,6 +472,22 @@ const PRIVY_STATE_CITIES = {
   'WY': ['Cheyenne', 'Casper', 'Laramie', 'Gillette', 'Rock Springs', 'Sheridan', 'Green River', 'Evanston', 'Riverton', 'Cody', 'Jackson', 'Rawlins']
 };
 
+// Filter URL - applies all filters but with nationwide location (no city yet)
+// City will be typed in the search box after filters are applied
+// IMPORTANT: These filters must match exactly what user wants:
+// - Status: Active ONLY (no Sold, Pending, Under Contract)
+// - Property Type: Single Family (Detached) only
+// - MLS Deals: Below Market (buy_hold project type)
+// - UMV: 50%
+// - Price: $20,000 - $600,000
+// - Beds: 3+
+// - Sqft: 1,000+
+// - HOA: No
+function getFilterUrl() {
+  // EXACT filter URL from user - all parameters included
+  return 'https://app.privy.pro/dashboard?update_history=true&id=&name=&folder_id=&user_property_status=&batch_id=&saved_search=&search_text=&location_type=nationwide&search_shape=&search_shape_id=&geography_shape=&geography_shape_id=&include_surrounding=true&list_key=&email_frequency=&quick_filter_id=&project_type=buy_hold&spread_type=umv&spread=50&isLTRsearch=false&from_email_sender_id=&from_email_sender_feature_ltr=&from_email_sender_user_type=&preferred_only=false&list_price_from=20000&list_price_to=600000&price_per_sqft_from=0&price_per_sqft_to=&street_number=&street=&city=&zip=&county=&state=&lat=&lng=&radius=&cm=&zoom=5&sw_lat=29.658691955488298&sw_lng=-132.09084384947136&ne_lat=48.842479954833586&ne_lng=-66.78810947447136&size%5Bheight%5D=570&size%5Bwidth%5D=1486&gridViewWidth=&dom_from=&dom_to=&stories_from=&stories_to=&beds_from=3&beds_to=&baths_from=&baths_to=&sqft_from=1000&sqft_to=&year_built_from=&year_built_to=&hoa_fee_from=&hoa_fee_to=&unit_count_from=&unit_count_to=&zoned=&hoa=no&remarks=&basement=Any&basement_sqft_from=&basement_sqft_to=&include_condo=false&include_attached=false&include_detached=true&include_multi_family=false&include_active=true&include_under_contract=false&include_sold=false&include_pending=false&date_range=all&source=Any&sort_by=days-on-market&sort_dir=asc&site_id=&city_id=&for_pdf=&fast_match_property_id=';
+}
+
 // Build Privy URL for a city - EXACT parameters from working Privy URL
 // This URL includes ALL filters so we can navigate directly without using filter modal
 function buildPrivyUrl(city, stateCode, cacheBust = true) {
@@ -488,28 +628,50 @@ router.get('/privy', requireAuth, async (req, res) => {
         sharedPrivyBot = new PrivyBot();
         await sharedPrivyBot.init();
 
-        const hasFreshSession = sessionStore.hasFreshPrivySession(24 * 60 * 60 * 1000);
-        if (hasFreshSession) {
-          L.info('Found fresh session, checking validity...');
+        // Check current page - if on sign_in, we need to login
+        const currentUrl = sharedPrivyBot.page.url();
+        L.info('Current page after init', { url: currentUrl });
+
+        if (currentUrl.includes('sign_in') || currentUrl === 'about:blank') {
+          L.info('On sign-in page, using quick login...');
+          const quickResult = await quickLogin(sharedPrivyBot.page);
+
+          // quickLogin now returns { success, page } - update the bot's page reference
+          if (quickResult && quickResult.page) {
+            sharedPrivyBot.page = quickResult.page;
+            L.info('Updated bot page reference to new tab');
+          }
+
+          if (quickResult?.success === true) {
+            L.info('Quick login succeeded - on dashboard');
+          } else if (quickResult?.success === 'otp_required') {
+            L.info('OTP required, falling back to full login flow...');
+            await sharedPrivyBot.login();
+          } else {
+            L.warn('Quick login failed, trying full login...');
+            await sharedPrivyBot.login();
+          }
+        } else if (currentUrl.includes('dashboard')) {
+          L.info('Already on dashboard, session is valid!');
+        } else {
+          // Try to go to dashboard
+          L.info('Checking session by navigating to dashboard...');
           try {
             await sharedPrivyBot.page.goto('https://app.privy.pro/dashboard', {
-              waitUntil: 'networkidle2',
-              timeout: 60000
+              waitUntil: 'domcontentloaded',
+              timeout: 30000
             });
-            const currentUrl = sharedPrivyBot.page.url();
-            if (currentUrl.includes('sign_in')) {
-              L.info('Session expired, need to login again');
+            const urlAfterNav = sharedPrivyBot.page.url();
+            if (urlAfterNav.includes('sign_in')) {
+              L.info('Session expired, need to login');
               await sharedPrivyBot.login();
             } else {
-              L.info('Session is still valid!');
+              L.info('Session is valid!');
             }
           } catch (navErr) {
             L.warn('Navigation failed, attempting full login', { error: navErr.message });
             await sharedPrivyBot.login();
           }
-        } else {
-          L.info('No fresh session found, performing full login...');
-          await sharedPrivyBot.login();
         }
         // Don't start keep-alive loop here - it interferes with scraping
         // The loop will be started after scraping is complete
@@ -536,10 +698,31 @@ router.get('/privy', requireAuth, async (req, res) => {
     const bot = sharedPrivyBot;
     const page = bot.page;
 
-    // Navigate to dashboard first (let session restore)
-    L.info(`Navigating to Privy dashboard...`);
+    // Maximize the browser window and set large viewport for Privy to work correctly
+    try {
+      // Get screen dimensions and set viewport to full screen
+      const session = await page.target().createCDPSession();
+      const { windowId } = await session.send('Browser.getWindowForTarget');
+      await session.send('Browser.setWindowBounds', {
+        windowId,
+        bounds: { windowState: 'maximized' }
+      });
+      L.info('Browser window maximized');
+
+      // Also set a large viewport
+      await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 });
+      L.info('Viewport set to 1920x1080');
+    } catch (e) {
+      L.warn('Could not maximize browser', { error: e?.message });
+      // Fallback: just set a large viewport
+      try {
+        await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 });
+      } catch {}
+    }
+
+    // ========== STEP 0: OPEN DASHBOARD AND WAIT 10 SECONDS ==========
+    L.info(`Opening Privy dashboard...`);
     await page.goto('https://app.privy.pro/dashboard', { waitUntil: 'networkidle0', timeout: 90000 });
-    await new Promise(r => setTimeout(r, 2000));
 
     // Check if we got redirected to login page
     let currentUrl = page.url();
@@ -547,13 +730,13 @@ router.get('/privy', requireAuth, async (req, res) => {
       L.info('Session expired, re-authenticating...');
       await bot.login();
       await page.goto('https://app.privy.pro/dashboard', { waitUntil: 'networkidle0', timeout: 90000 });
-      await new Promise(r => setTimeout(r, 2000));
     }
 
-    // ========== SKIP FILTER MODAL - USE DIRECT URL NAVIGATION ==========
-    // The buildPrivyUrl function includes ALL filters in URL params
-    // This is more reliable than trying to manipulate the filter modal UI
-    L.info('Will use direct URL navigation with filters (skipping filter modal)');
+    L.info('Waiting 10 seconds on dashboard...');
+    await new Promise(r => setTimeout(r, 10000));
+
+    // Close any popups/modals that appeared
+    await closeAllModals(page);
 
     // ============ MULTI-CITY LOOP ============
     // Loop through each city until we have enough addresses
@@ -570,63 +753,282 @@ router.get('/privy', requireAuth, async (req, res) => {
       L.info(`Current progress: ${globalAddresses.length}/${limitNum} addresses`);
       citiesScraped.push(cityToUse);
 
-    // ========== FRESH PAGE LOAD FOR EACH CITY (clears Privy's cache) ==========
-    const privyUrl = buildPrivyUrl(cityToUse, stateUpper);
-    L.info(`Navigating to: ${cityToUse}, ${stateUpper} with fresh page load...`);
+    // ========== STEP 1: APPLY FILTER URL AND WAIT 10 SECONDS ==========
+    const filterUrl = 'https://app.privy.pro/dashboard?update_history=true&id=&name=&folder_id=&user_property_status=&batch_id=&saved_search=&search_text=&location_type=nationwide&search_shape=&search_shape_id=&geography_shape=&geography_shape_id=&include_surrounding=true&list_key=&email_frequency=&quick_filter_id=&project_type=buy_hold&spread_type=umv&spread=50&isLTRsearch=false&from_email_sender_id=&from_email_sender_feature_ltr=&from_email_sender_user_type=&preferred_only=false&list_price_from=20000&list_price_to=600000&price_per_sqft_from=0&price_per_sqft_to=&street_number=&street=&city=&zip=&county=&state=&lat=&lng=&radius=&cm=&zoom=5&sw_lat=29.658691955488298&sw_lng=-132.09084384947136&ne_lat=48.842479954833586&ne_lng=-66.78810947447136&size%5Bheight%5D=570&size%5Bwidth%5D=1486&gridViewWidth=&dom_from=&dom_to=&stories_from=&stories_to=&beds_from=3&beds_to=&baths_from=&baths_to=&sqft_from=1000&sqft_to=&year_built_from=&year_built_to=&hoa_fee_from=&hoa_fee_to=&unit_count_from=&unit_count_to=&zoned=&hoa=no&remarks=&basement=Any&basement_sqft_from=&basement_sqft_to=&include_condo=false&include_attached=false&include_detached=true&include_multi_family=false&include_active=true&include_under_contract=false&include_sold=false&include_pending=false&date_range=all&source=Any&sort_by=days-on-market&sort_dir=asc&site_id=&city_id=&for_pdf=&fast_match_property_id=';
 
-    // CRITICAL FIX: Clear browser cache/storage before each city to prevent stale data
-    // This fixes the issue where Privy returns wrong state addresses (e.g., MI when requesting MD)
-    if (cityIndex > 0) {
-      try {
-        // Clear session storage and local storage to force Privy to reload fresh data
-        await page.evaluate(() => {
-          try { sessionStorage.clear(); } catch {}
-          try { localStorage.removeItem('privy_map_state'); } catch {}
-          try { localStorage.removeItem('privy_search_cache'); } catch {}
-        });
-        L.info('Cleared browser storage for fresh city load');
-      } catch (clearErr) {
-        L.warn('Could not clear storage', { error: clearErr?.message });
-      }
-    }
-
-    // Navigate with cache bypass - forces fresh data from Privy server
+    L.info(`Applying filter URL for city: ${cityToUse}...`);
     try {
-      // Use cache bypass to get fresh data
-      await page.setCacheEnabled(false);
-      await page.goto(privyUrl, { waitUntil: 'networkidle2', timeout: 45000 });
-      await page.setCacheEnabled(true);
-      L.info('✅ Navigated with fresh page load');
+      await page.goto(filterUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      L.info('✅ Filter URL applied');
     } catch (navErr) {
-      L.warn('Direct URL navigation failed, retrying...', { error: navErr?.message });
-      await page.goto(privyUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-      await new Promise(r => setTimeout(r, 1500));
+      L.warn('Filter URL navigation failed, retrying...', { error: navErr?.message });
+      try {
+        await page.goto(filterUrl, { waitUntil: 'load', timeout: 60000 });
+        L.info('✅ Filter URL applied (retry)');
+      } catch (e2) {
+        L.error('Filter URL navigation failed completely', { error: e2?.message });
+      }
     }
 
-    // Wait for the page to settle after fresh load
-    await new Promise(r => setTimeout(r, 2000));
+    L.info('Waiting 10 seconds for filters to apply...');
+    await new Promise(r => setTimeout(r, 10000));
 
-    // CRITICAL: Do NOT use the search box - it triggers autocomplete that selects wrong locations
-    // The URL parameters already contain the correct city/state - just wait for data to load
-    // The URL has: search_text=Auburn%2C+AL which should be enough
+    // Close any modals/banners that appeared - click cancel
+    await closeAllModals(page);
+
+    // ========== STEP 2: TYPE CITY IN SEARCH BOX AND HIT SEARCH ==========
+    L.info(`Typing city in search box: ${cityToUse}, ${stateUpper}`);
     try {
-      // Verify we're on the correct page by checking the URL
-      const currentUrl = page.url();
-      L.info(`Current URL after navigation: ${currentUrl.substring(0, 100)}...`);
+      // Find the search input
+      const searchSelectors = [
+        'input[placeholder*="Search"]',
+        'input[placeholder*="search"]',
+        'input[type="search"]',
+        'input[name="search"]',
+        'input[id*="search" i]',
+        '.search-input input',
+        '#SearchBlock input'
+      ];
 
-      // Check if the URL still contains our expected state
-      if (!currentUrl.toUpperCase().includes(stateUpper)) {
-        L.warn(`URL doesn't contain expected state ${stateUpper}, forcing reload...`);
-        await page.goto(privyUrl, { waitUntil: 'networkidle2', timeout: 45000 });
-        await new Promise(r => setTimeout(r, 2000));
+      let searchInput = null;
+      for (const sel of searchSelectors) {
+        try {
+          searchInput = await page.$(sel);
+          if (searchInput) {
+            const box = await searchInput.boundingBox();
+            if (box && box.width > 0 && box.height > 0) {
+              L.info(`Found search input with selector: ${sel}`);
+              break;
+            }
+            searchInput = null;
+          }
+        } catch {}
       }
 
-      // DO NOT type in search box - it causes wrong state selection
-      // Just verify and log
-      L.info(`Relying on URL parameters for ${cityToUse}, ${stateUpper} - NOT using search box`);
+      if (searchInput) {
+        // Clear the search input first
+        await searchInput.click({ clickCount: 3 });
+        await new Promise(r => setTimeout(r, 200));
+        await page.keyboard.press('Backspace');
+        await new Promise(r => setTimeout(r, 100));
 
-      // Wait for map data to load - the URL params should drive the location
-      await new Promise(r => setTimeout(r, 1500));
+        // Type the city name
+        await searchInput.type(`${cityToUse}, ${stateUpper}`, { delay: 80 });
+        L.info('Typed city in search box');
+
+        // Wait for autocomplete dropdown to appear
+        await new Promise(r => setTimeout(r, 2000));
+
+        // Select first suggestion using ArrowDown + Enter
+        await page.keyboard.press('ArrowDown');
+        await new Promise(r => setTimeout(r, 300));
+        await page.keyboard.press('Enter');
+        L.info('Selected city from dropdown');
+
+        // Wait a moment then click search button
+        await new Promise(r => setTimeout(r, 1000));
+
+        // Click search button
+        const searchBtnClicked = await page.evaluate(() => {
+          const selectors = [
+            'button[type="submit"]',
+            'button.search-btn',
+            '#SearchBlock-Filter-Button',
+            'button[class*="search"]',
+            'button:has(svg)'
+          ];
+          for (const sel of selectors) {
+            const btn = document.querySelector(sel);
+            if (btn && btn.offsetWidth > 0 && btn.offsetHeight > 0) {
+              btn.click();
+              return true;
+            }
+          }
+          return false;
+        });
+
+        if (searchBtnClicked) {
+          L.info('Clicked search button');
+        } else {
+          await page.keyboard.press('Enter');
+          L.info('Pressed Enter to search');
+        }
+      } else {
+        L.warn('Search input not found!');
+      }
+    } catch (searchErr) {
+      L.warn('City search failed', { error: searchErr?.message });
+    }
+
+    // Wait 10 seconds for search results
+    L.info('Waiting 10 seconds for search results...');
+    await new Promise(r => setTimeout(r, 10000));
+
+    // Close any modals/banners that appeared - click cancel
+    await closeAllModals(page);
+
+    // ========== STEP 2: CLOSE ANY OPEN MODALS/PANELS (including agent profile modals) ==========
+    try {
+      const closedCount = await page.evaluate(() => {
+        let closed = 0;
+
+        // 1. Close agent profile modals - look for modal with agent info and X button
+        // These modals typically have: agent name, photo, contact info, and an X close button
+        const modalSelectors = [
+          // Direct close buttons
+          '[aria-label="Close"]',
+          '[aria-label="close"]',
+          'button[aria-label*="close" i]',
+          'button[aria-label*="dismiss" i]',
+          '.close-btn',
+          '.modal-close',
+          'button.close',
+          '[data-dismiss="modal"]',
+          '.panel-close',
+          '.filter-close',
+          '[data-testid="close"]',
+          '[data-testid*="close" i]',
+          // SVG close icons (X buttons)
+          'button svg[class*="close" i]',
+          'button svg[data-icon="xmark"]',
+          'button svg[data-icon="times"]',
+          'button svg[data-icon="close"]',
+          // Modal header close buttons
+          '.modal-header button',
+          '.modal-header .close',
+          '.dialog-close',
+          '.popup-close',
+          // Generic X button patterns in modals
+          '.modal button:has(svg)',
+          '[role="dialog"] button:has(svg)',
+          '[class*="modal"] button[class*="close" i]',
+          '[class*="popup"] button[class*="close" i]',
+          '[class*="overlay"] button[class*="close" i]',
+          // Agent-specific patterns
+          '[class*="agent"] button[class*="close" i]',
+          '[class*="profile"] button[class*="close" i]',
+          '[class*="card"] button[class*="close" i]',
+        ];
+
+        // Find and click all close buttons
+        for (const sel of modalSelectors) {
+          try {
+            const buttons = document.querySelectorAll(sel);
+            buttons.forEach(btn => {
+              if (btn.offsetWidth > 0 && btn.offsetHeight > 0) {
+                btn.click();
+                closed++;
+              }
+            });
+          } catch {}
+        }
+
+        // 2. Look for any visible overlay/backdrop and click outside to close
+        const overlays = document.querySelectorAll('[class*="overlay"], [class*="backdrop"], [class*="modal-bg"]');
+        overlays.forEach(overlay => {
+          if (overlay.offsetWidth > 0 && overlay.offsetHeight > 0) {
+            // Click the overlay itself (not the modal content) to close
+            const rect = overlay.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              overlay.click();
+              closed++;
+            }
+          }
+        });
+
+        // 3. Look for any floating card/panel with X button (like agent info cards)
+        const floatingPanels = document.querySelectorAll('[class*="floating"], [class*="popup"], [class*="tooltip"], [class*="card"][style*="position"]');
+        floatingPanels.forEach(panel => {
+          const closeBtn = panel.querySelector('button, [role="button"], svg');
+          if (closeBtn && closeBtn.offsetWidth > 0) {
+            closeBtn.click();
+            closed++;
+          }
+        });
+
+        // 4. Press Escape to close any modal
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+
+        return closed;
+      });
+
+      // Also press Escape at page level
+      await page.keyboard.press('Escape');
+      await new Promise(r => setTimeout(r, 500));
+
+      // If we found modals, wait a bit more and try again
+      if (closedCount > 0) {
+        L.info(`Closed ${closedCount} modals/panels, checking for more...`);
+        await new Promise(r => setTimeout(r, 300));
+        await page.keyboard.press('Escape');
+      }
+
+      L.info('Closed any open modals/panels');
+    } catch (e) {
+      L.warn('Error closing modals', { error: e?.message });
+    }
+
+    // ========== STEP 3: VERIFY URL AND LOG CURRENT LOCATION ==========
+    // Since we navigated via URL, we don't need search box - just verify we're on the right page
+    const currentUrl = page.url();
+    L.info(`Current URL after navigation: ${currentUrl.substring(0, 120)}...`);
+
+    // Check if the URL contains the city search_text
+    if (currentUrl.includes(encodeURIComponent(cityToUse)) || currentUrl.includes(cityToUse.replace(/ /g, '+'))) {
+      L.info(`✅ URL contains city: ${cityToUse}`);
+    } else {
+      L.warn(`⚠️ URL may not contain city ${cityToUse} - checking search_text param...`);
+    }
+
+    // ========== STEP 4: CLOSE ANY MODALS THAT OPENED (agent profiles, etc.) ==========
+    try {
+      await page.evaluate(() => {
+        const modalSelectors = [
+          '[aria-label="Close"]',
+          '[aria-label="close"]',
+          'button[aria-label*="close" i]',
+          'button[aria-label*="dismiss" i]',
+          '.close-btn',
+          '.modal-close',
+          'button.close',
+          '[data-dismiss="modal"]',
+          '.panel-close',
+          '.filter-close',
+          '[data-testid="close"]',
+          '[data-testid*="close" i]',
+          'button svg[data-icon="xmark"]',
+          'button svg[data-icon="times"]',
+          '.modal-header button',
+          '.dialog-close',
+          '.popup-close',
+          '.modal button:has(svg)',
+          '[role="dialog"] button:has(svg)',
+          '[class*="modal"] button[class*="close" i]',
+          '[class*="popup"] button[class*="close" i]',
+          '[class*="agent"] button[class*="close" i]',
+          '[class*="profile"] button[class*="close" i]',
+          '[class*="card"] button[class*="close" i]',
+        ];
+        for (const sel of modalSelectors) {
+          try {
+            const buttons = document.querySelectorAll(sel);
+            buttons.forEach(btn => {
+              if (btn.offsetWidth > 0 && btn.offsetHeight > 0) {
+                btn.click();
+              }
+            });
+          } catch {}
+        }
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      });
+      await page.keyboard.press('Escape');
+      await new Promise(r => setTimeout(r, 300));
+    } catch {}
+
+    // ========== STEP 5: WAIT FOR MAP DATA ==========
+    try {
+      const currentUrl = page.url();
+      L.info(`Current URL: ${currentUrl.substring(0, 100)}...`);
 
       // Wait for network to be idle (map tiles and data loading)
       L.info('Waiting for map data to load (network idle)...');
@@ -651,6 +1053,13 @@ router.get('/privy', requireAuth, async (req, res) => {
     } catch (searchErr) {
       L.warn('Search/navigation failed', { error: searchErr?.message });
       await new Promise(r => setTimeout(r, 1500));
+    }
+
+    // Close any agent profile modals that might be blocking the view before clicking clusters
+    const modalsClosedBeforeCluster = await closeAllModals(page);
+    if (modalsClosedBeforeCluster > 0) {
+      L.info(`Closed ${modalsClosedBeforeCluster} modals before cluster click`);
+      await new Promise(r => setTimeout(r, 300));
     }
 
     // Click on a cluster to open the property list
@@ -745,6 +1154,9 @@ router.get('/privy', requireAuth, async (req, res) => {
       L.info(`✅ Already have ${globalAddresses.length}/${limitNum} addresses. Skipping extraction.`);
       continue;
     }
+
+    // Close any agent modals that might be blocking extraction
+    await closeAllModals(page);
 
     // Extract addresses AND agent details in ONE PASS from property cards (limited to what we need)
     // Uses same approach as v1.js - extract agent from mailto/tel links on cards

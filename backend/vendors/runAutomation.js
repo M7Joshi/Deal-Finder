@@ -1312,13 +1312,19 @@ const selectedStates = stateList; // keep var for logs if needed
               }
             }
 
-            // Now run the remaining states in parallel (reuse-only; no new logins)
-            const jobsPerState = rest.map((st) =>
-              privyLimiter.run(() =>
-                currentGlobalLimiter.run(() => runOneState(st, { mode: 'reuse' }))
-              )
-            );
-            await Promise.allSettled(jobsPerState);
+            // FIXED: Run remaining states SEQUENTIALLY to avoid page conflicts
+            // Multiple parallel states cause "detached Frame" errors because they share the same page
+            for (const st of rest) {
+              if (control.abort) {
+                logPrivy.warn('Stop requested — skipping remaining states');
+                break;
+              }
+              try {
+                await currentGlobalLimiter.run(() => runOneState(st, { mode: 'reuse' }));
+              } catch (e) {
+                logPrivy.warn(`State ${st} failed`, { error: e?.message || String(e) });
+              }
+            }
 
             logPrivy.success(`Privy batch ${i / maxStates + 1} complete`, {
               statesTried: chunk.length,

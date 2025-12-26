@@ -580,98 +580,25 @@ async function ensureDashboardReady(page, { timeout = 60000 } = {}) {
 
 async function navigateWithSession(page, url, { retries = 1 } = {}) {
   const L = logPrivy.with({ url });
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    // ROBUST FIX: Force a completely clean SPA state before navigation
-    // This ensures Privy's React/Redux state is fully reset (not showing stale data from other states)
-    try {
-      // 1. Clear browser cache AND disable cache via CDP FIRST
-      try {
-        const client = await page.createCDPSession();
-        await client.send('Network.clearBrowserCache');
-        await client.send('Network.setCacheDisabled', { cacheDisabled: true });
-        // Also clear cookies that might store map/search state (but keep session cookies)
-        const cookies = await client.send('Network.getAllCookies');
-        const cookiesToDelete = (cookies.cookies || []).filter(c =>
-          c.name.includes('map') || c.name.includes('search') || c.name.includes('cache') ||
-          c.name.includes('state') || c.name.includes('redux')
-        );
-        for (const cookie of cookiesToDelete) {
-          await client.send('Network.deleteCookies', { name: cookie.name, domain: cookie.domain });
-        }
-        await client.detach();
-      } catch {}
 
-      // 2. Navigate to blank page to destroy React app state
-      await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 5000 }).catch(() => {});
+  // SUPER SIMPLIFIED: Just navigate directly, NO reloads, NO retries
+  // The URL contains all search params - just wait for page to load
+  L.info('Navigating to URL (simplified - no reloads)...');
 
-      // 3. Clear ALL browser storage AND service workers
-      await page.evaluate(() => {
-        try {
-          localStorage.clear();
-          sessionStorage.clear();
-          // Clear IndexedDB
-          if (indexedDB && indexedDB.databases) {
-            indexedDB.databases().then(dbs => {
-              dbs.forEach(db => indexedDB.deleteDatabase(db.name));
-            }).catch(() => {});
-          }
-          // Unregister service workers
-          if (navigator.serviceWorker) {
-            navigator.serviceWorker.getRegistrations().then(registrations => {
-              registrations.forEach(reg => reg.unregister());
-            }).catch(() => {});
-          }
-          // Clear caches API
-          if (caches) {
-            caches.keys().then(names => {
-              names.forEach(name => caches.delete(name));
-            }).catch(() => {});
-          }
-        } catch {}
-      });
+  // Simple navigation - wait for content to load
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-      // 4. Wait a moment for cleanup
-      await new Promise(r => setTimeout(r, 500));
-    } catch {}
-
-    // Navigate with cache bypass - disable cache during navigation
-    try {
-      await page.setCacheEnabled(false);
-    } catch {}
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-    try {
-      await page.setCacheEnabled(true);
-    } catch {}
-    const currentUrl = page.url();
-
-    // If we hit any login/2FA route, reauthenticate and retry
-    if (LOGIN_PATH_CUES.some((cue) => currentUrl.includes(cue))) {
-      if (attempt >= retries) {
-        throw new Error('PRIVY_SESSION_EXPIRED');
-      }
-      L.warn('Detected Privy login screen mid-scrape — re-authenticating');
-      await loginToPrivy(page);
-      await randomWait(800, 1600);
-      continue;
-    }
-
-     // Ensure dashboard is hydrated; allow multiple reloads if needed
-    let ok = false;
-    for (let r = 0; r <= HYDRATE_MAX_RELOADS; r += 1) {
-      try {
-        await ensureDashboardReady(page, { timeout: 30000 });
-        ok = true; break;
-      } catch (e) {
-        if (r < HYDRATE_MAX_RELOADS) {
-          L.info('Dashboard not ready; reloading to complete hydration', { reload: r + 1 });
-          await page.reload({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-        }
-      }
-    }
-    if (!ok) throw new Error('PRIVY_DASHBOARD_NOT_READY');
-     return page.url();
+  // If we hit login screen, re-authenticate once
+  const currentUrl = page.url();
+  if (LOGIN_PATH_CUES.some((cue) => currentUrl.includes(cue))) {
+    L.warn('Detected Privy login screen — re-authenticating');
+    await loginToPrivy(page);
+    await sleep(3000);
+    // Navigate again after login
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
   }
-  throw new Error('PRIVY_SESSION_UNRECOVERABLE');
+
+  return page.url();
 }
 
 // --- UI settle + results helpers ---
@@ -1045,6 +972,10 @@ const scrapePropertiesV1 = async (page) => {
   logPrivy.info(`Total states available: ${allStates.length} (excluded ${BLOCKED_STATES.length} blocked states)`);
   logPrivy.info(`States order: ${allStates.map(s => STATE_NAMES[s] || s).join(', ')}`);
 
+  // Wait 10 seconds after login for page to fully load
+  logPrivy.info('Waiting 10 seconds after login for page to stabilize...');
+  await sleep(10000);
+
   // Process states alphabetically, resuming from progress
   for (const state of allStates) {
     // Skip already completed states in this cycle
@@ -1104,19 +1035,93 @@ const scrapePropertiesV1 = async (page) => {
       LState.info(`📍 Processing city: ${cityName} (${cityIndex + 1}/${stateUrls.length})`);
 
       {
-        // Single scrape per city - get ALL addresses with filters applied
+        // PROPER FLOW: Stay on dashboard, apply filters, then search for city
+        const L = LState.with({ city: cityName });
 
-        // keep the SPA/session warm between navigations
-        await page.evaluate(() => {
-          try { localStorage.setItem('keepalive', String(Date.now())); } catch (e) {}
-        }).catch(() => {});
-
-        // Scoped logger auto-includes state + url on every line
-        const L = LState.with({ url: targetUrl, city: cityName });
         try {
-          L.http('Navigating');
-          await navigateWithSession(page, targetUrl, { retries: 2 });
-          await randomWait(1000, 5000);
+          // Check for "no imagery" broken map - if found, close tab and create new one
+          const hasNoImagery = await page.evaluate(() => {
+            const pageText = document.body?.innerText || '';
+            return pageText.includes('Sorry, we have no imagery here');
+          }).catch(() => false);
+
+          if (hasNoImagery) {
+            L.warn('Detected "no imagery" broken map - closing tab and creating new one...');
+            const { initSharedBrowser } = await import('../../../utils/browser.js');
+            const browser = await initSharedBrowser();
+            try { await page.close(); } catch {}
+            const newPage = await browser.newPage();
+            newPage.__df_name = 'privy';
+            Object.assign(page, newPage);
+            await page.goto('https://app.privy.pro/dashboard', { waitUntil: 'domcontentloaded', timeout: 60000 });
+            await sleep(10000);
+          }
+
+          // Apply filters first (this opens filter modal, sets values, clicks apply)
+          L.info('Applying filters...');
+          try {
+            await applyFilters(page);
+          } catch (e) {
+            L.warn('Filter application failed (continuing)', { error: e?.message || String(e) });
+          }
+
+          // Wait 10 seconds for filters to apply
+          L.info('Waiting 10 seconds for filters to apply...');
+          await sleep(10000);
+
+          // Now search for the city in the search box
+          L.info(`Searching for city: ${cityName}, ${state}`);
+          const searchQuery = `${cityName}, ${state}`;
+
+          // Find and use the search box
+          const searchBoxSelectors = [
+            'input[name="search_text"]',
+            'input[placeholder*="Search"]',
+            'input[placeholder*="City"]',
+            'input[placeholder*="Address"]',
+            '#search_text',
+            '.search-input',
+            '[data-testid="search-input"]',
+            'input.form-control'
+          ];
+
+          let searchFound = false;
+          for (const selector of searchBoxSelectors) {
+            try {
+              const searchBox = await page.$(selector);
+              if (searchBox) {
+                // Clear and type the city
+                await page.evaluate((sel) => {
+                  const el = document.querySelector(sel);
+                  if (el) {
+                    el.focus();
+                    el.value = '';
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                  }
+                }, selector);
+                await page.type(selector, searchQuery, { delay: 50 });
+                L.info(`Typed "${searchQuery}" in search box`);
+                searchFound = true;
+
+                // Wait for autocomplete suggestions
+                await sleep(2000);
+
+                // Press Enter or click search button
+                await page.keyboard.press('Enter');
+                L.info('Pressed Enter to search');
+                break;
+              }
+            } catch {}
+          }
+
+          if (!searchFound) {
+            L.warn('Search box not found, trying URL navigation as fallback');
+            await navigateWithSession(page, targetUrl, { retries: 2 });
+          }
+
+          // Wait 10 seconds for city results to load
+          L.info('Waiting 10 seconds for city results to load...');
+          await sleep(10000);
 
           // kill overlays before waiting on selectors
 await page.evaluate(() => {
@@ -1145,12 +1150,8 @@ await page.evaluate(() => {
               '.properties-list', '.property-list', '.grid-view-container'
             ], { timeout: SELECTOR_TIMEOUT });
           }
-          // Apply filters (best effort) before collecting cards
-          try {
-            await applyFilters(page);
-          } catch (e) {
-            L.warn('Filter application failed (continuing)', { error: e?.message || String(e) });
-          }
+
+          // Filters already applied before city search - no need to apply again
 
           // CRITICAL: Validate that the search text in the URL matches what Privy is showing
           // This detects stale SPA cache showing wrong state data

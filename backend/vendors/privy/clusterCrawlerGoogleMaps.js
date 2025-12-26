@@ -90,7 +90,8 @@ const clickClustersRecursively = async (
       await page.mouse.move(x, y);
       await wait(300);
       await page.mouse.click(x, y);
-      await wait(2000); // Wait for view to load
+      console.log('⏳ Waiting 10 seconds after cluster click for properties to load...');
+      await wait(10000); // Wait 10 seconds for view to load
 
       const viewsAfterClick = await waitForViews(page);
       if (viewsAfterClick.length > 0) {

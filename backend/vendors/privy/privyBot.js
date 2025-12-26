@@ -152,32 +152,43 @@ export default class PrivyBot {
   async login() {
     if (!this.page) throw new Error('Page is not initialized. Call init() first.');
     try {
-      // Robust navigation with retry/fallback
-      const navAttempts = 3;
-      for (let i = 0; i < navAttempts; i++) {
-        try {
-          await safeGoto(this.page, 'https://app.privy.pro/users/sign_in', { waitUntil: ['domcontentloaded'], timeout: 120000 });
-          break;
-        } catch (e) {
-          if (isNetworkOrProxyError(e) && i < navAttempts - 1) {
-            // Optional: try a paid forwarder lease before falling back to direct
-            try { await getChromeProxyForPaid({ service: 'privy', sticky: true, key: 'privy' }); } catch {}
-            await sleep(backoff(i));
-            continue;
+      // Check if already on sign-in page - skip navigation if so
+      const currentUrl = this.page.url();
+      logPrivy.info('PrivyBot.login() - current URL', { url: currentUrl });
+
+      if (!currentUrl.includes('sign_in')) {
+        // Navigate to sign-in page only if not already there
+        logPrivy.info('Navigating to sign-in page...');
+        const navAttempts = 3;
+        for (let i = 0; i < navAttempts; i++) {
+          try {
+            await safeGoto(this.page, 'https://app.privy.pro/users/sign_in', { waitUntil: ['domcontentloaded'], timeout: 60000 });
+            break;
+          } catch (e) {
+            if (isNetworkOrProxyError(e) && i < navAttempts - 1) {
+              try { await getChromeProxyForPaid({ service: 'privy', sticky: true, key: 'privy' }); } catch {}
+              await sleep(backoff(i));
+              continue;
+            }
+            throw e;
           }
-          throw e;
         }
+      } else {
+        logPrivy.info('Already on sign-in page, skipping navigation');
       }
+
       await this.page.bringToFront().catch(() => {});
+      logPrivy.info('Calling loginToPrivy...');
       await loginToPrivy(this.page);
 
       // Nudge to dashboard and wait for hydration using OR signals
-      for (let i = 0; i < navAttempts; i++) {
+      const dashNavAttempts = 3;
+      for (let i = 0; i < dashNavAttempts; i++) {
         try {
-          await safeGoto(this.page, 'https://app.privy.pro/dashboard', { waitUntil: ['domcontentloaded','networkidle2'], timeout: 120000 });
+          await safeGoto(this.page, 'https://app.privy.pro/dashboard', { waitUntil: ['domcontentloaded'], timeout: 60000 });
           break;
         } catch (e) {
-          if (isNetworkOrProxyError(e) && i < navAttempts - 1) {
+          if (isNetworkOrProxyError(e) && i < dashNavAttempts - 1) {
             try { await getChromeProxyForPaid({ service: 'privy', sticky: true, key: 'privy' }); } catch {}
             await sleep(backoff(i));
             continue;

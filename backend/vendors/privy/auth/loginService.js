@@ -522,6 +522,79 @@ export async function loginToPrivy(page) {
     await dismissOverlays(page);
 
     if (url0.includes('sign_in') || /app\.privy\.pro/.test(url0)) {
+      // STRATEGY: First tab often gets stuck loading. Immediately create a second tab
+      // after 5 seconds, try login there, then close the first stuck tab.
+      L.info('First tab opened - waiting 5 seconds then creating fresh second tab...');
+
+      const firstPage = page; // Keep reference to first page
+      await new Promise(r => setTimeout(r, 5000)); // Wait 5 seconds
+
+      // Create a fresh second tab immediately
+      L.info('Creating fresh second tab for sign-in...');
+      try {
+        const { initSharedBrowser } = await import('../../../utils/browser.js');
+        const browser = await initSharedBrowser();
+
+        // Create new page (second tab)
+        const newPage = await browser.newPage();
+        newPage.__df_name = 'privy';
+
+        // Set up the new page
+        try { await newPage.setBypassCSP(true); } catch {}
+        try { await newPage.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' }); } catch {}
+        try {
+          await newPage.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36');
+        } catch {}
+
+        // Navigate to sign-in on the fresh second tab
+        L.info('Navigating second tab to sign-in page...');
+        await newPage.goto(signInUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+        // Wait for email input on the second tab
+        L.info('Waiting for email input on second tab...');
+        try {
+          await newPage.waitForFunction(() => {
+            const emailInput = document.querySelector('#user_email, input[type="email"]');
+            return emailInput && emailInput.offsetWidth > 0;
+          }, { timeout: 15000 });
+          L.info('Second tab loaded successfully - closing first tab');
+
+          // Second tab works! Close the first stuck tab
+          try { await firstPage.close(); } catch {}
+
+          // Update page reference to use the new page
+          Object.assign(page, newPage);
+
+        } catch (e2) {
+          L.warn('Second tab also slow, checking first tab...', { error: e2?.message });
+          // Check if first tab actually loaded
+          try {
+            const firstReady = await firstPage.evaluate(() => {
+              const emailInput = document.querySelector('#user_email, input[type="email"]');
+              return emailInput && emailInput.offsetWidth > 0;
+            });
+            if (firstReady) {
+              L.info('First tab is actually ready - using it, closing second tab');
+              try { await newPage.close(); } catch {}
+              // Keep using firstPage (which is already assigned to page)
+            } else {
+              // Neither worked well, but use second tab anyway
+              L.warn('Using second tab anyway');
+              try { await firstPage.close(); } catch {}
+              Object.assign(page, newPage);
+            }
+          } catch {
+            // Use second tab
+            try { await firstPage.close(); } catch {}
+            Object.assign(page, newPage);
+          }
+        }
+      } catch (tabErr) {
+        L.error('Failed to create second tab, continuing with first', { error: tabErr?.message });
+      }
+
+      await new Promise(r => setTimeout(r, 1000)); // Extra safety wait
+
       // Email (frame-aware & resilient)
       let email = await findInAllFrames(page, EMAIL_SELECTORS, { timeout: 20000, visible: true });
       if (!email) {
@@ -529,6 +602,12 @@ export async function loginToPrivy(page) {
         email = await findInAllFrames(page, EMAIL_SELECTORS, { timeout: 8000, visible: true });
       }
       if (email && email.handle) {
+        // Click to focus first
+        try {
+          await email.handle.click({ clickCount: 3 });
+          await new Promise(r => setTimeout(r, 200));
+        } catch {}
+
         const typed = await safeType(email.handle, process.env.PRIVY_EMAIL);
         if (!typed) {
           // Last resort: brute force set in every matching input
@@ -538,18 +617,63 @@ export async function loginToPrivy(page) {
             }, EMAIL_SELECTORS, process.env.PRIVY_EMAIL);
           }catch{}
         }
-        await clickAny(page, SUBMIT_SELECTORS).catch(()=>{});
-        // Try common "use password" affordances if shown
+
+        // Wait before clicking Continue button
+        await new Promise(r => setTimeout(r, 500));
+
+        // Click Continue button - try multiple methods
+        L.info('Looking for Continue button...');
+        let clicked = false;
+
+        // Method 1: Find button with "Continue" text using page.evaluate
+        try {
+          clicked = await page.evaluate(() => {
+            const buttons = document.querySelectorAll('button, input[type="submit"]');
+            for (const btn of buttons) {
+              const text = (btn.textContent || btn.value || '').toLowerCase();
+              if (btn.offsetWidth > 0 && (text.includes('continue') || text.includes('next'))) {
+                btn.click();
+                return true;
+              }
+            }
+            // Fallback: click button with SVG arrow icon
+            for (const btn of buttons) {
+              if (btn.querySelector('svg') && btn.offsetWidth > 0) {
+                btn.click();
+                return true;
+              }
+            }
+            return false;
+          });
+        } catch {}
+
+        // Method 2: Use existing clickAny function
+        if (!clicked) {
+          await clickAny(page, SUBMIT_SELECTORS).catch(()=>{});
+        }
+
+        // Method 3: Try clickByText
         await clickByText(page, [
+          'continue',
+          'next',
           'use password',
           'sign in with password',
           'log in with password',
           'continue with password',
-          'continue',
           'sign in',
           'log in'
         ]).catch(()=>{});
+
+        // Method 4: Press Enter as last resort
+        await email.handle.focus().catch(()=>{});
+        await page.keyboard.press('Enter');
+
         await randomWait(300, 700);
+
+        // Wait for page transition after clicking Continue
+        L.info('Waiting for page to transition after Continue click...');
+        await new Promise(r => setTimeout(r, 2000));
+
       } else {
         L.warn('Email input not found on sign_in after waiting; capturing screenshot.');
         try{ await page.screenshot({ path: `/var/data/privy-email-missing-${Date.now()}.png`, fullPage:true }); }catch{}

@@ -228,6 +228,8 @@ export async function initSharedBrowser() {
         '--no-first-run',
         '--no-default-browser-check',
         '--lang=en-US,en;q=0.9',
+        '--start-maximized',
+        '--window-size=1920,1080',
       ],
     });
 
@@ -406,12 +408,34 @@ export async function getSharedPage(
   const pages = await browser.pages();
   let page = pages.find(p => p.__df_name === name);
   if (!page) {
-    page = await browser.newPage();
+    // SINGLE TAB APPROACH: Always reuse the first page if it has no name assigned
+    // This prevents multiple tabs from opening
+    const existingPage = pages.find(p => !p.__df_name);
+    if (existingPage) {
+      page = existingPage;
+      // Close any extra unnamed pages to ensure only one tab
+      for (const p of pages) {
+        if (p !== page && !p.__df_name) {
+          try { await p.close(); } catch {}
+        }
+      }
+    } else {
+      page = await browser.newPage();
+    }
     page.__df_name = name;
     page.once?.('close', () => {
       page.__df_network_session = null;
       page.__df_network_enabled = false;
     });
+
+    // Just ensure we're on a valid blank page (not chrome:// or empty)
+    // The PrivyBot will handle navigation to Privy
+    try {
+      const currentUrl = page.url();
+      if (!currentUrl || currentUrl === '' || currentUrl === 'about:blank' || currentUrl === 'chrome://newtab/' || currentUrl.startsWith('chrome://')) {
+        if (name === 'privy') { console.log('[browser] Navigating to Privy...'); await page.goto('https://app.privy.pro/users/sign_in', { waitUntil: 'domcontentloaded', timeout: 60000 }); } else { await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 5000 }); }
+      }
+    } catch {}
   }
   // Basic hardening; you can keep your existing helpers too
   try { if (timeoutMs) page.setDefaultNavigationTimeout(timeoutMs); } catch {}
