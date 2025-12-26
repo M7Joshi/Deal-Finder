@@ -497,7 +497,8 @@ let schedulerEnabled = !DISABLE_SCHEDULER;
 let addressesScrapedThisBatch = 0;
 
 // Scheduler phases (moved here so getScraperStatus can reference it)
-let schedulerPhase = 'redfin'; // 'redfin' | 'break_after_redfin' | 'privy' | 'break_after_privy' | 'bofa' | 'break_after_bofa'
+// Starting with 'privy' first for testing
+let schedulerPhase = 'privy'; // 'privy' | 'break_after_privy' | 'redfin' | 'break_after_redfin' | 'bofa' | 'break_after_bofa'
 
 // Export for tracking
 export function getScraperStatus() {
@@ -528,7 +529,7 @@ export function shouldPauseScraping() {
 // Reset counter and phase after AMV phase completes (exported for clear-all endpoint)
 export function resetBatchCounter() {
   addressesScrapedThisBatch = 0;
-  schedulerPhase = 'redfin'; // Reset to start of cycle
+  schedulerPhase = 'privy'; // Reset to start of cycle (Privy first)
 }
 
 function scheduleNextRun(delayMs = RUN_INTERVAL_MS) {
@@ -578,9 +579,9 @@ async function bootstrapScheduler() {
 }
 
 // New Sequential Flow with 2-minute breaks:
-// Step 1: Redfin scrapes up to 100 addresses → Save to Pending AMV
+// Step 1: Privy scrapes up to 100 addresses → Save to Pending AMV
 // Step 2: 2 minute break
-// Step 3: Privy scrapes up to 100 addresses → Save to Pending AMV
+// Step 3: Redfin scrapes up to 100 addresses → Save to Pending AMV
 // Step 4: 2 minute break
 // Step 5: BofA fetches AMV for ALL pending addresses
 // Step 6: 2 minute break
@@ -636,29 +637,8 @@ async function schedulerTick() {
   }
 
   switch (schedulerPhase) {
-    case 'redfin': {
-      log.info('Scheduler: Phase 1 - REDFIN scraping (limit: ' + SCRAPER_LIMIT + ' addresses)');
-      try {
-        await runAutomation(new Set(['redfin']));
-      } catch (e) {
-        log.error('Scheduler: Redfin threw', { error: e?.message || String(e) });
-      }
-
-      schedulerPhase = 'break_after_redfin';
-      log.info(`Scheduler: Redfin done. Taking ${BREAK_MS / 1000}s break before Privy...`);
-      scheduleNextRun(BREAK_MS);
-      return;
-    }
-
-    case 'break_after_redfin': {
-      log.info('Scheduler: Break after Redfin complete. Starting Privy...');
-      schedulerPhase = 'privy';
-      scheduleNextRun(0);
-      return;
-    }
-
     case 'privy': {
-      log.info('Scheduler: Phase 2 - PRIVY scraping (limit: ' + SCRAPER_LIMIT + ' addresses)');
+      log.info('Scheduler: Phase 1 - PRIVY scraping (limit: ' + SCRAPER_LIMIT + ' addresses)');
       try {
         await runAutomation(new Set(['privy']));
       } catch (e) {
@@ -666,13 +646,34 @@ async function schedulerTick() {
       }
 
       schedulerPhase = 'break_after_privy';
-      log.info(`Scheduler: Privy done. Taking ${BREAK_MS / 1000}s break before BofA...`);
+      log.info(`Scheduler: Privy done. Taking ${BREAK_MS / 1000}s break before Redfin...`);
       scheduleNextRun(BREAK_MS);
       return;
     }
 
     case 'break_after_privy': {
-      log.info('Scheduler: Break after Privy complete. Starting BofA AMV...');
+      log.info('Scheduler: Break after Privy complete. Starting Redfin...');
+      schedulerPhase = 'redfin';
+      scheduleNextRun(0);
+      return;
+    }
+
+    case 'redfin': {
+      log.info('Scheduler: Phase 2 - REDFIN scraping (limit: ' + SCRAPER_LIMIT + ' addresses)');
+      try {
+        await runAutomation(new Set(['redfin']));
+      } catch (e) {
+        log.error('Scheduler: Redfin threw', { error: e?.message || String(e) });
+      }
+
+      schedulerPhase = 'break_after_redfin';
+      log.info(`Scheduler: Redfin done. Taking ${BREAK_MS / 1000}s break before BofA...`);
+      scheduleNextRun(BREAK_MS);
+      return;
+    }
+
+    case 'break_after_redfin': {
+      log.info('Scheduler: Break after Redfin complete. Starting BofA AMV...');
       schedulerPhase = 'bofa';
       scheduleNextRun(0);
       return;
@@ -716,15 +717,15 @@ async function schedulerTick() {
     }
 
     case 'break_after_bofa': {
-      log.info('Scheduler: Break after BofA complete. Starting new cycle with Redfin...');
-      schedulerPhase = 'redfin';
+      log.info('Scheduler: Break after BofA complete. Starting new cycle with Privy...');
+      schedulerPhase = 'privy';
       scheduleNextRun(0);
       return;
     }
 
     default: {
-      log.warn('Scheduler: Unknown phase, resetting to redfin', { phase: schedulerPhase });
-      schedulerPhase = 'redfin';
+      log.warn('Scheduler: Unknown phase, resetting to privy', { phase: schedulerPhase });
+      schedulerPhase = 'privy';
       scheduleNextRun(0);
       return;
     }
