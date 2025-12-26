@@ -579,18 +579,13 @@ async function bootstrapScheduler() {
 }
 
 // New Sequential Flow with 2-minute breaks:
-// Step 1: Privy scrapes up to 100 addresses → Save to Pending AMV
-// Step 2: 2 minute break
-// Step 3: Redfin scrapes up to 100 addresses → Save to Pending AMV
-// Step 4: 2 minute break
-// Step 5: BofA fetches AMV for ALL pending addresses
+// Step 1: Privy scrapes addresses → Save to Pending AMV
+// Step 2: BofA fetches AMV for Privy addresses
+// Step 3: 2 minute break
+// Step 4: Redfin scrapes addresses → Save to Pending AMV
+// Step 5: BofA fetches AMV for Redfin addresses
 // Step 6: 2 minute break
 // Step 7: Repeat from Step 1
-//
-// When Pending AMV reaches 100+ addresses:
-// - Pause scraping, process all through BofA
-// - Keep completed addresses (with AMV values)
-// - Continue adding more
 
 // Break period between phases (2 minutes = 120000ms)
 const BREAK_MS = Number(process.env.BREAK_MS || 120000);
@@ -631,65 +626,35 @@ async function schedulerTick() {
   });
 
   // If we have 100+ pending addresses, skip scraping and go straight to BofA
-  if (pendingAMV >= SCRAPER_LIMIT && !schedulerPhase.startsWith('break') && schedulerPhase !== 'bofa') {
+  if (pendingAMV >= SCRAPER_LIMIT && !schedulerPhase.startsWith('break') && !schedulerPhase.startsWith('bofa')) {
     log.info(`Scheduler: ${pendingAMV} pending addresses >= ${SCRAPER_LIMIT} - skipping to BofA phase`);
-    schedulerPhase = 'bofa';
+    schedulerPhase = 'bofa_after_privy'; // Go to BofA processing
   }
 
   switch (schedulerPhase) {
+    // ===== PRIVY CYCLE =====
     case 'privy': {
-      log.info('Scheduler: Phase 1 - PRIVY scraping (limit: ' + SCRAPER_LIMIT + ' addresses)');
+      log.info('Scheduler: Phase 1 - PRIVY scraping');
       try {
         await runAutomation(new Set(['privy']));
       } catch (e) {
         log.error('Scheduler: Privy threw', { error: e?.message || String(e) });
       }
 
-      schedulerPhase = 'break_after_privy';
-      log.info(`Scheduler: Privy done. Taking ${BREAK_MS / 1000}s break before Redfin...`);
-      scheduleNextRun(BREAK_MS);
-      return;
-    }
-
-    case 'break_after_privy': {
-      log.info('Scheduler: Break after Privy complete. Starting Redfin...');
-      schedulerPhase = 'redfin';
+      schedulerPhase = 'bofa_after_privy';
+      log.info('Scheduler: Privy done. Starting BofA for Privy addresses...');
       scheduleNextRun(0);
       return;
     }
 
-    case 'redfin': {
-      log.info('Scheduler: Phase 2 - REDFIN scraping (limit: ' + SCRAPER_LIMIT + ' addresses)');
-      try {
-        await runAutomation(new Set(['redfin']));
-      } catch (e) {
-        log.error('Scheduler: Redfin threw', { error: e?.message || String(e) });
-      }
-
-      schedulerPhase = 'break_after_redfin';
-      log.info(`Scheduler: Redfin done. Taking ${BREAK_MS / 1000}s break before BofA...`);
-      scheduleNextRun(BREAK_MS);
-      return;
-    }
-
-    case 'break_after_redfin': {
-      log.info('Scheduler: Break after Redfin complete. Starting BofA AMV...');
-      schedulerPhase = 'bofa';
-      scheduleNextRun(0);
-      return;
-    }
-
-    case 'bofa': {
-      // Get fresh count of pending addresses
+    case 'bofa_after_privy': {
       const currentPending = await ScrapedDeal.countDocuments({
         $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
       }).catch(() => 0);
 
-      log.info(`Scheduler: Phase 3 - BofA AMV fetching (${currentPending} pending addresses)`);
+      log.info(`Scheduler: BofA for Privy addresses (${currentPending} pending)`);
 
-      if (currentPending === 0) {
-        log.info('Scheduler: No pending addresses for BofA. Skipping to next cycle.');
-      } else {
+      if (currentPending > 0) {
         try {
           const amvJobs = new Set(['bofa', 'scraped_deals_amv']);
           await runAutomation(amvJobs);
@@ -698,26 +663,81 @@ async function schedulerTick() {
         }
       }
 
-      // Check if there are still pending addresses
+      // Check if still pending - continue BofA if needed
       const stillPending = await ScrapedDeal.countDocuments({
         $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
       }).catch(() => 0);
 
       if (stillPending > 0) {
-        log.info(`Scheduler: Still ${stillPending} pending - continuing BofA after short break`);
-        scheduleNextRun(5000); // Short break then continue BofA
+        log.info(`Scheduler: Still ${stillPending} pending - continuing BofA`);
+        scheduleNextRun(5000);
         return;
       }
 
-      schedulerPhase = 'break_after_bofa';
-      log.info(`Scheduler: BofA done. Taking ${BREAK_MS / 1000}s break before next cycle...`);
+      schedulerPhase = 'break_after_privy';
+      log.info(`Scheduler: BofA done for Privy. Taking ${BREAK_MS / 1000}s break before Redfin...`);
+      scheduleNextRun(BREAK_MS);
+      return;
+    }
+
+    case 'break_after_privy': {
+      log.info('Scheduler: Break after Privy+BofA complete. Starting Redfin...');
+      schedulerPhase = 'redfin';
+      scheduleNextRun(0);
+      return;
+    }
+
+    // ===== REDFIN CYCLE =====
+    case 'redfin': {
+      log.info('Scheduler: Phase 2 - REDFIN scraping');
+      try {
+        await runAutomation(new Set(['redfin']));
+      } catch (e) {
+        log.error('Scheduler: Redfin threw', { error: e?.message || String(e) });
+      }
+
+      schedulerPhase = 'bofa_after_redfin';
+      log.info('Scheduler: Redfin done. Starting BofA for Redfin addresses...');
+      scheduleNextRun(0);
+      return;
+    }
+
+    case 'bofa_after_redfin': {
+      const currentPending = await ScrapedDeal.countDocuments({
+        $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+      }).catch(() => 0);
+
+      log.info(`Scheduler: BofA for Redfin addresses (${currentPending} pending)`);
+
+      if (currentPending > 0) {
+        try {
+          const amvJobs = new Set(['bofa', 'scraped_deals_amv']);
+          await runAutomation(amvJobs);
+        } catch (e) {
+          log.error('Scheduler: BofA threw', { error: e?.message || String(e) });
+        }
+      }
+
+      // Check if still pending - continue BofA if needed
+      const stillPending = await ScrapedDeal.countDocuments({
+        $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+      }).catch(() => 0);
+
+      if (stillPending > 0) {
+        log.info(`Scheduler: Still ${stillPending} pending - continuing BofA`);
+        scheduleNextRun(5000);
+        return;
+      }
+
+      schedulerPhase = 'break_after_redfin';
+      log.info(`Scheduler: BofA done for Redfin. Taking ${BREAK_MS / 1000}s break before next cycle...`);
       resetBatchCounter();
       scheduleNextRun(BREAK_MS);
       return;
     }
 
-    case 'break_after_bofa': {
-      log.info('Scheduler: Break after BofA complete. Starting new cycle with Privy...');
+    case 'break_after_redfin': {
+      log.info('Scheduler: Break after Redfin+BofA complete. Starting new cycle with Privy...');
       schedulerPhase = 'privy';
       scheduleNextRun(0);
       return;
