@@ -57,6 +57,11 @@ export async function sendNow(req, res) {
     const user = req.user;
     if (!user) return res.status(401).json({ ok:false, error: 'Unauthorized' });
 
+    // Check if email sending is enabled for this user
+    if (user.email_enabled === false) {
+      return res.status(403).json({ ok:false, error: 'Email sending is disabled for your account' });
+    }
+
     const { propertyId: rawId } = req.params;
     const { agentName = '', agentPhone = '', agentEmail = '', fullAddress: bodyAddr = '' } = req.body || {};
 
@@ -129,9 +134,22 @@ export async function sendNow(req, res) {
       listingPrice: lp, amv, lp80, amv40, offerPrice
     });
 
+    // Build subadmin object with nested smtp credentials
+    const subadminWithSmtp = {
+      ...user,
+      name: user.full_name || user.name || user.email,
+      smtp: {
+        host: user.smtp_host || null,
+        port: user.smtp_port || 587,
+        user: user.smtp_user || user.email,
+        pass: user.smtp_pass || null,
+        secure: user.smtp_secure || false,
+      },
+    };
+
     const result = await sendOffer({
       to: agentEmail,
-      from: `${user.name || user.email} <${user.email}>`,
+      from: `${subadminWithSmtp.name} <${user.email}>`,
       replyTo: user.email,
       subject: `Offer to Purchase — ${prop.fullAddress || ''}`,
       template: 'agent_offer_v1.html',
@@ -145,7 +163,7 @@ export async function sendNow(req, res) {
         reply_to: user.email,
       },
       property: prop,
-      subadmin: user,
+      subadmin: subadminWithSmtp,
     });
 
     await AgentSend.findByIdAndUpdate(record._id, {

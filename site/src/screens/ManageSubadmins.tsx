@@ -4,7 +4,7 @@ import {
   TextField, Typography, Chip, IconButton, Table, TableHead, TableRow, TableCell,
   TableBody, Stack, MenuItem, Select, FormControl, OutlinedInput, Checkbox,
   TableContainer, Paper, Card, CardContent, Grid, InputLabel, ListItemText,
-  Alert, CircularProgress, Tooltip
+  Alert, CircularProgress, Tooltip, Switch, FormControlLabel
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
@@ -68,6 +68,7 @@ export default function ManageSubadmins(): JSX.Element {
   const [smtpUser, setSmtpUser] = useState('');
   const [smtpPass, setSmtpPass] = useState('');
   const [showSmtpPass, setShowSmtpPass] = useState(false);
+  const [emailEnabled, setEmailEnabled] = useState(true);
 
   // Stats
   const [stats, setStats] = useState({ total: 0, admins: 0, subadmins: 0, statesInUse: 0 });
@@ -128,6 +129,7 @@ export default function ManageSubadmins(): JSX.Element {
     setSmtpUser('');
     setSmtpPass('');
     setShowSmtpPass(false);
+    setEmailEnabled(true);
   };
 
   const onAdd = () => { resetForm(); setOpen(true); };
@@ -144,6 +146,7 @@ export default function ManageSubadmins(): JSX.Element {
     setSmtpUser(u.smtp_user || '');
     setSmtpPass(''); // Don't show existing password
     setShowSmtpPass(false);
+    setEmailEnabled(u.email_enabled !== false); // Default to true if not set
     setOpen(true);
   };
 
@@ -164,6 +167,8 @@ export default function ManageSubadmins(): JSX.Element {
         smtp_host: smtpHost || 'smtp.gmail.com',
         smtp_port: parseInt(smtpPort, 10) || 587,
         smtp_user: smtpUser || '',
+        // Email sending toggle
+        email_enabled: emailEnabled,
       };
 
       // Only include SMTP password if provided and not the masked placeholder
@@ -202,6 +207,12 @@ export default function ManageSubadmins(): JSX.Element {
   const onQuickUpdateStates = async (user: any, newStates: string[]) => {
     const resp = await updateUser(user._id, { states: newStates });
     if (!resp?.ok) { alert(resp?.error || 'Failed to update states'); return; }
+    await load();
+  };
+
+  const onToggleEmailEnabled = async (user: any, enabled: boolean) => {
+    const resp = await updateUser(user._id, { email_enabled: enabled });
+    if (!resp?.ok) { alert(resp?.error || 'Failed to update email setting'); return; }
     await load();
   };
 
@@ -293,21 +304,22 @@ export default function ManageSubadmins(): JSX.Element {
               <TableRow sx={{ bgcolor: '#f9fafb' }}>
                 <TableCell sx={{ fontWeight: 700, color: '#111' }}>Name</TableCell>
                 <TableCell sx={{ fontWeight: 700, color: '#111' }}>Email</TableCell>
-                <TableCell sx={{ fontWeight: 700, color: '#111', width: '35%' }}>Assigned States (Authorities)</TableCell>
+                <TableCell sx={{ fontWeight: 700, color: '#111', width: '30%' }}>Assigned States (Authorities)</TableCell>
+                <TableCell sx={{ fontWeight: 700, color: '#111' }} align="center">Email Sending</TableCell>
                 <TableCell sx={{ fontWeight: 700, color: '#111' }} align="right">Actions</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={4} align="center" sx={{ py: 4 }}>
+                  <TableCell colSpan={5} align="center" sx={{ py: 4 }}>
                     <CircularProgress size={24} />
                     <Typography sx={{ mt: 1, color: '#666' }}>Loading...</Typography>
                   </TableCell>
                 </TableRow>
               ) : subadminRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} align="center" sx={{ py: 4 }}>
+                  <TableCell colSpan={5} align="center" sx={{ py: 4 }}>
                     <Typography sx={{ color: '#666' }}>No subadmin accounts found.</Typography>
                     <Button onClick={onAdd} startIcon={<AddIcon />} sx={{ mt: 1 }}>
                       Create your first subadmin
@@ -352,6 +364,16 @@ export default function ManageSubadmins(): JSX.Element {
                           No states assigned
                         </Typography>
                       )}
+                    </TableCell>
+                    <TableCell align="center">
+                      <Tooltip title={u.email_enabled !== false ? "Email sending is ON - click to disable" : "Email sending is OFF - click to enable"} arrow>
+                        <Switch
+                          checked={u.email_enabled !== false}
+                          onChange={(e) => onToggleEmailEnabled(u, e.target.checked)}
+                          color="success"
+                          size="small"
+                        />
+                      </Tooltip>
                     </TableCell>
                     <TableCell align="right">
                       <Tooltip title="Edit user & states" arrow>
@@ -545,11 +567,30 @@ export default function ManageSubadmins(): JSX.Element {
 
             {/* SMTP Email Settings Section */}
             <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid #e5e7eb' }}>
-              <Stack direction="row" alignItems="center" gap={1} mb={2}>
-                <EmailIcon sx={{ color: '#6366f1' }} />
-                <Typography variant="subtitle1" sx={{ color: '#111', fontWeight: 600 }}>
-                  Email Settings (for sending agent emails)
-                </Typography>
+              <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2}>
+                <Stack direction="row" alignItems="center" gap={1}>
+                  <EmailIcon sx={{ color: '#6366f1' }} />
+                  <Typography variant="subtitle1" sx={{ color: '#111', fontWeight: 600 }}>
+                    Email Settings (for sending agent emails)
+                  </Typography>
+                </Stack>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={emailEnabled}
+                      onChange={(e) => setEmailEnabled(e.target.checked)}
+                      color="success"
+                    />
+                  }
+                  label={emailEnabled ? "Enabled" : "Disabled"}
+                  sx={{
+                    '& .MuiFormControlLabel-label': {
+                      color: emailEnabled ? '#10b981' : '#ef4444',
+                      fontWeight: 600,
+                      fontSize: 14
+                    }
+                  }}
+                />
               </Stack>
               <Alert severity="info" sx={{ mb: 2 }}>
                 For Gmail: Use <strong>smtp.gmail.com</strong> with port <strong>587</strong>.

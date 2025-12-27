@@ -22,6 +22,9 @@ const userSchema = new mongoose.Schema({
   smtp_user: { type: String, default: null },      // Usually same as email
   smtp_pass: { type: String, default: null },      // App password (not regular password)
   smtp_secure: { type: Boolean, default: false },  // true for 465, false for 587
+
+  // Toggle to enable/disable email sending for this user
+  email_enabled: { type: Boolean, default: true }, // When false, emails won't be sent
 });
 
 userSchema.pre('save', function(next) {
