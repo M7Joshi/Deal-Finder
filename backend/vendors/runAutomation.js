@@ -471,11 +471,20 @@ function parseSelectedJobs(rawInput) {
   if (!raw) return new Set(DEFAULT_JOBS);
   const list = raw
     .split(/[\s,]+/)
-    .map((s) => s.toLowerCase())
-    .map((s) => JOB_ALIAS_MAP[s] || null)
+    .map((s) => s.toLowerCase().trim())
+    .filter(Boolean)
+    .map((s) => {
+      // First check alias map
+      if (JOB_ALIAS_MAP[s]) return JOB_ALIAS_MAP[s];
+      // Then check if it's a valid job directly
+      if (ALL_JOBS.includes(s)) return s;
+      // Log unknown job for debugging
+      console.log(`[runAutomation] Unknown job alias: "${s}"`);
+      return null;
+    })
     .filter(Boolean);
 
-
+  console.log('[runAutomation] parseSelectedJobs:', { raw, list });
   return new Set(list.length ? list : DEFAULT_JOBS);
 }
 
