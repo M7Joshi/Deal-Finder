@@ -374,11 +374,24 @@ export default function ManageSubadmins(): JSX.Element {
       </Paper>
 
       {/* Add/Edit Dialog */}
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { maxHeight: '90vh' } }}>
-        <DialogTitle sx={{ color: '#111', fontWeight: 700, borderBottom: '1px solid #e5e7eb' }}>
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        maxWidth="sm"
+        fullWidth
+        scroll="paper"
+        PaperProps={{
+          sx: {
+            maxHeight: '85vh',
+            display: 'flex',
+            flexDirection: 'column'
+          }
+        }}
+      >
+        <DialogTitle sx={{ color: '#111', fontWeight: 700, borderBottom: '1px solid #e5e7eb', flexShrink: 0 }}>
           {editing ? 'Edit Subadmin' : 'Add New Subadmin'}
         </DialogTitle>
-        <DialogContent sx={{ mt: 2, maxHeight: '60vh', overflowY: 'auto' }}>
+        <DialogContent sx={{ mt: 2, overflowY: 'auto', flex: 1 }}>
           <Stack spacing={2.5}>
             <TextField
               label="Full Name"
@@ -603,7 +616,7 @@ export default function ManageSubadmins(): JSX.Element {
             </Box>
           </Stack>
         </DialogContent>
-        <DialogActions sx={{ p: 2, borderTop: '1px solid #e5e7eb' }}>
+        <DialogActions sx={{ p: 2, borderTop: '1px solid #e5e7eb', flexShrink: 0, bgcolor: '#fff' }}>
           <Button onClick={() => setOpen(false)} sx={{ color: '#666' }}>
             Cancel
           </Button>
