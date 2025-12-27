@@ -7,9 +7,63 @@ import { FILTERS, passesAll } from './filters.js';
 import { propIdFromUrl, toNumberOrNull, parseBeds, parseBaths, cityFromAddress } from './normalize.js';
 import { upsertRaw, upsertProperty, shouldPauseScraping } from './save.js';
 import { extractAgentDetails, closeSharedBrowser } from './agentExtractor.js';
+import ScraperProgress from '../../models/ScraperProgress.js';
 
 // Import control object for abort checking
 import { control } from '../runAutomation.js';
+
+// ===== PROGRESS TRACKING =====
+async function getProgress() {
+  let progress = await ScraperProgress.findOne({ scraper: 'redfin' });
+  if (!progress) {
+    progress = await ScraperProgress.create({ scraper: 'redfin' });
+  }
+  return progress;
+}
+
+async function updateProgress(updates) {
+  await ScraperProgress.updateOne(
+    { scraper: 'redfin' },
+    { $set: { ...updates, updatedAt: new Date() } },
+    { upsert: true }
+  );
+}
+
+async function markCityProcessed(cityUrl) {
+  await ScraperProgress.updateOne(
+    { scraper: 'redfin' },
+    {
+      $addToSet: { processedCities: cityUrl },
+      $inc: { totalScraped: 1 },
+      $set: { updatedAt: new Date() }
+    }
+  );
+}
+
+async function isCityProcessed(cityUrl) {
+  const progress = await getProgress();
+  return progress.processedCities.includes(cityUrl);
+}
+
+// Reset progress (for starting fresh cycle)
+export async function resetProgress() {
+  await ScraperProgress.updateOne(
+    { scraper: 'redfin' },
+    {
+      $set: {
+        currentState: null,
+        currentCityIndex: 0,
+        currentStateIndex: 0,
+        processedCities: [],
+        totalScraped: 0,
+        cycleStartedAt: new Date(),
+        updatedAt: new Date()
+      }
+    },
+    { upsert: true }
+  );
+  console.log('[Redfin] Progress reset - will start fresh from Alabama');
+}
 
 // Whether to use deep scraping for agent details (slower but more accurate)
 // Set REDFIN_ENRICH_AGENTS=1 to enable Puppeteer-based agent extraction
@@ -248,21 +302,35 @@ export async function runAllCities() {
   const states = getStates();
   console.log(`[Redfin] Processing ${states.length} states (state-by-state with cities)`);
 
+  // Load saved progress to continue where we left off
+  const progress = await getProgress();
+  const startStateIndex = progress.currentStateIndex || 0;
+  const processedCitiesSet = new Set(progress.processedCities || []);
+
+  console.log(`[Redfin] Resuming from state index ${startStateIndex} (${states[startStateIndex] || 'start'})`);
+  console.log(`[Redfin] Already processed ${processedCitiesSet.size} cities in this cycle`);
+
   let totalCitiesProcessed = 0;
+  let skippedCities = 0;
 
   try {
-    for (const state of states) {
+    for (let stateIdx = startStateIndex; stateIdx < states.length; stateIdx++) {
+      const state = states[stateIdx];
+
       // Check abort/batch limit before each state
       if (control.abort) {
         console.log('[Redfin] Abort signal received, stopping');
+        await updateProgress({ currentStateIndex: stateIdx, currentState: state });
         break;
       }
       if (shouldPauseScraping()) {
         console.log('[Redfin] Batch limit reached, stopping to process AMV');
+        await updateProgress({ currentStateIndex: stateIdx, currentState: state });
         break;
       }
 
-      console.log(`\n[Redfin] === Processing state: ${state} ===`);
+      console.log(`\n[Redfin] === Processing state ${stateIdx + 1}/${states.length}: ${state} ===`);
+      await updateProgress({ currentStateIndex: stateIdx, currentState: state });
 
       // Get cities for THIS state and process them immediately
       const cities = await getCitiesForState(state);
@@ -274,6 +342,12 @@ export async function runAllCities() {
 
       // Process each city in this state
       for (const city of cities) {
+        // Skip already processed cities
+        if (processedCitiesSet.has(city.url)) {
+          skippedCities++;
+          continue;
+        }
+
         // Check abort/batch limit before each city
         if (control.abort) {
           console.log('[Redfin] Abort signal received, stopping city scrape');
@@ -285,6 +359,10 @@ export async function runAllCities() {
         }
 
         await runCity(city.url);
+
+        // Mark city as processed so we don't re-scrape it
+        await markCityProcessed(city.url);
+        processedCitiesSet.add(city.url);
         totalCitiesProcessed++;
       }
 
@@ -293,9 +371,16 @@ export async function runAllCities() {
         break;
       }
     }
+
+    // Check if we completed all states - if so, reset for next cycle
+    const progress2 = await getProgress();
+    if ((progress2.currentStateIndex || 0) >= states.length - 1 && !control.abort && !shouldPauseScraping()) {
+      console.log('[Redfin] Completed all states! Resetting progress for next cycle.');
+      await resetProgress();
+    }
   } finally {
     // Clean up shared browser when done
     await closeSharedBrowser();
-    console.log(`[Redfin] Finished. Total cities processed: ${totalCitiesProcessed}`);
+    console.log(`[Redfin] Finished. Cities: processed=${totalCitiesProcessed}, skipped=${skippedCities}`);
   }
 }
