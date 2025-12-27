@@ -49,7 +49,12 @@ export default async function runAgentOffers() {
   // 1) Fetch subadmins and filter in JS (simple find + projection)
   let allUsers = [];
   try {
-    const cursor = usersCol().find({}, { projection: { _id: 1, email: 1, name: 1, states: 1, role: 1, active: 1 } });
+    const cursor = usersCol().find({}, { projection: {
+      _id: 1, email: 1, name: 1, full_name: 1, states: 1, role: 1, active: 1,
+      // SMTP credentials for sending emails from subadmin's account
+      smtp_host: 1, smtp_port: 1, smtp_user: 1, smtp_pass: 1, smtp_secure: 1,
+      email_enabled: 1,
+    } });
     allUsers = await toArraySafe(cursor);
   } catch (e) {
     log.error('[agent_offers] subadmin fetch failed', { err: String(e && e.message ? e.message : e) });
@@ -73,13 +78,32 @@ export default async function runAgentOffers() {
   const dedupeCutoff = new Date(Date.now() - DEDUPE_DAYS * 24 * 60 * 60 * 1000);
 
   for (const s of subadmins) {
+    // Check if email sending is enabled for this subadmin
+    if (s.email_enabled === false) {
+      log.info(`[agent_offers] skipping ${s.email} — email sending is disabled`);
+      continue;
+    }
+
     const states = Array.isArray(s.states) ? s.states : [];
     if (!Array.isArray(states) || states.length === 0) {
       log.info(`[agent_offers] skipping ${s.email} — no states array`);
       continue;
     }
 
-    log.info(`[agent_offers] subadmin ${s.name || s.email} states=${states.join(',')}`);
+    // Build subadmin object with nested SMTP credentials for email sending
+    const subadminWithSmtp = {
+      ...s,
+      name: s.full_name || s.name || s.email,
+      smtp: {
+        host: s.smtp_host || null,
+        port: s.smtp_port || 587,
+        user: s.smtp_user || s.email,
+        pass: s.smtp_pass || null,
+        secure: s.smtp_secure || false,
+      },
+    };
+
+    log.info(`[agent_offers] subadmin ${subadminWithSmtp.name} states=${states.join(',')} smtp=${s.smtp_host ? 'configured' : 'not-configured'}`);
 
     // 2) Find candidate properties for this subadmin
     let candidates = [];
@@ -122,11 +146,11 @@ export default async function runAgentOffers() {
       continue;
     }
 
-    // 3) Process with lightweight concurrency
+    // 3) Process with lightweight concurrency (use subadminWithSmtp for SMTP credentials)
     const queue = [...candidates];
     const workers = new Array(Math.min(CONCURRENCY, queue.length))
       .fill(null)
-      .map(() => workerLoop(queue, s, dedupeCutoff));
+      .map(() => workerLoop(queue, subadminWithSmtp, dedupeCutoff));
 
     await Promise.all(workers);
   }
