@@ -616,7 +616,15 @@ export default function ManageSubadmins(): JSX.Element {
             </Box>
           </Stack>
         </DialogContent>
-        <DialogActions sx={{ p: 2, borderTop: '1px solid #e5e7eb', flexShrink: 0, bgcolor: '#fff' }}>
+        <DialogActions sx={{
+          p: 2,
+          borderTop: '1px solid #e5e7eb',
+          flexShrink: 0,
+          bgcolor: '#fff',
+          position: 'sticky',
+          bottom: 0,
+          zIndex: 1
+        }}>
           <Button onClick={() => setOpen(false)} sx={{ color: '#666' }}>
             Cancel
           </Button>
