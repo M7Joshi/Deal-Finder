@@ -374,11 +374,11 @@ export default function ManageSubadmins(): JSX.Element {
       </Paper>
 
       {/* Add/Edit Dialog */}
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { maxHeight: '90vh' } }}>
         <DialogTitle sx={{ color: '#111', fontWeight: 700, borderBottom: '1px solid #e5e7eb' }}>
           {editing ? 'Edit Subadmin' : 'Add New Subadmin'}
         </DialogTitle>
-        <DialogContent sx={{ mt: 2 }}>
+        <DialogContent sx={{ mt: 2, maxHeight: '60vh', overflowY: 'auto' }}>
           <Stack spacing={2.5}>
             <TextField
               label="Full Name"
