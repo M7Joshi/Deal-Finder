@@ -367,12 +367,14 @@ export default function ManageSubadmins(): JSX.Element {
                     </TableCell>
                     <TableCell align="center">
                       <Tooltip title={u.email_enabled !== false ? "Email sending is ON - click to disable" : "Email sending is OFF - click to enable"} arrow>
-                        <Switch
-                          checked={u.email_enabled !== false}
-                          onChange={(e) => onToggleEmailEnabled(u, e.target.checked)}
-                          color="success"
-                          size="small"
-                        />
+                        <Box component="span">
+                          <Switch
+                            checked={u.email_enabled !== false}
+                            onChange={(e) => onToggleEmailEnabled(u, e.target.checked)}
+                            color="success"
+                            size="small"
+                          />
+                        </Box>
                       </Tooltip>
                     </TableCell>
                     <TableCell align="right">
