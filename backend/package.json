@@ -17,7 +17,8 @@
     "render-build": "echo 'Skipping build step for Render API service'",
     "render-start": "npm run start",
     "start:prod": "AUTOMATION_WORKER=0 node server.js",
-    "worker:prod": "AUTOMATION_WORKER=1 node server.js"
+    "worker:prod": "AUTOMATION_WORKER=1 node server.js",
+    "redfin-bofa-loop": "node scripts/redfin-bofa-loop.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
