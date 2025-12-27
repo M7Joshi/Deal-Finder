@@ -41,7 +41,7 @@ const CHROME_PATH = getDefaultChromePath();
 
 // Use a dedicated userDataDir to avoid Chrome "SingletonLock" on default profile
 const SHARED_USER_DATA_DIR = process.env.SHARED_CHROME_USER_DATA_DIR || `/tmp/df-shared-${process.pid}`;
-const PROTOCOL_TIMEOUT = Number(process.env.PPTR_PROTOCOL_TIMEOUT || 120000); // 120s default
+const PROTOCOL_TIMEOUT = Number(process.env.PPTR_PROTOCOL_TIMEOUT || 180000); // 180s default (3 min)
 // ---- Shared browser guard (singleton) ----
 function isOpen(b) { try { return !!b && b.isConnected(); } catch { return false; } }
 
