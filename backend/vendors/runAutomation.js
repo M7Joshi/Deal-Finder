@@ -505,9 +505,30 @@ let schedulerEnabled = !DISABLE_SCHEDULER;
 // Track how many addresses scraped in current batch
 let addressesScrapedThisBatch = 0;
 
+// Check which scrapers are enabled based on SELECTED_JOBS
+const PRIVY_ENABLED = SELECTED_JOBS.has('privy');
+const REDFIN_ENABLED = SELECTED_JOBS.has('redfin') || SELECTED_JOBS.has('scraped_deals_amv');
+const AMV_ENABLED = SELECTED_JOBS.has('bofa') || SELECTED_JOBS.has('scraped_deals_amv');
+
+// Helper to determine the starting phase based on enabled jobs
+function getStartingPhase() {
+  if (PRIVY_ENABLED) return 'privy';
+  if (REDFIN_ENABLED) return 'redfin';
+  if (AMV_ENABLED) return 'bofa_after_redfin'; // Just run AMV if no scrapers
+  return 'idle';
+}
+
 // Scheduler phases (moved here so getScraperStatus can reference it)
-// Starting with 'privy' first for testing
-let schedulerPhase = 'privy'; // 'privy' | 'break_after_privy' | 'redfin' | 'break_after_redfin' | 'bofa' | 'break_after_bofa'
+// Dynamically start with the first enabled phase
+let schedulerPhase = getStartingPhase();
+
+log.info('[Scheduler] Phase configuration:', {
+  PRIVY_ENABLED,
+  REDFIN_ENABLED,
+  AMV_ENABLED,
+  startingPhase: schedulerPhase,
+  selectedJobs: Array.from(SELECTED_JOBS)
+});
 
 // Export for tracking
 export function getScraperStatus() {
@@ -538,7 +559,7 @@ export function shouldPauseScraping() {
 // Reset counter and phase after AMV phase completes (exported for clear-all endpoint)
 export function resetBatchCounter() {
   addressesScrapedThisBatch = 0;
-  schedulerPhase = 'privy'; // Reset to start of cycle (Privy first)
+  schedulerPhase = getStartingPhase(); // Reset to start of cycle based on enabled jobs
 }
 
 function scheduleNextRun(delayMs = RUN_INTERVAL_MS) {
@@ -637,7 +658,7 @@ async function schedulerTick() {
   // If we have 100+ pending addresses, skip scraping and go straight to BofA
   if (pendingAMV >= SCRAPER_LIMIT && !schedulerPhase.startsWith('break') && !schedulerPhase.startsWith('bofa')) {
     log.info(`Scheduler: ${pendingAMV} pending addresses >= ${SCRAPER_LIMIT} - skipping to BofA phase`);
-    schedulerPhase = 'bofa_after_privy'; // Go to BofA processing
+    schedulerPhase = 'bofa_after_redfin'; // Go to BofA processing (use redfin variant as it resets the cycle)
   }
 
   switch (schedulerPhase) {
@@ -746,15 +767,17 @@ async function schedulerTick() {
     }
 
     case 'break_after_redfin': {
-      log.info('Scheduler: Break after Redfin+BofA complete. Starting new cycle with Privy...');
-      schedulerPhase = 'privy';
+      const nextPhase = getStartingPhase();
+      log.info(`Scheduler: Break after Redfin+BofA complete. Starting new cycle with ${nextPhase}...`);
+      schedulerPhase = nextPhase;
       scheduleNextRun(0);
       return;
     }
 
     default: {
-      log.warn('Scheduler: Unknown phase, resetting to privy', { phase: schedulerPhase });
-      schedulerPhase = 'privy';
+      const startPhase = getStartingPhase();
+      log.warn('Scheduler: Unknown phase, resetting', { phase: schedulerPhase, startPhase });
+      schedulerPhase = startPhase;
       scheduleNextRun(0);
       return;
     }
