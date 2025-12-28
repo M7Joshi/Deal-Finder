@@ -2,6 +2,7 @@
 // Saves to ScrapedDeal for Pending AMV display
 
 import express from 'express';
+import { EventEmitter } from 'events';
 import ScrapedDeal from '../models/ScrapedDeal.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
 import { log } from '../utils/logger.js';
@@ -9,6 +10,7 @@ import PrivyBot from '../vendors/privy/privyBot.js';
 import * as sessionStore from '../vendors/privy/auth/sessionStore.js';
 import { quickLogin } from '../vendors/privy/auth/loginPatch.js';
 import { applyFilters } from '../vendors/privy/filters/filterService.js';
+import { resetSharedBrowser } from '../utils/browser.js';
 import {
   propertyListContainerSelector,
   propertyContentSelector,
@@ -24,6 +26,10 @@ import {
 
 const router = express.Router();
 const L = log.child('live-scrape');
+
+// Event emitter for real-time scrape updates
+const scrapeEvents = new EventEmitter();
+scrapeEvents.setMaxListeners(50); // Allow multiple SSE clients
 
 // Helper function to close any open modals/popups (agent profiles, filter panels, Property Search Filter, etc.)
 async function closeAllModals(page) {
@@ -188,14 +194,28 @@ let lastScrapedState = null; // Track last state to detect state changes
 // Request queue to prevent concurrent scraping (browser can only handle one at a time)
 let scrapingInProgress = false;
 let scrapingQueue = [];
+let lastScrapeEndTime = 0;
+const MIN_SCRAPE_GAP_MS = 3000; // Minimum 3 seconds between scrapes
 
 async function waitForScrapingSlot(stateCode) {
   if (!scrapingInProgress) {
+    // Check if we need to wait for cooldown after last scrape
+    const timeSinceLastScrape = Date.now() - lastScrapeEndTime;
+    if (timeSinceLastScrape < MIN_SCRAPE_GAP_MS) {
+      const waitTime = MIN_SCRAPE_GAP_MS - timeSinceLastScrape;
+      L.info(`Waiting ${waitTime}ms cooldown before starting ${stateCode} scrape`);
+      await new Promise(r => setTimeout(r, waitTime));
+    }
     scrapingInProgress = true;
     return true;
   }
 
-  // Already scraping - queue this request
+  // Already scraping - queue this request (but limit queue size to prevent buildup)
+  if (scrapingQueue.length >= 2) {
+    L.warn(`Queue full, rejecting request for ${stateCode}`);
+    return false; // Return false to indicate request was rejected
+  }
+
   return new Promise((resolve) => {
     L.info(`Queuing request for ${stateCode}, scraping already in progress`);
     scrapingQueue.push({ stateCode, resolve });
@@ -203,10 +223,13 @@ async function waitForScrapingSlot(stateCode) {
 }
 
 function releaseScrapingSlot() {
+  lastScrapeEndTime = Date.now();
+
   if (scrapingQueue.length > 0) {
     const next = scrapingQueue.shift();
     L.info(`Processing queued request for ${next.stateCode}`);
-    next.resolve(true);
+    // Add delay before starting next scrape to let browser settle
+    setTimeout(() => next.resolve(true), MIN_SCRAPE_GAP_MS);
   } else {
     scrapingInProgress = false;
   }
@@ -490,9 +513,14 @@ function getFilterUrl() {
 
 // Build Privy URL for a city - EXACT parameters from working Privy URL
 // This URL includes ALL filters so we can navigate directly without using filter modal
+// CRITICAL: id=&name=&saved_search= MUST be included to clear any saved search like "Below Market"
 function buildPrivyUrl(city, stateCode, cacheBust = true) {
   const base = 'https://app.privy.pro/dashboard';
   const params = new URLSearchParams({
+    // CRITICAL: Clear saved search first to prevent "Below Market" from being applied
+    id: '',
+    name: '',
+    saved_search: '',
     update_history: 'true',
     search_text: `${city}, ${stateCode}`,
     location_type: 'city',
@@ -552,19 +580,389 @@ function isRecoverableError(errorMsg) {
          msg.includes('timeout') || msg.includes('timed out');
 }
 
-// Helper to reset the shared bot
+// Helper to reset the shared bot AND browser (for recoverable errors like detached frame)
 async function resetSharedBot() {
+  L.info('Resetting shared bot and browser...');
   if (sharedPrivyBot) {
     try { await sharedPrivyBot.close(); } catch {}
   }
   sharedPrivyBot = null;
   botInitializing = false;
+
+  // Also reset the shared browser to ensure fresh connection on retry
+  try {
+    await resetSharedBrowser();
+  } catch (e) {
+    L.warn('Failed to reset shared browser', { error: e?.message });
+  }
 }
 
-router.get('/privy', requireAuth, async (req, res) => {
-  const { state, limit = 100, autoBofa = 'false', enrichAgent = 'true' } = req.query;
+/**
+ * STATE-LEVEL PRIVY HANDLER
+ * Uses the simpler approach from test-privy-fetch.js:
+ * 1. Navigate to state-level URL with filters
+ * 2. Click on map clusters to zoom in
+ * 3. Extract addresses from property cards
+ *
+ * This avoids the dropdown selection issue entirely.
+ */
+async function privyStateHandler(req, res, stateUpper, limitNum, shouldAutoBofa, shouldEnrichAgent) {
+  L.info(`Starting STATE-LEVEL Privy scrape for ${stateUpper}`, { limit: limitNum, mode: 'state' });
+
+  // Wait for scraping slot
+  const gotSlot = await waitForScrapingSlot(stateUpper);
+  if (gotSlot === false) {
+    return res.status(429).json({
+      ok: false,
+      error: 'Too many requests. A scrape is already in progress. Please wait.',
+      retryAfter: 30
+    });
+  }
+
+  try {
+    // Reset bot for fresh session
+    if (sharedPrivyBot) {
+      L.info('Resetting bot for state-level scrape');
+      try { await sharedPrivyBot.close(); } catch {}
+      sharedPrivyBot = null;
+      botInitializing = false;
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    // Initialize bot
+    if (!sharedPrivyBot && !botInitializing) {
+      botInitializing = true;
+      L.info('Creating new PrivyBot instance for state-level scrape...');
+      try {
+        sharedPrivyBot = new PrivyBot();
+        await sharedPrivyBot.init();
+
+        const currentUrl = sharedPrivyBot.page.url();
+        L.info('Current page after init', { url: currentUrl });
+
+        if (currentUrl.includes('sign_in') || currentUrl === 'about:blank') {
+          L.info('On sign-in page, using quick login...');
+          const quickResult = await quickLogin(sharedPrivyBot.page);
+          if (quickResult && quickResult.page) {
+            sharedPrivyBot.page = quickResult.page;
+          }
+          if (quickResult?.success !== true) {
+            await sharedPrivyBot.login();
+          }
+        }
+      } catch (initErr) {
+        botInitializing = false;
+        sharedPrivyBot = null;
+        throw initErr;
+      }
+      botInitializing = false;
+    }
+
+    const page = sharedPrivyBot.page;
+
+    // Maximize viewport
+    try {
+      const session = await page.target().createCDPSession();
+      const { windowId } = await session.send('Browser.getWindowForTarget');
+      await session.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'maximized' } });
+      await page.setViewport({ width: 1920, height: 1080 });
+    } catch {}
+
+    // EXACT SAME APPROACH AS test-privy-fetch.js
+    // STEP 1: First navigate to clean dashboard URL to clear any saved search (line 51 of test-privy-fetch.js)
+    L.info('Step 1: Navigating to clean dashboard to clear saved search...');
+    await page.goto('https://app.privy.pro/dashboard?id=&name=&saved_search=&include_sold=false&include_active=true', {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000
+    });
+    await new Promise(r => setTimeout(r, 2000));
+
+    // STEP 2: Navigate to state URL (line 31 and 72 of test-privy-fetch.js)
+    // Using the EXACT same URL format as test-privy-fetch.js
+    const stateUrl = `https://app.privy.pro/dashboard?location_type=state&state=${stateUpper}&project_type=buy_hold&list_price_from=20000&list_price_to=600000&beds_from=3&sqft_from=1000&hoa=no&include_detached=true&include_active=true&date_range=all&sort_by=days-on-market&sort_dir=asc`;
+
+    L.info(`Step 2: Navigating to ${stateUpper} state view...`);
+    await page.goto(stateUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await new Promise(r => setTimeout(r, 5000));
+
+    // Wait for clusters to load (line 77-82 of test-privy-fetch.js)
+    L.info('Waiting for map clusters...');
+    try {
+      await page.waitForSelector('.cluster.cluster-deal', { timeout: 15000 });
+      L.info('Clusters loaded!');
+    } catch {
+      L.info('No clusters found');
+    }
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Click on clusters to zoom in and find addresses (lines 89-111 of test-privy-fetch.js)
+    const allAddresses = [];
+    const seenAddressKeys = new Set();
+    L.info('Clicking clusters to find addresses...');
+
+    for (let attempt = 0; attempt < 15 && allAddresses.length < limitNum; attempt++) {
+      // Click the FIRST cluster - same as test-privy-fetch.js line 93
+      const clusterInfo = await page.evaluate(() => {
+        const clusters = document.querySelectorAll('.cluster.cluster-deal');
+        if (clusters.length === 0) return { clicked: false, count: 0 };
+        clusters[0].click();
+        return { clicked: true, count: clusters.length };
+      });
+
+      L.info(`Click ${attempt + 1}: ${clusterInfo.count} clusters`);
+      if (!clusterInfo.clicked) break;
+      await new Promise(r => setTimeout(r, 2000));
+
+      // Check for property cards (line 103-104 of test-privy-fetch.js)
+      const hasProps = await page.evaluate(() => {
+        return document.querySelectorAll('.property-module, .view-container').length > 0;
+      });
+
+      if (hasProps) {
+        L.info('Property cards found!');
+        break;
+      }
+    }
+
+    await new Promise(r => setTimeout(r, 3000));
+
+    // Scroll to load more properties
+    for (let i = 0; i < 5; i++) {
+      await page.evaluate(() => window.scrollBy(0, 600));
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    // Extract addresses (lines 123-142 of test-privy-fetch.js)
+    L.info('Extracting addresses...');
+    const addresses = await page.evaluate(() => {
+      const results = [];
+
+      // Find property modules - EXACT same selector as test-privy-fetch.js line 127
+      const modules = document.querySelectorAll('.property-module .content, .property-card');
+
+      for (const el of modules) {
+        const line1 = el.querySelector('.address-line1')?.textContent?.trim() || '';
+        const line2 = el.querySelector('.address-line2')?.textContent?.trim() || '';
+        const fullAddress = line1 && line2 ? `${line1}, ${line2}` : (line1 || line2);
+
+        if (fullAddress && fullAddress.length > 5) {
+          const price = el.querySelector('.price')?.textContent?.trim() || '';
+          const stats = Array.from(el.querySelectorAll('.quickstat')).map(s => s.textContent?.trim()).filter(Boolean);
+          results.push({ fullAddress, price, stats });
+        }
+      }
+
+      return results;
+    });
+
+    L.info(`Extracted ${addresses.length} addresses from property cards`);
+
+    // Dedupe and format addresses
+    for (const addr of addresses) {
+      if (allAddresses.length >= limitNum) break;
+      const key = addr.fullAddress.toLowerCase().trim();
+      if (!seenAddressKeys.has(key)) {
+        seenAddressKeys.add(key);
+
+        // Extract city from address
+        const parts = addr.fullAddress.split(',');
+        const city = parts.length >= 2 ? parts[parts.length - 2].trim() : '';
+
+        allAddresses.push({
+          fullAddress: addr.fullAddress,
+          price: addr.price,
+          agentName: null,
+          agentEmail: null,
+          agentPhone: null,
+          quickStats: addr.stats || [],
+          city: city,
+          state: stateUpper,
+          source: 'privy',
+          scrapedAt: new Date().toISOString()
+        });
+
+        // Emit SSE event for real-time updates
+        scrapeEvents.emit('address', {
+          state: stateUpper,
+          city: city,
+          address: allAddresses[allAddresses.length - 1],
+          progress: { current: allAddresses.length, limit: limitNum }
+        });
+      }
+    }
+
+    // Release scraping slot
+    scrapingInProgress = false;
+    lastScrapeEndTime = Date.now();
+
+    // Save to database
+    let savedCount = 0;
+    for (const addr of allAddresses) {
+      try {
+        const fullAddress_ci = addr.fullAddress.toLowerCase().trim();
+        await ScrapedDeal.findOneAndUpdate(
+          { fullAddress_ci },
+          {
+            $set: {
+              address: addr.fullAddress.split(',')[0]?.trim() || addr.fullAddress,
+              fullAddress: addr.fullAddress,
+              fullAddress_ci,
+              city: addr.city,
+              state: stateUpper,
+              listingPrice: addr.price ? Number(String(addr.price).replace(/[^0-9.-]/g, '')) : null,
+              source: 'privy',
+              scrapedAt: new Date()
+            }
+          },
+          { upsert: true, new: true }
+        );
+        savedCount++;
+      } catch {}
+    }
+
+    // Emit completion event
+    scrapeEvents.emit('complete', { state: stateUpper, total: allAddresses.length });
+
+    L.info(`State-level scrape complete for ${stateUpper}`, { count: allAddresses.length, saved: savedCount });
+
+    return res.json({
+      ok: true,
+      state: stateUpper,
+      mode: 'state',
+      count: allAddresses.length,
+      limit: limitNum,
+      addresses: allAddresses,
+      savedToScrapedDeal: savedCount
+    });
+
+  } catch (err) {
+    scrapingInProgress = false;
+    lastScrapeEndTime = Date.now();
+    L.error('State-level Privy scrape failed', { error: err?.message });
+    scrapeEvents.emit('error', { state: stateUpper, message: err?.message });
+    return res.status(500).json({ ok: false, error: err?.message || 'Scrape failed' });
+  }
+}
+
+// SSE endpoint for real-time scrape updates
+// This endpoint STARTS a scrape AND streams results in real-time
+router.get('/privy-stream', async (req, res) => {
+  const state = (req.query.state || '').toUpperCase();
+  const limit = parseInt(req.query.limit) || 100;
+
+  if (!state) {
+    return res.status(400).json({ ok: false, error: 'State parameter is required' });
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering
+  res.setHeader('Access-Control-Allow-Origin', '*'); // Allow CORS for SSE
+  res.flushHeaders();
+
+  // Send initial connection message
+  res.write(`event: connected\ndata: ${JSON.stringify({ state, limit, timestamp: Date.now() })}\n\n`);
+
+  // Handler for address events - use named SSE events for proper addEventListener handling
+  const onAddress = (data) => {
+    if (data.state === state) {
+      res.write(`event: address\ndata: ${JSON.stringify(data)}\n\n`);
+    }
+  };
+
+  // Handler for status events (city started, progress, etc.)
+  const onStatus = (data) => {
+    if (data.state === state) {
+      res.write(`event: status\ndata: ${JSON.stringify(data)}\n\n`);
+    }
+  };
+
+  // Handler for completion
+  const onComplete = (data) => {
+    if (data.state === state) {
+      res.write(`event: complete\ndata: ${JSON.stringify(data)}\n\n`);
+    }
+  };
+
+  // Handler for errors
+  const onError = (data) => {
+    if (data.state === state) {
+      res.write(`event: error\ndata: ${JSON.stringify(data)}\n\n`);
+    }
+  };
+
+  // Subscribe to events BEFORE starting scrape
+  scrapeEvents.on('address', onAddress);
+  scrapeEvents.on('status', onStatus);
+  scrapeEvents.on('complete', onComplete);
+  scrapeEvents.on('error', onError);
+
+  // Send heartbeat every 30 seconds to keep connection alive
+  const heartbeat = setInterval(() => {
+    res.write(`event: heartbeat\ndata: ${JSON.stringify({ timestamp: Date.now() })}\n\n`);
+  }, 30000);
+
+  // Cleanup function
+  const cleanup = () => {
+    clearInterval(heartbeat);
+    scrapeEvents.off('address', onAddress);
+    scrapeEvents.off('status', onStatus);
+    scrapeEvents.off('complete', onComplete);
+    scrapeEvents.off('error', onError);
+  };
+
+  // Cleanup on disconnect
+  req.on('close', () => {
+    cleanup();
+    L.info('SSE client disconnected');
+  });
+
+  L.info('SSE client connected, starting scrape', { state, limit });
+
+  // Start the scrape asynchronously - use internal scrape function
+  // Create a mock request/response for the internal call
+  const mockReq = { query: { state, limit: limit.toString(), enrichAgent: 'true' } };
+  const mockRes = {
+    status: (code) => ({
+      json: (data) => {
+        if (code >= 400) {
+          scrapeEvents.emit('error', { state, message: data.error || 'Scrape failed' });
+        }
+      }
+    }),
+    json: (data) => {
+      // Scrape completed via normal endpoint - send complete event
+      if (data.ok && data.addresses) {
+        scrapeEvents.emit('complete', { state, total: data.addresses.length, addresses: data.addresses });
+      }
+    }
+  };
+
+  // Run the scrape in background
+  try {
+    privyHandler(mockReq, mockRes).catch((err) => {
+      scrapeEvents.emit('error', { state, message: err.message });
+    });
+  } catch (err) {
+    scrapeEvents.emit('error', { state, message: err.message });
+  }
+});
+
+// Test endpoint without auth - TEMPORARY for testing
+router.get('/privy-test', async (req, res) => {
+  req.query.state = req.query.state || 'TX';
+  req.query.limit = req.query.limit || '5';
+  // Forward to privy handler
+  return privyHandler(req, res);
+});
+
+async function privyHandler(req, res) {
+  const { state, limit = 100, autoBofa = 'false', enrichAgent = 'true', mode = 'city' } = req.query;
   const shouldAutoBofa = autoBofa === 'true' || autoBofa === '1';
   const shouldEnrichAgent = enrichAgent === 'true' || enrichAgent === '1';
+  // mode: 'city' = city-by-city search (default), 'state' = state-level cluster approach (simpler)
+  const scrapeMode = mode === 'state' ? 'state' : 'city';
 
   if (!state) {
     return res.status(400).json({ ok: false, error: 'State parameter is required (e.g., state=NJ)' });
@@ -572,6 +970,11 @@ router.get('/privy', requireAuth, async (req, res) => {
 
   const stateUpper = state.toUpperCase();
   const limitNum = parseInt(limit) || 100;
+
+  // If state-level mode, use the simpler cluster-based approach
+  if (scrapeMode === 'state') {
+    return privyStateHandler(req, res, stateUpper, limitNum, shouldAutoBofa, shouldEnrichAgent);
+  }
 
   // Get ALL cities for this state - we'll loop through them
   // SORT ALPHABETICALLY to ensure consistent, thorough coverage (A to Z)
@@ -582,7 +985,14 @@ router.get('/privy', requireAuth, async (req, res) => {
   }
 
   // Wait for scraping slot (only one scrape can run at a time)
-  await waitForScrapingSlot(stateUpper);
+  const gotSlot = await waitForScrapingSlot(stateUpper);
+  if (gotSlot === false) {
+    return res.status(429).json({
+      ok: false,
+      error: 'Too many requests. A scrape is already in progress. Please wait.',
+      retryAfter: 30
+    });
+  }
 
   // Retry loop for recoverable errors
   let lastError = null;
@@ -654,10 +1064,12 @@ router.get('/privy', requireAuth, async (req, res) => {
         } else if (currentUrl.includes('dashboard')) {
           L.info('Already on dashboard, session is valid!');
         } else {
-          // Try to go to dashboard
-          L.info('Checking session by navigating to dashboard...');
+          // Try to go to dashboard with EXPLICIT filters to avoid saved search loading
+          // CRITICAL: Never go to plain /dashboard - it loads "Below Market" saved search with include_sold=true
+          L.info('Checking session by navigating to dashboard with clean filters...');
+          const cleanCheckUrl = 'https://app.privy.pro/dashboard?id=&name=&saved_search=&include_sold=false&include_active=true&include_pending=false&include_under_contract=false';
           try {
-            await sharedPrivyBot.page.goto('https://app.privy.pro/dashboard', {
+            await sharedPrivyBot.page.goto(cleanCheckUrl, {
               waitUntil: 'domcontentloaded',
               timeout: 30000
             });
@@ -724,6 +1136,47 @@ router.get('/privy', requireAuth, async (req, res) => {
     // The filter URL with all correct parameters
     const filterUrl = 'https://app.privy.pro/dashboard?update_history=true&id=&name=&folder_id=&user_property_status=&batch_id=&saved_search=&search_text=&location_type=nationwide&search_shape=&search_shape_id=&geography_shape=&geography_shape_id=&include_surrounding=true&list_key=&email_frequency=&quick_filter_id=&project_type=buy_hold&spread_type=umv&spread=50&isLTRsearch=false&from_email_sender_id=&from_email_sender_feature_ltr=&from_email_sender_user_type=&preferred_only=false&list_price_from=20000&list_price_to=600000&price_per_sqft_from=0&price_per_sqft_to=&street_number=&street=&city=&zip=&county=&state=&lat=&lng=&radius=&cm=&zoom=5&sw_lat=29.658691955488298&sw_lng=-132.09084384947136&ne_lat=48.842479954833586&ne_lng=-66.78810947447136&size%5Bheight%5D=570&size%5Bwidth%5D=1486&gridViewWidth=&dom_from=&dom_to=&stories_from=&stories_to=&beds_from=3&beds_to=&baths_from=&baths_to=&sqft_from=1000&sqft_to=&year_built_from=&year_built_to=&hoa_fee_from=&hoa_fee_to=&unit_count_from=&unit_count_to=&zoned=&hoa=no&remarks=&basement=Any&basement_sqft_from=&basement_sqft_to=&include_condo=false&include_attached=false&include_detached=true&include_multi_family=false&include_active=true&include_under_contract=false&include_sold=false&include_pending=false&date_range=all&source=Any&sort_by=days-on-market&sort_dir=asc&site_id=&city_id=&for_pdf=&fast_match_property_id=';
 
+    // CRITICAL: Intercept and block Privy from applying the "Below Market" saved search
+    // Privy's frontend JavaScript tries to modify the URL to apply id=-101 (saved search)
+    // We override history.pushState and history.replaceState to filter out bad parameters
+    await page.evaluateOnNewDocument(() => {
+      const originalPushState = history.pushState.bind(history);
+      const originalReplaceState = history.replaceState.bind(history);
+
+      const filterUrl = (url) => {
+        if (!url || typeof url !== 'string') return url;
+        try {
+          const urlObj = new URL(url, location.origin);
+          // Force correct filter values
+          urlObj.searchParams.set('id', '');
+          urlObj.searchParams.set('name', '');
+          urlObj.searchParams.set('saved_search', '');
+          urlObj.searchParams.set('include_sold', 'false');
+          urlObj.searchParams.set('include_active', 'true');
+          urlObj.searchParams.set('include_pending', 'false');
+          urlObj.searchParams.set('include_under_contract', 'false');
+          urlObj.searchParams.set('include_attached', 'false');
+          urlObj.searchParams.set('include_detached', 'true');
+          urlObj.searchParams.set('hoa', 'no');
+          urlObj.searchParams.set('spread', '50');
+          urlObj.searchParams.set('date_range', 'all');
+          return urlObj.toString();
+        } catch {
+          return url;
+        }
+      };
+
+      history.pushState = function(state, title, url) {
+        return originalPushState(state, title, filterUrl(url));
+      };
+
+      history.replaceState = function(state, title, url) {
+        return originalReplaceState(state, title, filterUrl(url));
+      };
+
+      console.log('[Privy Filter Override] History API intercepted - saved search blocked');
+    });
+
     L.info('Opening Privy with filter URL...');
     await page.goto(filterUrl, { waitUntil: 'networkidle0', timeout: 90000 });
 
@@ -740,8 +1193,9 @@ router.get('/privy', requireAuth, async (req, res) => {
     L.info('Waiting 10 seconds for filter URL to apply...');
     await new Promise(r => setTimeout(r, 10000));
 
-    // Close any popups/modals that appeared
-    await closeAllModals(page);
+    // DISABLED: closeAllModals was clicking on "Below Market" saved search section
+    // The aggressive selectors like '[class*="filter"] button' and 'svg circle' were too broad
+    // await closeAllModals(page);
 
     // Log actual URL to verify filters applied
     const actualUrl = page.url();
@@ -762,69 +1216,631 @@ router.get('/privy', requireAuth, async (req, res) => {
       L.info(`Current progress: ${globalAddresses.length}/${limitNum} addresses`);
       citiesScraped.push(cityToUse);
 
-    // ========== STEP 1: APPLY FILTER URL AND WAIT 10 SECONDS ==========
-    L.info(`Applying filter URL...`);
-    await page.goto(filterUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      // Emit status event for SSE clients
+      scrapeEvents.emit('status', {
+        state: stateUpper,
+        event: 'city_start',
+        city: cityToUse,
+        cityIndex: cityIndex + 1,
+        totalCities: stateCities.length,
+        progress: {
+          current: globalAddresses.length,
+          limit: limitNum
+        }
+      });
 
-    L.info('Waiting 10 seconds for filters to apply...');
+    // ========== STEP 0.5: CLEAR PRIVY'S SAVED SEARCH FROM LOCALSTORAGE ==========
+    // Privy stores the saved search in localStorage/sessionStorage - we need to clear it
+    L.info(`Clearing Privy saved search from localStorage...`);
+    await page.evaluate(() => {
+      // Clear any saved search data from localStorage
+      const keysToRemove = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.includes('search') || key.includes('filter') || key.includes('saved') || key.includes('privy'))) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(key => localStorage.removeItem(key));
+
+      // Also clear sessionStorage
+      const sessionKeysToRemove = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (key && (key.includes('search') || key.includes('filter') || key.includes('saved') || key.includes('privy'))) {
+          sessionKeysToRemove.push(key);
+        }
+      }
+      sessionKeysToRemove.forEach(key => sessionStorage.removeItem(key));
+
+      return { localStorageCleared: keysToRemove.length, sessionStorageCleared: sessionKeysToRemove.length };
+    }).then(result => L.info('Storage cleared', result)).catch(() => {});
+
+    // ========== STEP 1: APPLY FILTER URL FIRST (WITHOUT CITY) ==========
+    // CRITICAL: First apply filters with explicit include_sold=false to override any saved search
+    L.info(`STEP 1: Applying clean filter URL (no city yet)...`);
+
+    // Build filter URL matching EXACT Privy format but NO city - this sets the filter state
+    // Key: id=&name= clears any saved search, all other filters set correctly
+    const filterOnlyUrl = `https://app.privy.pro/dashboard?update_history=true&id=&name=&folder_id=&user_property_status=&batch_id=&saved_search=&search_text=&location_type=nationwide&search_shape=&search_shape_id=&geography_shape=&geography_shape_id=&include_surrounding=true&list_key=&email_frequency=&quick_filter_id=&project_type=buy_hold&spread_type=umv&spread=50&isLTRsearch=false&from_email_sender_id=&from_email_sender_feature_ltr=&from_email_sender_user_type=&preferred_only=false&list_price_from=20000&list_price_to=600000&price_per_sqft_from=0&price_per_sqft_to=&street_number=&street=&city=&zip=&county=&state=&lat=&lng=&radius=&cm=&zoom=5&sw_lat=&sw_lng=&ne_lat=&ne_lng=&size%5Bheight%5D=570&size%5Bwidth%5D=1486&gridViewWidth=&dom_from=&dom_to=&stories_from=&stories_to=&beds_from=3&beds_to=&baths_from=&baths_to=&sqft_from=1000&sqft_to=&year_built_from=&year_built_to=&hoa_fee_from=&hoa_fee_to=&unit_count_from=&unit_count_to=&zoned=&hoa=no&remarks=&basement=Any&basement_sqft_from=&basement_sqft_to=&include_condo=false&include_attached=false&include_detached=true&include_multi_family=false&include_active=true&include_under_contract=false&include_sold=false&include_pending=false&date_range=all&source=Any&sort_by=days-on-market&sort_dir=asc&site_id=&city_id=&for_pdf=&fast_match_property_id=`;
+
+    await page.goto(filterOnlyUrl, { waitUntil: 'networkidle0', timeout: 60000 });
+    L.info('Filter URL loaded, waiting 10 seconds for filters to apply...');
     await new Promise(r => setTimeout(r, 10000));
 
-    // Close any modals/banners that appeared
-    await closeAllModals(page);
+    // Verify the URL has correct filters
+    const urlAfterFilter = page.url();
+    L.info(`URL after filter: ${urlAfterFilter.substring(0, 150)}...`);
 
-    // ========== STEP 2: TYPE CITY IN SEARCH BOX AND HIT ENTER ==========
-    L.info(`Searching for city: ${cityToUse}, ${stateUpper}`);
-    try {
-      // Find the search input
-      const searchSelectors = [
-        'input[placeholder*="Search"]',
-        'input[placeholder*="search"]',
-        'input[type="search"]',
-        'input[name="search"]'
-      ];
+    // Check if saved search got re-applied
+    if (urlAfterFilter.includes('id=-') || urlAfterFilter.includes('include_sold=true')) {
+      L.warn('Saved search re-applied! Using page.goto() to force correct URL...');
 
-      let searchInput = null;
-      for (const sel of searchSelectors) {
-        try {
-          searchInput = await page.$(sel);
-          if (searchInput) {
-            const box = await searchInput.boundingBox();
-            if (box && box.width > 0 && box.height > 0) {
-              L.info(`Found search input: ${sel}`);
-              break;
-            }
-            searchInput = null;
-          }
-        } catch {}
-      }
+      // FIXED: Use page.goto() instead of window.location.href
+      // window.location.href triggers Privy's SPA router which reapplies saved search
+      // page.goto() bypasses the SPA and loads the URL directly
+      const fixedUrl = new URL(urlAfterFilter);
+      fixedUrl.searchParams.set('id', '');
+      fixedUrl.searchParams.set('name', '');
+      fixedUrl.searchParams.set('saved_search', '');
+      fixedUrl.searchParams.set('include_sold', 'false');
+      fixedUrl.searchParams.set('include_active', 'true');
+      fixedUrl.searchParams.set('include_pending', 'false');
+      fixedUrl.searchParams.set('include_under_contract', 'false');
+      fixedUrl.searchParams.set('include_attached', 'false');
+      fixedUrl.searchParams.set('include_detached', 'true');
+      fixedUrl.searchParams.set('hoa', 'no');
+      fixedUrl.searchParams.set('spread', '50');
+      fixedUrl.searchParams.set('date_range', 'all');
 
-      if (searchInput) {
-        // Clear and type city
-        await searchInput.click({ clickCount: 3 });
-        await new Promise(r => setTimeout(r, 200));
-        await page.keyboard.press('Backspace');
-        await new Promise(r => setTimeout(r, 100));
-
-        await searchInput.type(`${cityToUse}, ${stateUpper}`, { delay: 80 });
-        L.info('Typed city in search box');
-
-        // Just press Enter directly - NO ArrowDown (to avoid dropdown/saved search)
-        await new Promise(r => setTimeout(r, 500));
-        await page.keyboard.press('Enter');
-        L.info('Pressed Enter to search');
-
-        // Wait for search results
-        L.info('Waiting 10 seconds for search results...');
-        await new Promise(r => setTimeout(r, 10000));
-      } else {
-        L.warn('Search input not found!');
-      }
-    } catch (searchErr) {
-      L.warn('City search failed', { error: searchErr?.message });
+      await page.goto(fixedUrl.toString(), { waitUntil: 'networkidle0', timeout: 60000 });
+      await new Promise(r => setTimeout(r, 5000));
     }
 
-    // Close any modals/banners that appeared
-    await closeAllModals(page);
+    // DISABLED: closeAllModals was clicking on "Below Market" saved search
+    // await closeAllModals(page);
+
+    // ========== STEP 2: TYPE CITY IN SEARCH BOX AND SELECT FROM DROPDOWN ==========
+    // Instead of navigating via URL, we type in the search box like a human user
+    L.info(`STEP 2: Typing "${cityToUse}, ${stateUpper}" in search box...`);
+
+    const searchQuery = `${cityToUse}, ${stateUpper}`;
+
+    // Find and click the search input box
+    const searchInputSelectors = [
+      'input[placeholder*="Search"]',
+      'input[placeholder*="search"]',
+      'input[placeholder*="city"]',
+      'input[placeholder*="City"]',
+      'input[placeholder*="location"]',
+      'input[placeholder*="Location"]',
+      'input[type="search"]',
+      '#search-input',
+      '.search-input',
+      '[data-testid="search-input"]',
+      'input.search',
+      '#SearchBlock input',
+      '.search-block input',
+      'input[name="search"]',
+      'input[name="query"]',
+    ];
+
+    let searchInput = null;
+    for (const selector of searchInputSelectors) {
+      try {
+        searchInput = await page.$(selector);
+        if (searchInput) {
+          L.info(`Found search input with selector: ${selector}`);
+          break;
+        }
+      } catch {}
+    }
+
+    if (!searchInput) {
+      // Try finding by visible text/placeholder
+      searchInput = await page.evaluateHandle(() => {
+        const inputs = document.querySelectorAll('input');
+        for (const input of inputs) {
+          const placeholder = (input.placeholder || '').toLowerCase();
+          if (placeholder.includes('search') || placeholder.includes('city') || placeholder.includes('location')) {
+            return input;
+          }
+        }
+        return null;
+      });
+      if (searchInput) L.info('Found search input by placeholder text');
+    }
+
+    if (searchInput) {
+      // Clear existing text and type the city
+      await searchInput.click({ clickCount: 3 }); // Select all
+      await new Promise(r => setTimeout(r, 300));
+      await page.keyboard.press('Backspace'); // Clear
+      await new Promise(r => setTimeout(r, 300));
+
+      // Type slowly like a human
+      await searchInput.type(searchQuery, { delay: 100 });
+      L.info('Typed city in search box');
+
+      // Wait for dropdown to appear (Privy needs time to fetch autocomplete results)
+      L.info('Waiting for autocomplete dropdown...');
+      await new Promise(r => setTimeout(r, 3000));
+
+      // DEBUG: Take screenshot of dropdown state
+      try {
+        const screenshotPath = `c:/Users/91812/Desktop/Demo-3 Mioym/deal-finder-1/backend/var/dropdown-${cityToUse.replace(/\s+/g, '-')}.png`;
+        await page.screenshot({ path: screenshotPath, fullPage: false });
+        L.info(`Saved search dropdown screenshot for ${cityToUse}`);
+      } catch (e) {}
+
+      // Use page.evaluate to find ALL visible dropdown-like elements
+      // Also use a position-based approach to find elements near the search input
+      const dropdownInfo = await page.evaluate(() => {
+        const results = {
+          items: [],
+          allDropdowns: [],
+          clickableItems: [],
+          positionBasedItems: []
+        };
+
+        // First, find the search input to get its position
+        const searchInput = document.querySelector('input[placeholder*="Search"], input[type="search"], input[name="search"], input[class*="search"]');
+        let inputRect = null;
+        if (searchInput) {
+          inputRect = searchInput.getBoundingClientRect();
+        }
+
+        // Find any element that might be a dropdown container
+        const dropdownContainers = document.querySelectorAll(
+          '[class*="dropdown"], [class*="autocomplete"], [class*="suggestion"], ' +
+          '[class*="results"], [class*="menu"], [role="listbox"], [role="menu"], ' +
+          'ul:not([style*="display: none"]), .location-results, .search-dropdown'
+        );
+
+        for (const container of dropdownContainers) {
+          if (container.offsetHeight > 0 && container.offsetWidth > 0) {
+            results.allDropdowns.push({
+              tagName: container.tagName,
+              className: container.className,
+              id: container.id,
+              childCount: container.children.length
+            });
+
+            // Look for clickable items inside
+            const items = container.querySelectorAll('li, a, div[role="option"], .option, .item, .result');
+            for (const item of items) {
+              if (item.offsetHeight > 0 && item.textContent.trim()) {
+                results.items.push({
+                  text: item.textContent.trim().substring(0, 80),
+                  tagName: item.tagName,
+                  className: item.className
+                });
+                if (results.clickableItems.length < 5) {
+                  results.clickableItems.push(item);
+                }
+              }
+            }
+          }
+        }
+
+        // CRITICAL: Position-based approach - find ANY element below search that looks like a location
+        // This catches Privy's dropdown which may use non-standard markup
+        if (inputRect) {
+          const allElements = document.querySelectorAll('div, li, span, a, p');
+          for (const el of allElements) {
+            const rect = el.getBoundingClientRect();
+            // Check if element is in the dropdown area (below and near the search input)
+            if (rect.top >= inputRect.bottom - 10 &&
+                rect.top <= inputRect.bottom + 350 &&
+                rect.left >= inputRect.left - 100 &&
+                rect.right <= inputRect.right + 300 &&
+                rect.height > 15 && rect.height < 80 &&
+                rect.width > 50 &&
+                el.offsetHeight > 0) {
+              const text = el.textContent.trim();
+              // Check if it looks like a location (City, ST pattern)
+              if (text && text.match(/,\s*[A-Z]{2}($|\s|\d)/) && text.length < 80 && text.length > 3) {
+                // Skip if it's a child of another location item we already have
+                const isDuplicate = results.positionBasedItems.some(i =>
+                  i.text === text || text.includes(i.text) || i.text.includes(text)
+                );
+                if (!isDuplicate) {
+                  results.positionBasedItems.push({
+                    text: text,
+                    tagName: el.tagName,
+                    className: el.className?.substring?.(0, 50) || '',
+                    top: Math.round(rect.top),
+                    left: Math.round(rect.left),
+                    height: Math.round(rect.height)
+                  });
+                }
+              }
+            }
+          }
+          // Sort by position (top to bottom)
+          results.positionBasedItems.sort((a, b) => a.top - b.top);
+        }
+
+        // Also check for Privy-specific location dropdown
+        const locationItems = document.querySelectorAll('.location-item, .city-item, .state-item, [data-location], [data-city]');
+        for (const item of locationItems) {
+          if (item.offsetHeight > 0) {
+            results.items.push({
+              text: item.textContent.trim().substring(0, 80),
+              tagName: item.tagName,
+              className: item.className,
+              isLocationItem: true
+            });
+          }
+        }
+
+        return results;
+      });
+
+      L.info('Dropdown items found', { items: dropdownInfo.items.slice(0, 5), total: dropdownInfo.items.length });
+      if (dropdownInfo.allDropdowns.length > 0) {
+        L.info('Dropdown containers found', { containers: dropdownInfo.allDropdowns.slice(0, 3) });
+      }
+      // Log position-based items (the most reliable method for Privy)
+      if (dropdownInfo.positionBasedItems.length > 0) {
+        L.info('Position-based location items found', {
+          items: dropdownInfo.positionBasedItems.slice(0, 8),
+          total: dropdownInfo.positionBasedItems.length
+        });
+      }
+
+      let clicked = false;
+
+      // Method 0 (NEW): Use position-based items found by the debug scan
+      // This is the most reliable method for Privy since it finds ANY element that looks like a location
+      if (!clicked && dropdownInfo.positionBasedItems.length > 0) {
+        const cityLower = cityToUse.toLowerCase();
+        const stateLower = stateUpper.toLowerCase();
+        const exactMatch = `${cityLower}, ${stateLower}`;
+
+        // Priority 0: Find EXACT "City, ST" match
+        for (const item of dropdownInfo.positionBasedItems) {
+          const textLower = item.text.toLowerCase();
+          if (textLower === exactMatch || textLower.startsWith(exactMatch + ' ')) {
+            // Click this element using page.evaluate with position
+            const clickResult = await page.evaluate((targetText) => {
+              const allElements = document.querySelectorAll('div, li, span, a, p');
+              for (const el of allElements) {
+                if (el.textContent.trim() === targetText && el.offsetHeight > 0) {
+                  el.click();
+                  return { clicked: true, text: targetText };
+                }
+              }
+              return { clicked: false };
+            }, item.text);
+
+            if (clickResult.clicked) {
+              L.info('Position-based click: EXACT city match', { text: item.text, priority: 0 });
+              clicked = true;
+              break;
+            }
+          }
+        }
+
+        // Priority 1: Find item that STARTS with city name
+        if (!clicked) {
+          for (const item of dropdownInfo.positionBasedItems) {
+            const textLower = item.text.toLowerCase();
+            if (textLower.startsWith(cityLower) && textLower.includes(stateLower)) {
+              const clickResult = await page.evaluate((targetText) => {
+                const allElements = document.querySelectorAll('div, li, span, a, p');
+                for (const el of allElements) {
+                  if (el.textContent.trim() === targetText && el.offsetHeight > 0) {
+                    el.click();
+                    return { clicked: true, text: targetText };
+                  }
+                }
+                return { clicked: false };
+              }, item.text);
+
+              if (clickResult.clicked) {
+                L.info('Position-based click: starts-with-city match', { text: item.text, priority: 1 });
+                clicked = true;
+                break;
+              }
+            }
+          }
+        }
+
+        // Priority 2: Find first item that contains both city and state
+        if (!clicked) {
+          for (const item of dropdownInfo.positionBasedItems) {
+            const textLower = item.text.toLowerCase();
+            if (textLower.includes(cityLower) && textLower.includes(stateLower)) {
+              const clickResult = await page.evaluate((targetText) => {
+                const allElements = document.querySelectorAll('div, li, span, a, p');
+                for (const el of allElements) {
+                  if (el.textContent.trim() === targetText && el.offsetHeight > 0) {
+                    el.click();
+                    return { clicked: true, text: targetText };
+                  }
+                }
+                return { clicked: false };
+              }, item.text);
+
+              if (clickResult.clicked) {
+                L.info('Position-based click: city+state match', { text: item.text, priority: 2 });
+                clicked = true;
+                break;
+              }
+            }
+          }
+        }
+
+        // Priority 3: Click first position-based item as fallback
+        if (!clicked && dropdownInfo.positionBasedItems.length > 0) {
+          const firstItem = dropdownInfo.positionBasedItems[0];
+          const clickResult = await page.evaluate((targetText) => {
+            const allElements = document.querySelectorAll('div, li, span, a, p');
+            for (const el of allElements) {
+              if (el.textContent.trim() === targetText && el.offsetHeight > 0) {
+                el.click();
+                return { clicked: true, text: targetText };
+              }
+            }
+            return { clicked: false };
+          }, firstItem.text);
+
+          if (clickResult.clicked) {
+            L.info('Position-based click: first item fallback', { text: firstItem.text, priority: 3 });
+            clicked = true;
+          }
+        }
+      }
+
+      // Method 1: Try to click on a dropdown item that matches BOTH city AND state
+      // This handles cases where multiple cities have the same name (e.g., Springfield in multiple states)
+      // Only run if position-based method didn't work
+      if (!clicked) {
+        const matchingItem = await page.evaluate((cityName, stateName) => {
+          // Privy uses a simple dropdown that appears below the search input
+          // Find the search input first, then look for dropdown elements near it
+          const searchInput = document.querySelector('input[placeholder*="Search"], input[type="search"], input[name="search"], input[class*="search"]');
+
+          // Strategy: Find ALL visible text elements that could be dropdown items
+          // Privy's dropdown items appear as simple divs or spans with location text
+          const allItems = document.querySelectorAll(
+            // Generic elements that could contain dropdown items
+            'div[class*="dropdown"] > div, div[class*="dropdown"] > span, ' +
+            'div[class*="dropdown"] div[class*="item"], div[class*="dropdown"] div[class*="option"], ' +
+            'ul[class*="dropdown"] li, ul[class*="dropdown"] > div, ' +
+            // Autocomplete containers
+            '.pac-container .pac-item, .pac-item, ' +
+            '[class*="autocomplete"] > div, [class*="autocomplete"] li, ' +
+            '[class*="suggestion"] > div, [class*="suggestion"] li, ' +
+            // Search results
+            '.search-results > div, .search-results li, ' +
+            '[class*="result"] > div, [class*="results"] > div, ' +
+            // Generic list items near search
+            '[role="listbox"] > *, [role="listbox"] [role="option"], ' +
+            '[role="menu"] > *, [role="menu"] [role="menuitem"], ' +
+            // Privy-specific: look for any visible clickable div with location-like text
+            'div[style*="cursor: pointer"], div[style*="cursor:pointer"], ' +
+            // Any div that's a direct child of a positioned container (dropdown pattern)
+            'div[style*="position: absolute"] > div, div[style*="position:absolute"] > div, ' +
+            // Simple selector for any visible div that might be a dropdown item
+            '.location-item, .city-item, .option, .item, .result'
+          );
+
+          const visibleItems = [];
+          for (const item of allItems) {
+            if (item.offsetHeight > 0 && item.textContent.trim()) {
+              const text = item.textContent.trim();
+              // Filter out items that are clearly not location suggestions
+              // (like "Map", "Deals", navigation items, etc.)
+              if (text.length < 100 && !text.match(/^(Map|List|Deals|Filter|Search|Save|Clear|Reset)$/i)) {
+                visibleItems.push({
+                  element: item,
+                  text: text.toLowerCase(),
+                  rawText: text
+                });
+              }
+            }
+          }
+
+          // Also try a position-based approach: find elements below the search input
+          // that contain location-like text (comma-separated city, state)
+          if (searchInput) {
+            const inputRect = searchInput.getBoundingClientRect();
+            // Look for any visible elements in the area below the search input
+            const allDivs = document.querySelectorAll('div, li, span, a');
+            for (const el of allDivs) {
+              const rect = el.getBoundingClientRect();
+              // Check if element is below the search input and within dropdown area
+              if (rect.top >= inputRect.bottom - 5 &&
+                  rect.top <= inputRect.bottom + 300 &&
+                  rect.left >= inputRect.left - 50 &&
+                  rect.left <= inputRect.right + 50 &&
+                  rect.height > 10 && rect.height < 60 &&
+                  el.offsetHeight > 0) {
+                const text = el.textContent.trim();
+                // Check if it looks like a location (contains comma + 2-letter state)
+                if (text && text.match(/,\s*[A-Z]{2}($|\s)/) && text.length < 100) {
+                  // Check if not already in visibleItems
+                  const alreadyExists = visibleItems.some(v => v.rawText === text);
+                  if (!alreadyExists) {
+                    visibleItems.push({
+                      element: el,
+                      text: text.toLowerCase(),
+                      rawText: text,
+                      fromPosition: true
+                    });
+                  }
+                }
+              }
+            }
+          }
+
+          const cityLower = cityName.toLowerCase();
+          const stateLower = stateName.toLowerCase();
+          const exactMatch = `${cityLower}, ${stateLower}`;  // e.g., "charlotte, nc"
+
+          // Priority 0: Find EXACT match "City, ST" - this is the city option, not a street
+          for (const item of visibleItems) {
+            // Check if text is exactly "City, State" or starts with it
+            if (item.text === exactMatch || item.text.startsWith(exactMatch + ' ')) {
+              item.element.click();
+              return { clicked: true, text: item.rawText, matchType: 'exact-city', priority: 0 };
+            }
+          }
+
+          // Priority 1: Find item that STARTS with city name (like "Charlotte, NC")
+          // This avoids matching "NC-115, Charlotte, NC" which starts with a highway number
+          for (const item of visibleItems) {
+            if (item.text.startsWith(cityLower) && item.text.includes(stateLower)) {
+              item.element.click();
+              return { clicked: true, text: item.rawText, matchType: 'starts-with-city', priority: 1 };
+            }
+          }
+
+          // Priority 2: Find item that contains BOTH city AND state but doesn't start with city
+          for (const item of visibleItems) {
+            if (item.text.includes(cityLower) && item.text.includes(stateLower)) {
+              item.element.click();
+              return { clicked: true, text: item.rawText, matchType: 'city+state', priority: 2 };
+            }
+          }
+
+          // Priority 3: Find item that contains city name (might be in wrong state)
+          for (const item of visibleItems) {
+            if (item.text.includes(cityLower)) {
+              item.element.click();
+              return { clicked: true, text: item.rawText, matchType: 'city-only', priority: 3, warning: 'State may not match' };
+            }
+          }
+
+          // Priority 4: Click first visible item as last resort
+          if (visibleItems.length > 0) {
+            visibleItems[0].element.click();
+            return { clicked: true, text: visibleItems[0].rawText, matchType: 'first-item', priority: 4, warning: 'No city match found' };
+          }
+
+          return { clicked: false, itemsFound: visibleItems.length, sampleItems: visibleItems.slice(0, 5).map(i => i.rawText) };
+        }, cityToUse, stateUpper);
+
+        if (matchingItem.clicked) {
+          L.info('Clicked dropdown item', {
+            text: matchingItem.text,
+            matchType: matchingItem.matchType,
+            priority: matchingItem.priority,
+            warning: matchingItem.warning || null
+          });
+          if (matchingItem.warning) {
+            L.warn(`⚠️ Dropdown selection warning: ${matchingItem.warning}. Selected: "${matchingItem.text}"`);
+          }
+          clicked = true;
+        } else {
+          L.info('No dropdown items matched', {
+            itemsFound: matchingItem.itemsFound || 0,
+            sampleItems: matchingItem.sampleItems || []
+          });
+        }
+      }
+
+      // Method 2: Use keyboard navigation (Arrow Down + Enter) as fallback
+      // Try up to 5 items to find one with the correct state
+      if (!clicked) {
+        L.info('No dropdown click, trying keyboard navigation to find correct state...');
+
+        for (let attempt = 0; attempt < 5; attempt++) {
+          await page.keyboard.press('ArrowDown');
+          await new Promise(r => setTimeout(r, 300));
+
+          // Check what's highlighted/selected
+          const selectedText = await page.evaluate(() => {
+            // Try to get the currently highlighted/focused dropdown item
+            const focused = document.querySelector('[class*="dropdown"] li:focus, [class*="dropdown"] li.active, ' +
+              '[class*="dropdown"] li.selected, [class*="dropdown"] li.highlighted, ' +
+              '[aria-selected="true"], .active, .selected, .highlighted');
+            return focused ? focused.textContent.trim() : null;
+          });
+
+          if (selectedText) {
+            L.info(`Keyboard nav item ${attempt + 1}: "${selectedText}"`);
+
+            // Check if this item contains our state
+            if (selectedText.toLowerCase().includes(stateUpper.toLowerCase())) {
+              await page.keyboard.press('Enter');
+              L.info(`Selected item with correct state: "${selectedText}"`);
+              clicked = true;
+              break;
+            }
+          }
+        }
+
+        // If no match found after 5 attempts, just select current item
+        if (!clicked) {
+          await page.keyboard.press('Enter');
+          L.warn('⚠️ Could not find item with correct state, selected current item');
+          clicked = true;
+        }
+      }
+
+      // Wait for search results to load
+      L.info('Waiting 10 seconds for city search results...');
+      await new Promise(r => setTimeout(r, 10000));
+
+    } else {
+      L.warn('Could not find search input, falling back to URL navigation...');
+      // Fallback to URL navigation
+      const cityUrl = `https://app.privy.pro/dashboard?update_history=true&id=&name=&saved_search=&search_text=${encodeURIComponent(searchQuery)}&location_type=city&include_sold=false&include_active=true&hoa=no&spread=50&date_range=all`;
+      await page.goto(cityUrl, { waitUntil: 'networkidle0', timeout: 60000 });
+      await new Promise(r => setTimeout(r, 10000));
+    }
+
+    // Verify final URL has correct parameters
+    const finalUrl = page.url();
+    L.info(`Final URL: ${finalUrl.substring(0, 200)}...`);
+
+    // Build cityUrl for reference (used in forceCorrectUrl)
+    const cityUrl = `https://app.privy.pro/dashboard?update_history=true&id=&name=&saved_search=&search_text=${encodeURIComponent(searchQuery)}&location_type=city&include_sold=false&include_active=true&include_pending=false&include_under_contract=false&include_attached=false&include_detached=true&hoa=no&spread=50&spread_type=umv&date_range=all`;
+
+    // Check if saved search got applied again
+    if (finalUrl.includes('id=-') || finalUrl.includes('include_sold=true')) {
+      L.error('CRITICAL: Saved search still being applied!');
+      L.info('Attempting to force correct filters...');
+
+      // FIXED: Use page.goto() instead of window.location.href
+      // window.location.href triggers Privy's SPA router which reapplies saved search
+      const fixedCityUrl = new URL(finalUrl);
+      fixedCityUrl.searchParams.set('id', '');
+      fixedCityUrl.searchParams.set('name', '');
+      fixedCityUrl.searchParams.set('saved_search', '');
+      fixedCityUrl.searchParams.set('search_text', cityToUse + ', ' + stateUpper);
+      fixedCityUrl.searchParams.set('include_sold', 'false');
+      fixedCityUrl.searchParams.set('include_active', 'true');
+      fixedCityUrl.searchParams.set('include_pending', 'false');
+      fixedCityUrl.searchParams.set('include_under_contract', 'false');
+      fixedCityUrl.searchParams.set('include_attached', 'false');
+      fixedCityUrl.searchParams.set('include_detached', 'true');
+      fixedCityUrl.searchParams.set('hoa', 'no');
+      fixedCityUrl.searchParams.set('spread', '50');
+      fixedCityUrl.searchParams.set('date_range', 'all');
+
+      await page.goto(fixedCityUrl.toString(), { waitUntil: 'networkidle0', timeout: 60000 });
+      await new Promise(r => setTimeout(r, 5000));
+    }
+
+    // Close any modals/banners that appeared - BUT SKIP THIS as it causes Privy to reload saved search
+    // await closeAllModals(page);
+
+    // CRITICAL: After any action, force the URL back to correct values
+    // Privy's frontend keeps trying to apply the saved search
+    const forceCorrectUrl = async () => {
+      const currentUrl = page.url();
+      if (currentUrl.includes('id=-') || currentUrl.includes('include_sold=true')) {
+        L.warn('URL was modified by Privy, forcing correct URL...');
+        await page.goto(cityUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.evaluate((url) => window.history.replaceState({}, '', url), cityUrl);
+      }
+    };
+
+    await forceCorrectUrl();
 
     // ========== STEP 2: CLOSE ANY OPEN MODALS/PANELS (including agent profile modals) ==========
     try {
@@ -929,8 +1945,12 @@ router.get('/privy', requireAuth, async (req, res) => {
 
     // ========== STEP 3: VERIFY URL AND LOG CURRENT LOCATION ==========
     // Since we navigated via URL, we don't need search box - just verify we're on the right page
-    const currentUrl = page.url();
+    let currentUrl = page.url();
     L.info(`Current URL after navigation: ${currentUrl.substring(0, 120)}...`);
+
+    // CRITICAL: Force correct URL if Privy changed it
+    await forceCorrectUrl();
+    currentUrl = page.url();
 
     // Check if the URL contains the city search_text
     if (currentUrl.includes(encodeURIComponent(cityToUse)) || currentUrl.includes(cityToUse.replace(/ /g, '+'))) {
@@ -939,7 +1959,9 @@ router.get('/privy', requireAuth, async (req, res) => {
       L.warn(`⚠️ URL may not contain city ${cityToUse} - checking search_text param...`);
     }
 
-    // ========== STEP 4: CLOSE ANY MODALS THAT OPENED (agent profiles, etc.) ==========
+    // ========== STEP 4: CLOSE ANY MODALS THAT OPENED (agent profiles, etc.) - SKIP to avoid triggering saved search ==========
+    // Commenting out modal closing as it triggers Privy to reload saved search
+    /*
     try {
       await page.evaluate(() => {
         const modalSelectors = [
@@ -983,8 +2005,12 @@ router.get('/privy', requireAuth, async (req, res) => {
       await page.keyboard.press('Escape');
       await new Promise(r => setTimeout(r, 300));
     } catch {}
+    */
 
-    // ========== STEP 5: WAIT FOR MAP DATA ==========
+    // Force correct URL again after modal operations
+    await forceCorrectUrl();
+
+    // ========== STEP 5: WAIT FOR MAP DATA AND GET TOTAL COUNT ==========
     try {
       const currentUrl = page.url();
       L.info(`Current URL: ${currentUrl.substring(0, 100)}...`);
@@ -999,7 +2025,71 @@ router.get('/privy', requireAuth, async (req, res) => {
         await new Promise(r => setTimeout(r, 1500));
       }
 
-      // Wait for clusters to appear after map loads
+      // Get the total property count from the "X Properties Found" indicator
+      const propertyCount = await page.evaluate(() => {
+        const countSelectors = [
+          '.properties-found',
+          '[data-testid="properties-found"]',
+          '[data-test="properties-found"]',
+          '.property-count',
+          '[data-testid="properties-count"]'
+        ];
+        for (const sel of countSelectors) {
+          const el = document.querySelector(sel);
+          if (el) {
+            const text = el.textContent || '';
+            // Extract number from text like "123 Properties Found"
+            const match = text.match(/(\d[\d,]*)/);
+            if (match) {
+              return parseInt(match[1].replace(/,/g, ''), 10);
+            }
+          }
+        }
+        return 0;
+      });
+      L.info(`Total properties in city: ${propertyCount}`);
+
+      // Emit status event with property count
+      scrapeEvents.emit('status', {
+        state: stateUpper,
+        event: 'city_count',
+        city: cityToUse,
+        totalInCity: propertyCount
+      });
+
+      // ========== STEP 5.5: CLICK ON PROPERTIES COUNT TO OPEN LIST VIEW ==========
+      // This opens a scrollable list of all properties instead of just clusters
+      L.info('Clicking on Properties Found to open list view...');
+      const listOpened = await page.evaluate(() => {
+        const countSelectors = [
+          '.properties-found',
+          '[data-testid="properties-found"]',
+          '[data-test="properties-found"]'
+        ];
+        for (const sel of countSelectors) {
+          const el = document.querySelector(sel);
+          if (el && el.offsetWidth > 0) {
+            el.click();
+            return true;
+          }
+        }
+        return false;
+      });
+
+      if (listOpened) {
+        L.info('Clicked on properties count, waiting for list to open...');
+        await new Promise(r => setTimeout(r, 2000));
+
+        // Wait for the list/grid view container to appear
+        try {
+          await page.waitForSelector('.view-container, .grid-view-container, [data-testid="property-list"]', { timeout: 5000 });
+          L.info('✅ List view opened');
+        } catch {
+          L.info('List view did not open, falling back to cluster method');
+        }
+      }
+
+      // Wait for clusters to appear (if still on map view)
       L.info('Waiting for clusters to appear...');
       try {
         await page.waitForSelector('.cluster.cluster-deal, .cluster', { timeout: 5000 });
@@ -1014,14 +2104,70 @@ router.get('/privy', requireAuth, async (req, res) => {
       await new Promise(r => setTimeout(r, 1500));
     }
 
-    // Close any agent profile modals that might be blocking the view before clicking clusters
-    const modalsClosedBeforeCluster = await closeAllModals(page);
-    if (modalsClosedBeforeCluster > 0) {
-      L.info(`Closed ${modalsClosedBeforeCluster} modals before cluster click`);
+    // DISABLED: closeAllModals was triggering "Below Market" saved search
+    // Use Escape key instead to close any open modals safely
+    try {
+      await page.keyboard.press('Escape');
       await new Promise(r => setTimeout(r, 300));
-    }
+    } catch {}
 
-    // Click on a cluster to open the property list
+    // ========== STEP 6: SCROLL TO LOAD ALL PROPERTIES ==========
+    // If list view is open, scroll to load ALL properties (virtual list loads on scroll)
+    const scrollAndLoadAll = async () => {
+      L.info('Scrolling to load all properties...');
+      let lastCount = 0;
+      let sameCountIterations = 0;
+      const maxIterations = 50; // Safety limit
+
+      for (let i = 0; i < maxIterations; i++) {
+        // Count current visible property cards
+        const currentCount = await page.evaluate(() => {
+          const cards = document.querySelectorAll('.property-module .content, .property-card, [data-testid="property-card"]');
+          return cards.length;
+        });
+
+        if (currentCount === lastCount) {
+          sameCountIterations++;
+          if (sameCountIterations >= 3) {
+            L.info(`Loaded all ${currentCount} properties (no new ones after scrolling)`);
+            break;
+          }
+        } else {
+          sameCountIterations = 0;
+          L.info(`Loaded ${currentCount} properties so far...`);
+        }
+        lastCount = currentCount;
+
+        // Scroll down within the property list container
+        await page.evaluate(() => {
+          // Try to find the scrollable container
+          const containers = [
+            document.querySelector('.view-container'),
+            document.querySelector('.grid-view-container'),
+            document.querySelector('[data-testid="property-list"]'),
+            document.querySelector('.property-list'),
+            document.querySelector('.properties-list'),
+            document.body
+          ];
+
+          for (const container of containers) {
+            if (container && container.scrollHeight > container.clientHeight) {
+              container.scrollTop += 500;
+              return;
+            }
+          }
+          // Fallback: scroll the window
+          window.scrollBy(0, 500);
+        });
+
+        await new Promise(r => setTimeout(r, 500));
+      }
+    };
+
+    // Try to load all properties by scrolling
+    await scrollAndLoadAll();
+
+    // Click on a cluster to open the property list (fallback if list view didn't work)
     // Prefer smaller clusters (< 500) to avoid large cluster loading issues that destroy execution context
     const clusterClicked = await page.evaluate(() => {
       const clusters = document.querySelectorAll('.cluster.cluster-deal, .cluster');
@@ -1114,8 +2260,12 @@ router.get('/privy', requireAuth, async (req, res) => {
       continue;
     }
 
-    // Close any agent modals that might be blocking extraction
-    await closeAllModals(page);
+    // DISABLED: closeAllModals was triggering "Below Market" saved search
+    // Use Escape key instead to close any open modals safely
+    try {
+      await page.keyboard.press('Escape');
+      await new Promise(r => setTimeout(r, 200));
+    } catch {}
 
     // Extract addresses AND agent details in ONE PASS from property cards (limited to what we need)
     // Uses same approach as v1.js - extract agent from mailto/tel links on cards
@@ -1507,14 +2657,26 @@ router.get('/privy', requireAuth, async (req, res) => {
       }
 
       seenAddressKeys.add(addrKey);
-      globalAddresses.push({
+      const newAddress = {
         ...addr,
         city: cityToUse,
         state: extractedState || stateUpper, // Use extracted state, fallback to requested
         source: 'privy',
         scrapedAt: new Date().toISOString()
-      });
+      };
+      globalAddresses.push(newAddress);
       validCount++;
+
+      // Emit real-time event for SSE clients
+      scrapeEvents.emit('address', {
+        state: stateUpper,
+        city: cityToUse,
+        address: newAddress,
+        progress: {
+          current: globalAddresses.length,
+          limit: limitNum
+        }
+      });
     }
 
     if (rejectedCount > 0) {
@@ -1548,6 +2710,14 @@ router.get('/privy', requireAuth, async (req, res) => {
     L.info(`\n========== SCRAPING COMPLETE ==========`);
     L.info(`Total addresses scraped: ${globalAddresses.length}, returning: ${finalAddresses.length} (limit: ${limitNum})`);
     L.info(`Cities scraped: ${citiesScraped.join(', ')}`);
+
+    // Emit completion event for SSE clients
+    scrapeEvents.emit('complete', {
+      state: stateUpper,
+      totalAddresses: finalAddresses.length,
+      citiesScraped: citiesScraped,
+      limit: limitNum
+    });
 
     // Calculate agent enrichment stats from in-loop enrichment
     const withNameCount = finalAddresses.filter(p => p.agentName).length;
@@ -1705,6 +2875,14 @@ router.get('/privy', requireAuth, async (req, res) => {
       lastError = error;
       L.error('Live Privy scrape failed', { error: error.message, attempt: attempt });
 
+      // Emit error event for SSE clients
+      scrapeEvents.emit('error', {
+        state: stateUpper,
+        error: error.message,
+        attempt: attempt,
+        maxRetries: MAX_SCRAPE_RETRIES
+      });
+
       // Check if error is recoverable
       if (isRecoverableError(error.message)) {
         L.info(`Recoverable error detected, resetting bot for retry`, {
@@ -1745,7 +2923,10 @@ router.get('/privy', requireAuth, async (req, res) => {
       retriesExhausted: true
     });
   }
-});
+}
+
+// Main authenticated endpoint
+router.get('/privy', requireAuth, privyHandler);
 
 /**
  * GET /api/live-scrape/redfin

@@ -14,13 +14,19 @@ function getServerUrl() {
 // Lock to prevent concurrent auto-fetch operations
 let isAutoFetchRunning = false;
 let currentFetchStatus = null;
+let shouldStopLoop = false; // Flag to stop continuous loop
+let loopStats = null; // Track stats across loops
 
-// Helper: Fetch from Privy API with pagination
+// Helper: Fetch from Privy API using state-level mode (cluster approach)
+// This uses the same approach as test-privy-fetch.js which works reliably
 async function fetchFromPrivy(state, limit, token, page = 1) {
   try {
-    // Fetch more than needed to account for duplicates, use page for pagination
-    const fetchLimit = Math.min(limit * 3, 50); // Fetch up to 3x to find new ones
-    const url = `${getServerUrl()}/api/live-scrape/privy?state=${state}&limit=${fetchLimit}&page=${page}`;
+    // Use state-level mode for reliable scraping (same as privy fetcher)
+    // Note: page parameter is ignored in state mode since it scrapes by clusters
+    const fetchLimit = Math.min(limit * 2, 100); // Fetch more to account for duplicates
+    const url = `${getServerUrl()}/api/live-scrape/privy?state=${state}&limit=${fetchLimit}&mode=state`;
+    L.info(`Fetching Privy (state mode) for ${state}`, { limit: fetchLimit });
+
     const response = await fetch(url, {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -34,9 +40,10 @@ async function fetchFromPrivy(state, limit, token, page = 1) {
         fullAddress: addr.fullAddress || '',
         address: addr.fullAddress?.split(',')[0]?.trim() || '',
         price: addr.price ? Number(String(addr.price).replace(/[^0-9.-]/g, '')) : null,
+        city: addr.city || null,
         state: addr.state || state,
         source: 'privy',
-        stats: addr.stats || [],
+        stats: addr.quickStats || addr.stats || [],
       }));
     }
     return [];
@@ -389,8 +396,171 @@ router.get('/status', async (req, res) => {
   res.json({
     ok: true,
     isRunning: isAutoFetchRunning,
-    currentStatus: currentFetchStatus
+    currentStatus: currentFetchStatus,
+    loopStats: loopStats
   });
 });
+
+// POST /api/auto-fetch/stop - Stop the continuous loop
+router.post('/stop', async (req, res) => {
+  if (!isAutoFetchRunning) {
+    return res.json({ ok: true, message: 'No auto-fetch running' });
+  }
+  shouldStopLoop = true;
+  currentFetchStatus = 'Stopping after current batch...';
+  L.info('Stop requested for auto-fetch loop');
+  res.json({ ok: true, message: 'Stop signal sent. Will stop after current batch completes.' });
+});
+
+// POST /api/auto-fetch/continuous - Run continuous loop until stopped
+router.post('/continuous', async (req, res) => {
+  if (isAutoFetchRunning) {
+    return res.status(429).json({
+      ok: false,
+      error: 'Auto-fetch already in progress',
+      status: currentFetchStatus,
+      loopStats: loopStats
+    });
+  }
+
+  const { states, targetPerSource = 500, batchSize = 20, delayBetweenBatches = 5000 } = req.body;
+  const token = req.headers.authorization?.replace('Bearer ', '') || '';
+
+  if (!Array.isArray(states) || states.length === 0) {
+    return res.status(400).json({ ok: false, error: 'states array is required' });
+  }
+
+  // Initialize
+  isAutoFetchRunning = true;
+  shouldStopLoop = false;
+  loopStats = {
+    startedAt: new Date().toISOString(),
+    targetPerSource,
+    states,
+    totalFetched: { privy: 0, redfin: 0 },
+    totalSaved: 0,
+    totalDeals: 0,
+    loopCount: 0,
+    currentState: null,
+    errors: []
+  };
+
+  L.info('Starting continuous auto-fetch', { states, targetPerSource, batchSize });
+
+  // Send immediate response - loop runs in background
+  res.json({
+    ok: true,
+    message: `Started continuous fetch for ${states.length} states. Target: ${targetPerSource} per source per state.`,
+    checkStatus: 'GET /api/auto-fetch/status',
+    stopEndpoint: 'POST /api/auto-fetch/stop'
+  });
+
+  // Run the continuous loop in background
+  runContinuousLoop(states, targetPerSource, batchSize, delayBetweenBatches, token).catch(err => {
+    L.error('Continuous loop error', { error: err?.message });
+    loopStats.errors.push({ time: new Date().toISOString(), error: err?.message });
+    isAutoFetchRunning = false;
+    currentFetchStatus = null;
+  });
+});
+
+// Background continuous loop function
+async function runContinuousLoop(states, targetPerSource, batchSize, delayBetweenBatches, token) {
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  try {
+    while (!shouldStopLoop) {
+      loopStats.loopCount++;
+      L.info(`=== Starting loop #${loopStats.loopCount} ===`);
+
+      for (const state of states) {
+        if (shouldStopLoop) break;
+
+        loopStats.currentState = state;
+        let stateFetchedPrivy = 0;
+        let stateFetchedRedfin = 0;
+
+        // ========== REDFIN: Fetch in batches until target ==========
+        while (stateFetchedRedfin < targetPerSource && !shouldStopLoop) {
+          currentFetchStatus = `Loop #${loopStats.loopCount} | ${state} Redfin: ${stateFetchedRedfin}/${targetPerSource}`;
+
+          const redfinAddresses = await fetchFromRedfin(state, batchSize, token, 1);
+          if (redfinAddresses.length === 0) {
+            L.info(`${state} Redfin: No more addresses available`);
+            break;
+          }
+
+          const { newAddresses } = await filterNewAddresses(redfinAddresses);
+          if (newAddresses.length === 0) {
+            L.info(`${state} Redfin: All addresses already exist, waiting before retry...`);
+            await sleep(delayBetweenBatches);
+            continue;
+          }
+
+          // Fetch BofA AMV and save
+          currentFetchStatus = `Loop #${loopStats.loopCount} | ${state} Redfin: Getting AMV for ${newAddresses.length} addresses...`;
+          const withAmv = await fetchBofaAmv(newAddresses, token);
+          const saveResults = await saveDealsToDb(withAmv);
+
+          stateFetchedRedfin += newAddresses.length;
+          loopStats.totalFetched.redfin += newAddresses.length;
+          loopStats.totalSaved += saveResults.saved;
+          loopStats.totalDeals += saveResults.dealsCount;
+
+          L.info(`${state} Redfin batch: +${newAddresses.length} (total: ${stateFetchedRedfin}/${targetPerSource})`);
+          await sleep(delayBetweenBatches);
+        }
+
+        // ========== PRIVY: Fetch in batches until target ==========
+        while (stateFetchedPrivy < targetPerSource && !shouldStopLoop) {
+          currentFetchStatus = `Loop #${loopStats.loopCount} | ${state} Privy: ${stateFetchedPrivy}/${targetPerSource}`;
+
+          const privyAddresses = await fetchFromPrivy(state, batchSize, token, 1);
+          if (privyAddresses.length === 0) {
+            L.info(`${state} Privy: No more addresses available`);
+            break;
+          }
+
+          const { newAddresses } = await filterNewAddresses(privyAddresses);
+          if (newAddresses.length === 0) {
+            L.info(`${state} Privy: All addresses already exist, waiting before retry...`);
+            await sleep(delayBetweenBatches);
+            continue;
+          }
+
+          // Fetch BofA AMV and save
+          currentFetchStatus = `Loop #${loopStats.loopCount} | ${state} Privy: Getting AMV for ${newAddresses.length} addresses...`;
+          const withAmv = await fetchBofaAmv(newAddresses, token);
+          const saveResults = await saveDealsToDb(withAmv);
+
+          stateFetchedPrivy += newAddresses.length;
+          loopStats.totalFetched.privy += newAddresses.length;
+          loopStats.totalSaved += saveResults.saved;
+          loopStats.totalDeals += saveResults.dealsCount;
+
+          L.info(`${state} Privy batch: +${newAddresses.length} (total: ${stateFetchedPrivy}/${targetPerSource})`);
+          await sleep(delayBetweenBatches);
+        }
+
+        L.info(`${state} complete: Redfin=${stateFetchedRedfin}, Privy=${stateFetchedPrivy}`);
+      }
+
+      if (!shouldStopLoop) {
+        currentFetchStatus = `Loop #${loopStats.loopCount} complete. Total: ${loopStats.totalFetched.redfin + loopStats.totalFetched.privy} addresses. Starting next loop...`;
+        L.info(`Loop #${loopStats.loopCount} complete`, loopStats);
+        await sleep(10000); // Wait 10s between full loops
+      }
+    }
+
+    // Loop ended
+    loopStats.endedAt = new Date().toISOString();
+    currentFetchStatus = `Stopped. Total fetched: Redfin=${loopStats.totalFetched.redfin}, Privy=${loopStats.totalFetched.privy}`;
+    L.info('Continuous loop stopped', loopStats);
+
+  } finally {
+    isAutoFetchRunning = false;
+    shouldStopLoop = false;
+  }
+}
 
 export default router;
