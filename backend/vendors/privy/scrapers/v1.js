@@ -72,9 +72,14 @@ function withQuickTag(url, paramKey) {
 
 // Build Privy URL for a city - SAME EXACT parameters as working live-scrape
 // This URL includes ALL filters so we can navigate directly without using filter modal
+// CRITICAL: id=&name=&saved_search= MUST be first to clear any saved search like "Below Market"
 function buildPrivyUrl(city, stateCode, cacheBust = true) {
   const base = 'https://app.privy.pro/dashboard';
   const params = new URLSearchParams({
+    // CRITICAL: Clear saved search first to prevent "Below Market" from being applied
+    id: '',
+    name: '',
+    saved_search: '',
     update_history: 'true',
     search_text: `${city}, ${stateCode}`,
     location_type: 'city',
@@ -1046,15 +1051,78 @@ const scrapePropertiesV1 = async (page) => {
           }).catch(() => false);
 
           if (hasNoImagery) {
-            L.warn('Detected "no imagery" broken map - closing tab and creating new one...');
-            const { initSharedBrowser } = await import('../../../utils/browser.js');
-            const browser = await initSharedBrowser();
-            try { await page.close(); } catch {}
-            const newPage = await browser.newPage();
-            newPage.__df_name = 'privy';
-            Object.assign(page, newPage);
-            await page.goto('https://app.privy.pro/dashboard', { waitUntil: 'domcontentloaded', timeout: 60000 });
-            await sleep(10000);
+            // Open new tab first, verify it works, then close the old broken tab
+            L.warn('Detected "no imagery" broken map - opening new tab before closing broken one...');
+            try {
+              const { initSharedBrowser, ensureVendorPageSetup } = await import('../../../utils/browser.js');
+              const browser = await initSharedBrowser();
+
+              // Create new page FIRST (before closing old one)
+              const newPage = await browser.newPage();
+              newPage.__df_name = 'privy';
+
+              // Set up the new page
+              await ensureVendorPageSetup(newPage, {
+                randomizeUA: true,
+                timeoutMs: 180000,
+                jitterViewport: true,
+                baseViewport: { width: 1366, height: 900 },
+              });
+              try { await newPage.setViewport({ width: 1947, height: 1029 }); } catch {}
+
+              // Navigate new page to clean dashboard
+              L.info('New tab created - navigating to dashboard...');
+              await newPage.goto('https://app.privy.pro/dashboard?id=&name=&saved_search=&include_sold=false&include_active=true&include_pending=false&include_under_contract=false', { waitUntil: 'domcontentloaded', timeout: 60000 });
+              await sleep(5000);
+
+              // Verify new page is working by checking we can evaluate something
+              const newPageWorks = await newPage.evaluate(() => document.readyState).catch(() => null);
+              if (newPageWorks) {
+                L.info('New tab working - closing old broken tab...');
+                // NOW close the old broken page
+                const oldPage = page;
+                try { await oldPage.close(); } catch {}
+
+                // Replace page reference - copy all relevant properties
+                // This is a workaround since we can't reassign the parameter
+                page._client = newPage._client;
+                page._target = newPage._target;
+                page._keyboard = newPage._keyboard;
+                page._mouse = newPage._mouse;
+                page._touchscreen = newPage._touchscreen;
+                page._frameManager = newPage._frameManager;
+                page._emulationManager = newPage._emulationManager;
+                page._tracing = newPage._tracing;
+                page._coverage = newPage._coverage;
+                page.mainFrame = newPage.mainFrame.bind(newPage);
+                page.$ = newPage.$.bind(newPage);
+                page.$$ = newPage.$$.bind(newPage);
+                page.$eval = newPage.$eval.bind(newPage);
+                page.$$eval = newPage.$$eval.bind(newPage);
+                page.evaluate = newPage.evaluate.bind(newPage);
+                page.goto = newPage.goto.bind(newPage);
+                page.waitForSelector = newPage.waitForSelector.bind(newPage);
+                page.waitForFunction = newPage.waitForFunction.bind(newPage);
+                page.click = newPage.click.bind(newPage);
+                page.type = newPage.type.bind(newPage);
+                page.screenshot = newPage.screenshot.bind(newPage);
+                page.setViewport = newPage.setViewport.bind(newPage);
+                page.url = newPage.url.bind(newPage);
+                page.content = newPage.content.bind(newPage);
+                page.close = newPage.close.bind(newPage);
+                page.keyboard = newPage.keyboard;
+                page.mouse = newPage.mouse;
+
+                L.success('Successfully switched to new working tab');
+              } else {
+                L.warn('New tab not responding, closing it and skipping city');
+                try { await newPage.close(); } catch {}
+                continue;
+              }
+            } catch (recoveryErr) {
+              L.warn('Failed to recover from broken map, skipping city', { error: recoveryErr?.message });
+              continue; // Skip to next city
+            }
           }
 
           // Apply filters first (this opens filter modal, sets values, clicks apply)
