@@ -495,7 +495,7 @@ const SELECTED_JOBS = parseSelectedJobs(__REQ.raw);
 // --- Batch-based scheduler: Scrape addresses, then fetch AMV for all ---
 // This prevents building up a huge backlog of addresses without AMV
 const RUN_INTERVAL_MS = Number(process.env.RUN_INTERVAL_MS || 1 * 60 * 1000); // 1 minute between cycles
-const SCRAPE_BATCH_LIMIT = Number(process.env.SCRAPE_BATCH_LIMIT || 100); // Max addresses to scrape before AMV (100 for testing)
+const SCRAPE_BATCH_LIMIT = Number(process.env.SCRAPE_BATCH_LIMIT || 500); // Max addresses to scrape before AMV (500 per source)
 const DISABLE_SCHEDULER =
   String(process.env.DISABLE_SCHEDULER || '').toLowerCase() === '1' ||
   RUN_INTERVAL_MS <= 0;
@@ -619,7 +619,7 @@ async function bootstrapScheduler() {
 
 // Break period between phases (2 minutes = 120000ms)
 const BREAK_MS = Number(process.env.BREAK_MS || 120000);
-const SCRAPER_LIMIT = Number(process.env.SCRAPER_LIMIT || 100);
+const SCRAPER_LIMIT = Number(process.env.SCRAPER_LIMIT || 500);
 
 async function schedulerTick() {
   if (!schedulerEnabled) return;
@@ -664,15 +664,22 @@ async function schedulerTick() {
   switch (schedulerPhase) {
     // ===== PRIVY CYCLE =====
     case 'privy': {
-      log.info('Scheduler: Phase 1 - PRIVY scraping');
+      log.info('Scheduler: Phase 1 - PRIVY scraping (target: 500 addresses)');
       try {
         await runAutomation(new Set(['privy']));
       } catch (e) {
         log.error('Scheduler: Privy threw', { error: e?.message || String(e) });
       }
 
+      schedulerPhase = 'break_before_bofa_privy';
+      log.info(`Scheduler: Privy done. Taking ${BREAK_MS / 1000}s break before BofA...`);
+      scheduleNextRun(BREAK_MS);
+      return;
+    }
+
+    case 'break_before_bofa_privy': {
+      log.info('Scheduler: Break after Privy complete. Starting BofA for Privy addresses...');
       schedulerPhase = 'bofa_after_privy';
-      log.info('Scheduler: Privy done. Starting BofA for Privy addresses...');
       scheduleNextRun(0);
       return;
     }
@@ -719,15 +726,22 @@ async function schedulerTick() {
 
     // ===== REDFIN CYCLE =====
     case 'redfin': {
-      log.info('Scheduler: Phase 2 - REDFIN scraping');
+      log.info('Scheduler: Phase 2 - REDFIN scraping (target: 500 addresses)');
       try {
         await runAutomation(new Set(['redfin']));
       } catch (e) {
         log.error('Scheduler: Redfin threw', { error: e?.message || String(e) });
       }
 
+      schedulerPhase = 'break_before_bofa_redfin';
+      log.info(`Scheduler: Redfin done. Taking ${BREAK_MS / 1000}s break before BofA...`);
+      scheduleNextRun(BREAK_MS);
+      return;
+    }
+
+    case 'break_before_bofa_redfin': {
+      log.info('Scheduler: Break after Redfin complete. Starting BofA for Redfin addresses...');
       schedulerPhase = 'bofa_after_redfin';
-      log.info('Scheduler: Redfin done. Starting BofA for Redfin addresses...');
       scheduleNextRun(0);
       return;
     }
