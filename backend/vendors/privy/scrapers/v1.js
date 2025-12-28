@@ -1083,35 +1083,10 @@ const scrapePropertiesV1 = async (page) => {
                 const oldPage = page;
                 try { await oldPage.close(); } catch {}
 
-                // Replace page reference - copy all relevant properties
-                // This is a workaround since we can't reassign the parameter
-                page._client = newPage._client;
-                page._target = newPage._target;
-                page._keyboard = newPage._keyboard;
-                page._mouse = newPage._mouse;
-                page._touchscreen = newPage._touchscreen;
-                page._frameManager = newPage._frameManager;
-                page._emulationManager = newPage._emulationManager;
-                page._tracing = newPage._tracing;
-                page._coverage = newPage._coverage;
-                page.mainFrame = newPage.mainFrame.bind(newPage);
-                page.$ = newPage.$.bind(newPage);
-                page.$$ = newPage.$$.bind(newPage);
-                page.$eval = newPage.$eval.bind(newPage);
-                page.$$eval = newPage.$$eval.bind(newPage);
-                page.evaluate = newPage.evaluate.bind(newPage);
-                page.goto = newPage.goto.bind(newPage);
-                page.waitForSelector = newPage.waitForSelector.bind(newPage);
-                page.waitForFunction = newPage.waitForFunction.bind(newPage);
-                page.click = newPage.click.bind(newPage);
-                page.type = newPage.type.bind(newPage);
-                page.screenshot = newPage.screenshot.bind(newPage);
-                page.setViewport = newPage.setViewport.bind(newPage);
-                page.url = newPage.url.bind(newPage);
-                page.content = newPage.content.bind(newPage);
-                page.close = newPage.close.bind(newPage);
-                page.keyboard = newPage.keyboard;
-                page.mouse = newPage.mouse;
+                // IMPORTANT: We can't modify the original page object's keyboard/mouse getters
+                // Instead, reassign the page variable to point to newPage directly
+                // This works because page is a local variable in the loop
+                page = newPage;
 
                 L.success('Successfully switched to new working tab');
               } else {
@@ -1652,40 +1627,12 @@ await page.evaluate(() => {
 
               const pageWorks = await newPage.evaluate(() => document.readyState).catch(() => null);
               if (pageWorks) {
-                L.success('✅ Page recovery successful - rebinding page object');
+                L.success('✅ Page recovery successful - replacing page reference');
                 // Close old page if possible
                 try { await page.close(); } catch {}
 
-                // Rebind all methods to new page
-                page.evaluate = newPage.evaluate.bind(newPage);
-                page.goto = newPage.goto.bind(newPage);
-                page.$ = newPage.$.bind(newPage);
-                page.$$ = newPage.$$.bind(newPage);
-                page.$eval = newPage.$eval.bind(newPage);
-                page.$$eval = newPage.$$eval.bind(newPage);
-                page.waitForSelector = newPage.waitForSelector.bind(newPage);
-                page.waitForFunction = newPage.waitForFunction.bind(newPage);
-                page.waitForNavigation = newPage.waitForNavigation.bind(newPage);
-                page.click = newPage.click.bind(newPage);
-                page.type = newPage.type.bind(newPage);
-                page.keyboard = newPage.keyboard;
-                page.mouse = newPage.mouse;
-                page.url = newPage.url.bind(newPage);
-                page.content = newPage.content.bind(newPage);
-                page.screenshot = newPage.screenshot.bind(newPage);
-                page.setViewport = newPage.setViewport.bind(newPage);
-                page.setCookie = newPage.setCookie.bind(newPage);
-                page.cookies = newPage.cookies.bind(newPage);
-                page.reload = newPage.reload.bind(newPage);
-                page.goBack = newPage.goBack.bind(newPage);
-                page.goForward = newPage.goForward.bind(newPage);
-                page.bringToFront = newPage.bringToFront.bind(newPage);
-                page.browser = newPage.browser.bind(newPage);
-                page.close = newPage.close.bind(newPage);
-                page.isClosed = newPage.isClosed?.bind(newPage);
-                page.setDefaultTimeout = newPage.setDefaultTimeout?.bind(newPage);
-                page.setDefaultNavigationTimeout = newPage.setDefaultNavigationTimeout?.bind(newPage);
-                page.__df_name = newPage.__df_name;
+                // Simply reassign page to newPage - this works within function scope
+                page = newPage;
 
                 // Re-login to Privy
                 await loginToPrivy(page);
