@@ -213,12 +213,18 @@ export async function initSharedBrowser() {
     // 3) We hold the lock: perform the launch.
     fs.mkdirSync(PROFILE_DIR, { recursive: true });
     const headless = String(process.env.PRIVY_HEADLESS || 'true').toLowerCase() !== 'false' ? 'new' : false;
+    // Use fresh profile (no userDataDir) to avoid Privy's saved search being applied
+    // The saved search "Below Market" is stored in Privy's backend per user, but using
+    // a fresh profile ensures we don't have any cached state that triggers it
+    const useFreshProfile = process.env.PRIVY_FRESH_PROFILE === 'true';
+
     const browser = await puppeteer.launch({
       // Only set executablePath if we have a valid Chrome path
       ...(CHROME_PATH ? { executablePath: CHROME_PATH } : {}),
       protocolTimeout: PROTOCOL_TIMEOUT,
       headless,
-      userDataDir: PROFILE_DIR,
+      // Use persistent profile unless PRIVY_FRESH_PROFILE=true
+      ...(useFreshProfile ? {} : { userDataDir: PROFILE_DIR }),
       defaultViewport: null,
       ignoreHTTPSErrors: true,
       args: [
@@ -573,6 +579,42 @@ export async function closeSharedBrowser() {
     global.__df_sharedBrowser = null;
     _sharedBrowser = null;
   } catch {}
+}
+
+/** Force reset browser state - used when browser connection is lost (detached frame, protocol error) */
+export async function resetSharedBrowser() {
+  try { await shutdownPools(); } catch {}
+  try {
+    // Clear shared pages
+    if (global.__df_sharedPages instanceof Map) {
+      global.__df_sharedPages.clear();
+    }
+
+    // Try to close browser if still connected
+    const br = global.__df_sharedBrowser || _sharedBrowser || __sharedBrowser;
+    try { if (br && br.close) await br.close(); } catch {}
+
+    // Reset all browser state variables
+    global.__df_sharedBrowser = null;
+    _sharedBrowser = null;
+    __sharedBrowser = null;
+    __launching = null;
+
+    // Delete WS file so next init starts fresh
+    try {
+      const wsFile = path.join(PROFILE_DIR, '.chrome-ws-endpoint');
+      if (fs.existsSync(wsFile)) fs.unlinkSync(wsFile);
+    } catch {}
+
+    // Delete lock file
+    try {
+      if (fs.existsSync(LOCK_FILE)) fs.unlinkSync(LOCK_FILE);
+    } catch {}
+
+    console.log('[browser] Shared browser reset complete - next init will start fresh');
+  } catch (e) {
+    console.log('[browser] Reset error (ignored):', e?.message);
+  }
 }
 
 // Graceful shutdown hooks
