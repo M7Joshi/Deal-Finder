@@ -482,7 +482,8 @@ router.post('/continuous', async (req, res) => {
     });
   }
 
-  const { states, targetPerSource = 500, batchSize = 20, delayBetweenBatches = 5000, sources = ['privy', 'redfin'] } = req.body;
+  // Default to only Privy for now (Redfin disabled until needed)
+  const { states, targetPerSource = 500, batchSize = 20, delayBetweenBatches = 5000, sources = ['privy'] } = req.body;
   const token = req.headers.authorization?.replace('Bearer ', '') || '';
 
   if (!Array.isArray(states) || states.length === 0) {

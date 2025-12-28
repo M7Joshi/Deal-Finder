@@ -3407,4 +3407,173 @@ router.get('/test', requireAuth, async (req, res) => {
   });
 });
 
+// ============================================================
+// SESSION SYNC ENDPOINTS - Transfer Privy session from local to Render
+// ============================================================
+
+// GET /api/live-scrape/session - Get current session cookies (for export)
+router.get('/session', async (req, res) => {
+  try {
+    const session = sessionStore.readPrivySession();
+    if (!session || !session.cookies?.length) {
+      return res.json({
+        ok: false,
+        error: 'No session found',
+        sessionPath: sessionStore.getSessionStorePath()
+      });
+    }
+
+    res.json({
+      ok: true,
+      cookieCount: session.cookies.length,
+      savedAt: session.savedAt,
+      // Don't expose raw cookies in GET, just metadata
+      hasSession: true,
+      sessionPath: sessionStore.getSessionStorePath()
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/live-scrape/session - Import session cookies (for Render)
+// Call this endpoint with cookies exported from your local machine
+router.post('/session', async (req, res) => {
+  try {
+    const { cookies, savedAt } = req.body;
+
+    if (!cookies || !Array.isArray(cookies) || cookies.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: 'cookies array is required in request body'
+      });
+    }
+
+    // Save cookies to session store
+    const fs = await import('fs');
+    const path = await import('path');
+    const storePath = sessionStore.getSessionStorePath();
+
+    // Ensure directory exists
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+
+    // Save session
+    fs.writeFileSync(storePath, JSON.stringify({
+      cookies,
+      savedAt: savedAt || new Date().toISOString(),
+      importedAt: new Date().toISOString(),
+      source: 'api-import'
+    }, null, 2));
+
+    L.info('Session imported via API', { cookieCount: cookies.length, path: storePath });
+
+    res.json({
+      ok: true,
+      message: 'Session cookies imported successfully',
+      cookieCount: cookies.length,
+      sessionPath: storePath
+    });
+  } catch (err) {
+    L.error('Session import failed', { error: err.message });
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET /api/live-scrape/session/export - Export raw session for transfer to Render
+// WARNING: Returns raw cookies - use with caution
+router.get('/session/export', async (req, res) => {
+  try {
+    const session = sessionStore.readPrivySession();
+    if (!session || !session.cookies?.length) {
+      return res.status(404).json({
+        ok: false,
+        error: 'No session found to export'
+      });
+    }
+
+    // Return raw session data for transfer
+    res.json({
+      ok: true,
+      cookies: session.cookies,
+      savedAt: session.savedAt,
+      exportedAt: new Date().toISOString()
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/live-scrape/session/test - Test if current session is valid
+router.post('/session/test', async (req, res) => {
+  try {
+    // Try to init bot with current session and check if we're logged in
+    const session = sessionStore.readPrivySession();
+    if (!session || !session.cookies?.length) {
+      return res.json({
+        ok: false,
+        authenticated: false,
+        error: 'No session cookies found'
+      });
+    }
+
+    // Reset any existing bot
+    if (sharedPrivyBot) {
+      try { await sharedPrivyBot.close(); } catch {}
+      sharedPrivyBot = null;
+      botInitializing = false;
+    }
+
+    // Create new bot and test session
+    L.info('Testing Privy session validity...');
+    const bot = new PrivyBot();
+    await bot.init();
+
+    // Check if we're on dashboard or sign_in
+    const currentUrl = bot.page.url();
+    const isLoggedIn = currentUrl.includes('/dashboard') && !currentUrl.includes('sign_in');
+
+    // If on sign_in, try using saved cookies
+    if (!isLoggedIn) {
+      try {
+        await bot.page.setCookie(...session.cookies);
+        await bot.page.goto('https://app.privy.pro/dashboard?id=&name=&saved_search=&include_sold=false&include_active=true', {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000
+        });
+
+        const urlAfter = bot.page.url();
+        const nowLoggedIn = urlAfter.includes('/dashboard') && !urlAfter.includes('sign_in');
+
+        res.json({
+          ok: true,
+          authenticated: nowLoggedIn,
+          url: urlAfter,
+          cookieCount: session.cookies.length,
+          savedAt: session.savedAt
+        });
+      } catch (err) {
+        res.json({
+          ok: false,
+          authenticated: false,
+          error: err.message
+        });
+      }
+    } else {
+      res.json({
+        ok: true,
+        authenticated: true,
+        url: currentUrl,
+        message: 'Session is valid'
+      });
+    }
+
+    // Keep bot for reuse
+    sharedPrivyBot = bot;
+
+  } catch (err) {
+    L.error('Session test failed', { error: err.message });
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 export default router;

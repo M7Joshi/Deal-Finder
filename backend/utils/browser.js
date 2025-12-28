@@ -218,6 +218,9 @@ export async function initSharedBrowser() {
     // a fresh profile ensures we don't have any cached state that triggers it
     const useFreshProfile = process.env.PRIVY_FRESH_PROFILE === 'true';
 
+    // Detect if running on a server (Render, etc) without display
+    const isServer = !process.env.DISPLAY && os.platform() === 'linux';
+
     const browser = await puppeteer.launch({
       // Only set executablePath if we have a valid Chrome path
       ...(CHROME_PATH ? { executablePath: CHROME_PATH } : {}),
@@ -225,7 +228,7 @@ export async function initSharedBrowser() {
       headless,
       // Use persistent profile unless PRIVY_FRESH_PROFILE=true
       ...(useFreshProfile ? {} : { userDataDir: PROFILE_DIR }),
-      defaultViewport: null,
+      defaultViewport: { width: 1920, height: 1080 },
       ignoreHTTPSErrors: true,
       args: [
         `--remote-debugging-port=${RDP_PORT}`,
@@ -234,8 +237,22 @@ export async function initSharedBrowser() {
         '--no-first-run',
         '--no-default-browser-check',
         '--lang=en-US,en;q=0.9',
-        '--start-maximized',
         '--window-size=1920,1080',
+        // Additional args for headless server environments (Render)
+        '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--disable-background-networking',
+        '--disable-default-apps',
+        '--disable-extensions',
+        '--disable-sync',
+        '--disable-translate',
+        '--hide-scrollbars',
+        '--metrics-recording-only',
+        '--mute-audio',
+        '--no-zygote',
+        '--single-process',
+        // Force a virtual display size for headless
+        ...(isServer ? ['--headless=new', '--disable-setuid-sandbox'] : ['--start-maximized']),
       ],
     });
 
