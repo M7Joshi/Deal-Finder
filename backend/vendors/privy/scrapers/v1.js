@@ -1259,7 +1259,7 @@ await page.evaluate(() => {
 
           // Use cluster walker to explode big map regions into bite-size lists,
           // then run the exact same per-view routine inside the callback.
-          await clickClustersRecursively(page, page.browser(), async () => {
+          const clusterResult = await clickClustersRecursively(page, page.browser(), async () => {
             // 1) Hydrate + lazy-load the current view
             const loadedCount = await hydrateAndLoadAll(page, {
               countSelector: propertyCountSelector,
@@ -1615,11 +1615,96 @@ await page.evaluate(() => {
               throw new Error('STALE_CACHE_SKIP_STATE');
             }
           });
+
+          // Handle session_dead from cluster crawler - page needs recovery
+          if (clusterResult === 'session_dead') {
+            L.warn('💀 Cluster crawler reported dead session - triggering page recovery');
+            throw new Error('SESSION_DEAD_NEEDS_RECOVERY');
+          }
           // (Continue to next URL variant/state unless skipToNextCity is set)
         } catch (err) {
           if (err?.message === 'PRIVY_SESSION_EXPIRED' || err?.message === 'PRIVY_SESSION_UNRECOVERABLE') {
             L.error('Privy session expired and could not be recovered — aborting remaining URLs');
             throw err;
+          }
+          if (err?.message === 'SESSION_DEAD_NEEDS_RECOVERY') {
+            L.warn('💀 Session dead - attempting page recovery before continuing');
+            // Try to recover the page by opening a new tab
+            try {
+              const { initSharedBrowser, ensureVendorPageSetup } = await import('../../../utils/browser.js');
+              const browser = await initSharedBrowser();
+              const newPage = await browser.newPage();
+              newPage.__df_name = 'privy';
+              await ensureVendorPageSetup(newPage, {
+                randomizeUA: true,
+                timeoutMs: 180000,
+                jitterViewport: true,
+                baseViewport: { width: 1366, height: 900 },
+              });
+              try { await newPage.setViewport({ width: 1947, height: 1029 }); } catch {}
+
+              // Navigate to dashboard to verify page works
+              await newPage.goto('https://app.privy.pro/dashboard?id=&name=&saved_search=&include_sold=false&include_active=true', {
+                waitUntil: 'domcontentloaded',
+                timeout: 60000
+              });
+              await sleep(5000);
+
+              const pageWorks = await newPage.evaluate(() => document.readyState).catch(() => null);
+              if (pageWorks) {
+                L.success('✅ Page recovery successful - rebinding page object');
+                // Close old page if possible
+                try { await page.close(); } catch {}
+
+                // Rebind all methods to new page
+                page.evaluate = newPage.evaluate.bind(newPage);
+                page.goto = newPage.goto.bind(newPage);
+                page.$ = newPage.$.bind(newPage);
+                page.$$ = newPage.$$.bind(newPage);
+                page.$eval = newPage.$eval.bind(newPage);
+                page.$$eval = newPage.$$eval.bind(newPage);
+                page.waitForSelector = newPage.waitForSelector.bind(newPage);
+                page.waitForFunction = newPage.waitForFunction.bind(newPage);
+                page.waitForNavigation = newPage.waitForNavigation.bind(newPage);
+                page.click = newPage.click.bind(newPage);
+                page.type = newPage.type.bind(newPage);
+                page.keyboard = newPage.keyboard;
+                page.mouse = newPage.mouse;
+                page.url = newPage.url.bind(newPage);
+                page.content = newPage.content.bind(newPage);
+                page.screenshot = newPage.screenshot.bind(newPage);
+                page.setViewport = newPage.setViewport.bind(newPage);
+                page.setCookie = newPage.setCookie.bind(newPage);
+                page.cookies = newPage.cookies.bind(newPage);
+                page.reload = newPage.reload.bind(newPage);
+                page.goBack = newPage.goBack.bind(newPage);
+                page.goForward = newPage.goForward.bind(newPage);
+                page.bringToFront = newPage.bringToFront.bind(newPage);
+                page.browser = newPage.browser.bind(newPage);
+                page.close = newPage.close.bind(newPage);
+                page.isClosed = newPage.isClosed?.bind(newPage);
+                page.setDefaultTimeout = newPage.setDefaultTimeout?.bind(newPage);
+                page.setDefaultNavigationTimeout = newPage.setDefaultNavigationTimeout?.bind(newPage);
+                page.__df_name = newPage.__df_name;
+
+                // Re-login to Privy
+                await loginToPrivy(page);
+                await sleep(3000);
+
+                L.info('Page recovered - retrying city', { city: cityName });
+                // Don't continue to next city - we want to retry this one
+                // Decrement cityIndex so the loop retries this city
+                cityIndex--;
+                continue;
+              } else {
+                L.error('Page recovery failed - new page not working');
+                try { await newPage.close(); } catch {}
+              }
+            } catch (recoveryErr) {
+              L.error('Page recovery threw error', { error: recoveryErr?.message });
+            }
+            // If recovery failed, skip this city and continue
+            continue;
           }
           if (err?.message === 'STALE_CACHE_SKIP_STATE') {
             L.warn('Stale cache detected - skipping remaining cities in this state', { state });

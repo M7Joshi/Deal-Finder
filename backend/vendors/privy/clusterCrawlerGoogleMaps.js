@@ -1,6 +1,15 @@
 
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Check if error indicates page/session is dead
+const isSessionDeadError = (err) => {
+  const msg = err?.message || '';
+  return msg.includes('Session closed') ||
+         msg.includes('Target closed') ||
+         msg.includes('Detached') ||
+         msg.includes('Protocol error');
+};
+
 const waitForViews = async (page) => {
   // Return all matching containers currently mounted
   return await page.$$('.view-container, .grid-view-container, .map-view-container');
@@ -101,6 +110,11 @@ const clickClustersRecursively = async (
       }
     } catch (err) {
       console.warn(`⚠️ Could not click cluster: ${err.message}`);
+      // If the session/page is dead, signal for recovery
+      if (isSessionDeadError(err)) {
+        console.error('💀 Session/page is dead - signaling for recovery');
+        return 'session_dead'; // Special return value to signal page recovery needed
+      }
     }
   }
 
