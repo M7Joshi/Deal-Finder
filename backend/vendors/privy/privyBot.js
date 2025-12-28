@@ -14,6 +14,23 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 const L = logPrivy.child('privy');
 
+// Check if a page is still healthy (not detached/closed)
+async function isPageHealthy(page) {
+  if (!page) return false;
+  try {
+    // Try to evaluate something simple - if page is detached this will throw
+    await page.evaluate(() => document.readyState);
+    return true;
+  } catch (e) {
+    const msg = e?.message || '';
+    if (msg.includes('Detached') || msg.includes('closed') || msg.includes('Target closed') || msg.includes('Session closed')) {
+      return false;
+    }
+    // Other errors might be temporary, consider page still potentially healthy
+    return true;
+  }
+}
+
 const READY_SELECTORS = [
   '.properties-found',
   '[data-testid="properties-found"]',
@@ -149,6 +166,46 @@ export default class PrivyBot {
     this.usingProxy = false; this.proxyMode = 'direct';
   }
 
+  // Recover page if it became detached - creates fresh page and re-logins
+  async _ensureHealthyPage() {
+    const healthy = await isPageHealthy(this.page);
+    if (healthy) return true;
+
+    logPrivy.warn('Page is detached/closed - recovering with fresh page and re-login');
+
+    // Create fresh page
+    try { await this.page?.close?.().catch(() => {}); } catch {}
+    this.page = await getSharedPage('privy', {
+      interceptRules: { block: ['media', 'analytics', 'tracking'] },
+      timeoutMs: Number(process.env.PRIVY_NAV_TIMEOUT_MS || 180000),
+      allowlistDomains: ['privy.pro', 'app.privy.pro', 'static.privy.pro', 'cdn.privy.pro'],
+    });
+    await ensureVendorPageSetup(this.page, {
+      randomizeUA: true,
+      timeoutMs: Number(process.env.PRIVY_NAV_TIMEOUT_MS || 180000),
+      jitterViewport: true,
+      baseViewport: { width: 1366, height: 900 },
+    });
+    try { await this.page.setViewport({ width: 1947, height: 1029 }); } catch {}
+
+    // Restore session cookies if available
+    try {
+      if (sessionStore.hasFreshPrivySession(1000 * 60 * 60 * 24)) {
+        const jar = sessionStore.readPrivySession();
+        if (jar?.cookies?.length) {
+          await this.page.setCookie(...jar.cookies);
+          logPrivy.info('Restored session cookies after page recovery');
+        }
+      }
+    } catch (e) {
+      logPrivy.warn('Failed to restore cookies during recovery', { error: e?.message });
+    }
+
+    // Re-login
+    await this.login();
+    return true;
+  }
+
   async login() {
     if (!this.page) throw new Error('Page is not initialized. Call init() first.');
     try {
@@ -181,11 +238,13 @@ export default class PrivyBot {
       logPrivy.info('Calling loginToPrivy...');
       await loginToPrivy(this.page);
 
-      // Nudge to dashboard and wait for hydration using OR signals
+      // Nudge to dashboard with EXPLICIT filters to avoid saved search loading
+      // CRITICAL: Never go to plain /dashboard - it loads "Below Market" saved search with include_sold=true
+      const cleanDashboardUrl = 'https://app.privy.pro/dashboard?id=&name=&saved_search=&include_sold=false&include_active=true&include_pending=false&include_under_contract=false&include_detached=true&include_attached=false&hoa=no&spread=50&spread_type=umv&date_range=all';
       const dashNavAttempts = 3;
       for (let i = 0; i < dashNavAttempts; i++) {
         try {
-          await safeGoto(this.page, 'https://app.privy.pro/dashboard', { waitUntil: ['domcontentloaded'], timeout: 60000 });
+          await safeGoto(this.page, cleanDashboardUrl, { waitUntil: ['domcontentloaded'], timeout: 60000 });
           break;
         } catch (e) {
           if (isNetworkOrProxyError(e) && i < dashNavAttempts - 1) {
@@ -249,9 +308,11 @@ export default class PrivyBot {
           }
         }
         await loginToPrivy(this.page);
+        // CRITICAL: Never go to plain /dashboard - use clean URL to avoid saved search
+        const cleanDashUrl = 'https://app.privy.pro/dashboard?id=&name=&saved_search=&include_sold=false&include_active=true&include_pending=false&include_under_contract=false&include_detached=true&include_attached=false&hoa=no&spread=50&spread_type=umv&date_range=all';
         for (let i = 0; i < navAttempts; i++) {
           try {
-            await safeGoto(this.page, 'https://app.privy.pro/dashboard', { waitUntil: ['domcontentloaded','networkidle2'], timeout: 120000 });
+            await safeGoto(this.page, cleanDashUrl, { waitUntil: ['domcontentloaded','networkidle2'], timeout: 120000 });
             break;
           } catch (e) {
             if (isNetworkOrProxyError(e) && i < navAttempts - 1) {
@@ -273,12 +334,26 @@ export default class PrivyBot {
     if (!this.browser || !this.page) throw new Error('Browser or page is not initialized. Call init() first.');
     logPrivy.start('Starting scrape (v1)…');
     try {
+      // Check page health before scraping - recover if detached
+      await this._ensureHealthyPage();
+
       await ensureDashboardReadyLocal(this.page, { timeout: 60_000 }).catch(() => {});
       try { await sessionStore.saveSessionCookies(this.page); } catch {}
       const results = await scrapePropertiesV1(this.page);
       logPrivy.success('Scrape (v1) complete', { total: results?.length || 0 });
       return results;
     } catch (e) {
+      const msg = e?.message || '';
+      // Handle detached frame errors by recovering the page
+      if (msg.includes('Detached') || msg.includes('Target closed') || msg.includes('Session closed')) {
+        logPrivy.warn('Scrape failed due to detached page - attempting recovery', { error: msg });
+        await this._ensureHealthyPage();
+        // Retry scrape once after recovery
+        const results = await scrapePropertiesV1(this.page);
+        logPrivy.success('Scrape (v1) complete (after page recovery)', { total: results?.length || 0 });
+        return results;
+      }
+
       if (isNetworkOrProxyError(e) && this.usingProxy && this.proxyMode === 'auto') {
         // Rotate proxy on failure if supplier available
         if (this.proxySupplier) {
