@@ -432,7 +432,8 @@ function looksLikeOtpUrl(u) {
 }
 
 export async function isAuthenticated(page) {
-  const target = 'https://app.privy.pro/dashboard';
+  // CRITICAL: Never go to plain /dashboard - use clean URL to avoid saved search "Below Market" with include_sold=true
+  const target = 'https://app.privy.pro/dashboard?id=&name=&saved_search=&include_sold=false&include_active=true';
   await softGoto(page, target, { t1: 20000, t2: 12000 }).catch(() => {});
   const url = page.url();
   log.debug('Auth probe result', { url });
@@ -522,75 +523,27 @@ export async function loginToPrivy(page) {
     await dismissOverlays(page);
 
     if (url0.includes('sign_in') || /app\.privy\.pro/.test(url0)) {
-      // STRATEGY: First tab often gets stuck loading. Immediately create a second tab
-      // after 5 seconds, try login there, then close the first stuck tab.
-      L.info('First tab opened - waiting 5 seconds then creating fresh second tab...');
+      // SIMPLIFIED STRATEGY: Don't use two-tab approach as it causes "Detached Frame" errors
+      // in headless mode. Instead, wait longer for the page to fully load.
+      L.info('On sign-in page, waiting for form to load...');
 
-      const firstPage = page; // Keep reference to first page
-      await new Promise(r => setTimeout(r, 5000)); // Wait 5 seconds
-
-      // Create a fresh second tab immediately
-      L.info('Creating fresh second tab for sign-in...');
+      // Wait for the page to fully load with longer timeout
       try {
-        const { initSharedBrowser } = await import('../../../utils/browser.js');
-        const browser = await initSharedBrowser();
-
-        // Create new page (second tab)
-        const newPage = await browser.newPage();
-        newPage.__df_name = 'privy';
-
-        // Set up the new page
-        try { await newPage.setBypassCSP(true); } catch {}
-        try { await newPage.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' }); } catch {}
+        await page.waitForFunction(() => {
+          const emailInput = document.querySelector('#user_email, input[type="email"]');
+          return emailInput && emailInput.offsetWidth > 0;
+        }, { timeout: 30000 });
+        L.info('Email input is visible and ready');
+      } catch (e) {
+        L.warn('Email input not immediately visible, trying to dismiss overlays...', { error: e?.message });
+        await dismissOverlays(page);
+        // Try one more time after dismissing overlays
         try {
-          await newPage.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36');
-        } catch {}
-
-        // Navigate to sign-in on the fresh second tab
-        L.info('Navigating second tab to sign-in page...');
-        await newPage.goto(signInUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-
-        // Wait for email input on the second tab
-        L.info('Waiting for email input on second tab...');
-        try {
-          await newPage.waitForFunction(() => {
+          await page.waitForFunction(() => {
             const emailInput = document.querySelector('#user_email, input[type="email"]');
             return emailInput && emailInput.offsetWidth > 0;
           }, { timeout: 15000 });
-          L.info('Second tab loaded successfully - closing first tab');
-
-          // Second tab works! Close the first stuck tab
-          try { await firstPage.close(); } catch {}
-
-          // Update page reference to use the new page
-          Object.assign(page, newPage);
-
-        } catch (e2) {
-          L.warn('Second tab also slow, checking first tab...', { error: e2?.message });
-          // Check if first tab actually loaded
-          try {
-            const firstReady = await firstPage.evaluate(() => {
-              const emailInput = document.querySelector('#user_email, input[type="email"]');
-              return emailInput && emailInput.offsetWidth > 0;
-            });
-            if (firstReady) {
-              L.info('First tab is actually ready - using it, closing second tab');
-              try { await newPage.close(); } catch {}
-              // Keep using firstPage (which is already assigned to page)
-            } else {
-              // Neither worked well, but use second tab anyway
-              L.warn('Using second tab anyway');
-              try { await firstPage.close(); } catch {}
-              Object.assign(page, newPage);
-            }
-          } catch {
-            // Use second tab
-            try { await firstPage.close(); } catch {}
-            Object.assign(page, newPage);
-          }
-        }
-      } catch (tabErr) {
-        L.error('Failed to create second tab, continuing with first', { error: tabErr?.message });
+        } catch {}
       }
 
       await new Promise(r => setTimeout(r, 1000)); // Extra safety wait
@@ -676,7 +629,7 @@ export async function loginToPrivy(page) {
 
       } else {
         L.warn('Email input not found on sign_in after waiting; capturing screenshot.');
-        try{ await page.screenshot({ path: `/var/data/privy-email-missing-${Date.now()}.png`, fullPage:true }); }catch{}
+        try{ await page.screenshot({ path: `/tmp/privy-email-missing-${Date.now()}.png`, fullPage:true }); }catch{}
       }
 
       // Wait for either password or OTP
@@ -785,7 +738,7 @@ export async function loginToPrivy(page) {
         if (captchaDetected) {
           L.error('CAPTCHA detected on login page - automated login blocked', { type: captchaDetected });
           try {
-            await page.screenshot({ path: `/var/data/privy-captcha-${Date.now()}.png`, fullPage: true });
+            await page.screenshot({ path: `/tmp/privy-captcha-${Date.now()}.png`, fullPage: true });
             L.info('CAPTCHA screenshot saved');
           } catch (ssErr) {
             L.warn('Failed to save CAPTCHA screenshot', { error: ssErr?.message });
@@ -844,7 +797,7 @@ export async function loginToPrivy(page) {
         if (loginError) {
           L.error('Login error detected on page', { error: loginError });
           try {
-            await page.screenshot({ path: `/var/data/privy-login-error-${Date.now()}.png`, fullPage: true });
+            await page.screenshot({ path: `/tmp/privy-login-error-${Date.now()}.png`, fullPage: true });
             L.info('Screenshot saved for login error');
           } catch (ssErr) {
             L.warn('Failed to save login error screenshot', { error: ssErr?.message });
@@ -866,7 +819,7 @@ export async function loginToPrivy(page) {
         if (/\/users\/sign_in/i.test(timeoutUrl)) {
           L.error('Still on sign_in page after 60s timeout - login likely failed', { url: timeoutUrl });
           try {
-            await page.screenshot({ path: `/var/data/privy-login-timeout-${Date.now()}.png`, fullPage: true });
+            await page.screenshot({ path: `/tmp/privy-login-timeout-${Date.now()}.png`, fullPage: true });
             L.info('Timeout screenshot saved for debugging');
           } catch (ssErr) {
             L.warn('Failed to save timeout screenshot', { error: ssErr?.message });
@@ -1036,8 +989,9 @@ export async function loginToPrivy(page) {
           await randomWait(400, 900);
 
           // Hard nudge to dashboard if still not redirected
+          // CRITICAL: Use clean URL to avoid saved search with include_sold=true
           if (!/\/dashboard/.test(page.url())) {
-            await softGoto(page, 'https://app.privy.pro/dashboard', { t1: 15000, t2: 10000 });
+            await softGoto(page, 'https://app.privy.pro/dashboard?id=&name=&saved_search=&include_sold=false&include_active=true', { t1: 15000, t2: 10000 });
           }
         }
       } catch {}
@@ -1066,7 +1020,8 @@ export async function loginToPrivy(page) {
               'button[type="submit"]',
               'a[href*="/dashboard"]'
             ]);
-            await softGoto(page, 'https://app.privy.pro/dashboard', { t1: 12000, t2: 8000 });
+            // CRITICAL: Use clean URL to avoid saved search with include_sold=true
+            await softGoto(page, 'https://app.privy.pro/dashboard?id=&name=&saved_search=&include_sold=false&include_active=true', { t1: 12000, t2: 8000 });
           }
         })()
       ]);
@@ -1109,7 +1064,7 @@ export async function loginToPrivy(page) {
     }
   } catch (error) {
     __privyLoginInFlight = false;
-    try{ await page.screenshot({ path: `/var/data/privy-login-fail-${Date.now()}.png`, fullPage:true }); }catch{}
+    try{ await page.screenshot({ path: `/tmp/privy-login-fail-${Date.now()}.png`, fullPage:true }); }catch{}
     try {
       const html = await page.content();
       logPrivy.debug('Privy login DOM snippet', { head: html.slice(0, 4000) });

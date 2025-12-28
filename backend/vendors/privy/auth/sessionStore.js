@@ -1,9 +1,31 @@
 import fs from 'fs';
 import path from 'node:path';
 
-// Use /var/data on Render (persistent disk) or local var/ for development
-const STORE = process.env.PRIVY_SESSION_FILE ||
-  (process.env.NODE_ENV === 'production' ? '/var/data/privy-session.json' : path.join(process.cwd(), 'var/privy-session.json'));
+// Determine session store path:
+// 1. Use PRIVY_SESSION_FILE env var if set
+// 2. In production: try /var/data (persistent disk), fallback to /tmp (ephemeral but always writable)
+// 3. In development: use local var/ directory
+function getStorePath() {
+  if (process.env.PRIVY_SESSION_FILE) {
+    return process.env.PRIVY_SESSION_FILE;
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    // Try /var/data first (persistent disk on Render)
+    try {
+      fs.mkdirSync('/var/data', { recursive: true });
+      fs.accessSync('/var/data', fs.constants.W_OK);
+      return '/var/data/privy-session.json';
+    } catch {
+      // Fallback to /tmp which is always writable (but ephemeral)
+      return '/tmp/privy-session.json';
+    }
+  }
+
+  return path.join(process.cwd(), 'var/privy-session.json');
+}
+
+const STORE = getStorePath();
 
 export function hasFreshPrivySession(maxAgeMs = 24 * 60 * 60 * 1000) {
   try {
