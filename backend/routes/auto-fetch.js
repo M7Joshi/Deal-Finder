@@ -18,11 +18,23 @@ let shouldStopLoop = false; // Flag to stop continuous loop
 let loopStats = null; // Track stats across loops
 
 // Progress tracking - persists across restarts within same process
+// Each source has its own state index so they can be on different states
 let progressTracker = {
-  privy: { lastAddress: null, fetchedCount: 0, pendingAddresses: [] },
-  redfin: { lastAddress: null, fetchedCount: 0, pendingAddresses: [] },
-  currentSource: 'privy', // Start with privy
-  currentState: null
+  privy: {
+    currentStateIndex: 0,  // Start from AL (index 0)
+    lastAddress: null,
+    fetchedCount: 0,
+    pendingAddresses: [],
+    totalProcessed: 0  // Total addresses processed across all states
+  },
+  redfin: {
+    currentStateIndex: 0,  // Redfin also starts from beginning
+    lastAddress: null,
+    fetchedCount: 0,
+    pendingAddresses: [],
+    totalProcessed: 0
+  },
+  currentSource: 'privy' // Which source is currently active
 };
 
 // Helper: Fetch from Privy API using state-level mode (cluster approach)
@@ -420,20 +432,31 @@ router.get('/progress', async (req, res) => {
 
 // POST /api/auto-fetch/reset-progress - Reset progress tracker
 router.post('/reset-progress', async (req, res) => {
-  const { source } = req.body; // 'privy', 'redfin', or 'all'
+  const { source, startStateIndex } = req.body; // 'privy', 'redfin', or 'all'; optionally set starting state index
 
   if (source === 'privy' || source === 'all') {
-    progressTracker.privy = { lastAddress: null, fetchedCount: 0, pendingAddresses: [] };
+    progressTracker.privy = {
+      currentStateIndex: startStateIndex ?? 0,  // Default to 0 (AL)
+      lastAddress: null,
+      fetchedCount: 0,
+      pendingAddresses: [],
+      totalProcessed: 0
+    };
   }
   if (source === 'redfin' || source === 'all') {
-    progressTracker.redfin = { lastAddress: null, fetchedCount: 0, pendingAddresses: [] };
+    progressTracker.redfin = {
+      currentStateIndex: startStateIndex ?? 0,
+      lastAddress: null,
+      fetchedCount: 0,
+      pendingAddresses: [],
+      totalProcessed: 0
+    };
   }
   if (source === 'all') {
     progressTracker.currentSource = 'privy';
-    progressTracker.currentState = null;
   }
 
-  L.info('Progress tracker reset', { source, progressTracker });
+  L.info('Progress tracker reset', { source, startStateIndex, progressTracker });
   res.json({ ok: true, message: `Progress reset for ${source}`, progressTracker });
 });
 
@@ -459,7 +482,7 @@ router.post('/continuous', async (req, res) => {
     });
   }
 
-  const { states, targetPerSource = 500, batchSize = 20, delayBetweenBatches = 5000, sources = ['redfin', 'privy'] } = req.body;
+  const { states, targetPerSource = 500, batchSize = 20, delayBetweenBatches = 5000, sources = ['privy', 'redfin'] } = req.body;
   const token = req.headers.authorization?.replace('Bearer ', '') || '';
 
   if (!Array.isArray(states) || states.length === 0) {
@@ -509,77 +532,102 @@ router.post('/continuous', async (req, res) => {
 });
 
 // Background continuous loop function
-// New flow: Privy 500 → 2min break → BofA → 2min break → Redfin 500 → 2min break → BofA → 2min break → repeat
+// New flow:
+// - Privy goes through ALL states (from its currentStateIndex) → 500 per state → 2min break → BofA → 2min break
+// - Then Redfin goes through ALL states (from its currentStateIndex) → 500 per state → 2min break → BofA → 2min break
+// - Each source tracks its own state position independently
+// - After both complete all states, loop starts over
 async function runContinuousLoop(states, targetPerSource, batchSize, delayBetweenBatches, token, sources = ['privy', 'redfin']) {
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const TWO_MINUTES = 2 * 60 * 1000; // 2 minutes in ms
   const runRedfin = sources.includes('redfin');
   const runPrivy = sources.includes('privy');
 
+  // Helper to process a single state for a source
+  async function processStateForSource(sourceName, state, stateIndex) {
+    const fetchFn = sourceName === 'privy' ? fetchFromPrivy : fetchFromRedfin;
+    let collected = [];
+
+    currentFetchStatus = `${sourceName.toUpperCase()} | State ${stateIndex + 1}/${states.length} (${state}): Collecting (0/${targetPerSource})...`;
+    L.info(`${state} ${sourceName.toUpperCase()}: Starting to collect ${targetPerSource} addresses...`);
+
+    // Collect addresses until we have target (or no more available)
+    let retryCount = 0;
+    const MAX_EMPTY_RETRIES = 5; // Stop if we get 5 consecutive empty results
+
+    while (collected.length < targetPerSource && !shouldStopLoop && retryCount < MAX_EMPTY_RETRIES) {
+      currentFetchStatus = `${sourceName.toUpperCase()} | State ${stateIndex + 1}/${states.length} (${state}): Collecting (${collected.length}/${targetPerSource})...`;
+
+      const addresses = await fetchFn(state, batchSize, token, 1);
+      if (addresses.length === 0) {
+        retryCount++;
+        L.info(`${state} ${sourceName.toUpperCase()}: No addresses returned (retry ${retryCount}/${MAX_EMPTY_RETRIES})`);
+        await sleep(delayBetweenBatches);
+        continue;
+      }
+
+      const { newAddresses } = await filterNewAddresses(addresses);
+      if (newAddresses.length === 0) {
+        retryCount++;
+        L.info(`${state} ${sourceName.toUpperCase()}: All addresses already exist (retry ${retryCount}/${MAX_EMPTY_RETRIES})`);
+        await sleep(delayBetweenBatches);
+        continue;
+      }
+
+      // Reset retry count on success
+      retryCount = 0;
+
+      // Add to collection
+      const needed = targetPerSource - collected.length;
+      const toAdd = newAddresses.slice(0, needed);
+      collected.push(...toAdd);
+
+      // Track progress
+      progressTracker[sourceName].fetchedCount = collected.length;
+      progressTracker[sourceName].lastAddress = toAdd[toAdd.length - 1]?.fullAddress || null;
+
+      L.info(`${state} ${sourceName.toUpperCase()}: Collected ${toAdd.length} (total: ${collected.length}/${targetPerSource})`);
+      await sleep(delayBetweenBatches);
+    }
+
+    return collected;
+  }
+
   try {
     while (!shouldStopLoop) {
       loopStats.loopCount++;
       L.info(`=== Starting loop #${loopStats.loopCount} === Sources: ${sources.join(', ')}`);
 
-      for (const state of states) {
-        if (shouldStopLoop) break;
+      // ========== PRIVY: Process ALL states ==========
+      if (runPrivy && !shouldStopLoop) {
+        progressTracker.currentSource = 'privy';
+        L.info(`PRIVY: Starting from state index ${progressTracker.privy.currentStateIndex}`);
 
-        loopStats.currentState = state;
-        progressTracker.currentState = state;
+        while (progressTracker.privy.currentStateIndex < states.length && !shouldStopLoop) {
+          const stateIndex = progressTracker.privy.currentStateIndex;
+          const state = states[stateIndex];
 
-        // ========== STEP 1: PRIVY - Collect 500 addresses first ==========
-        if (runPrivy) {
-          progressTracker.currentSource = 'privy';
-          let privyCollected = [];
+          loopStats.currentState = `PRIVY: ${state}`;
+          currentFetchStatus = `Loop #${loopStats.loopCount} | PRIVY: Processing ${state} (${stateIndex + 1}/${states.length})`;
+          L.info(`PRIVY: Processing state ${state} (${stateIndex + 1}/${states.length})`);
 
-          currentFetchStatus = `Loop #${loopStats.loopCount} | ${state} PRIVY: Collecting addresses (0/${targetPerSource})...`;
-          L.info(`${state} PRIVY: Starting to collect ${targetPerSource} addresses...`);
-
-          // Collect addresses until we have 500 (or no more available)
-          while (privyCollected.length < targetPerSource && !shouldStopLoop) {
-            currentFetchStatus = `Loop #${loopStats.loopCount} | ${state} PRIVY: Collecting (${privyCollected.length}/${targetPerSource})...`;
-
-            const privyAddresses = await fetchFromPrivy(state, batchSize, token, 1);
-            if (privyAddresses.length === 0) {
-              L.info(`${state} PRIVY: No more addresses available`);
-              break;
-            }
-
-            const { newAddresses } = await filterNewAddresses(privyAddresses);
-            if (newAddresses.length === 0) {
-              L.info(`${state} PRIVY: All addresses already exist, trying again...`);
-              await sleep(delayBetweenBatches);
-              continue;
-            }
-
-            // Add to collection
-            const needed = targetPerSource - privyCollected.length;
-            const toAdd = newAddresses.slice(0, needed);
-            privyCollected.push(...toAdd);
-
-            // Track progress
-            progressTracker.privy.fetchedCount = privyCollected.length;
-            progressTracker.privy.lastAddress = toAdd[toAdd.length - 1]?.fullAddress || null;
-
-            L.info(`${state} PRIVY: Collected ${toAdd.length} (total: ${privyCollected.length}/${targetPerSource})`);
-            await sleep(delayBetweenBatches);
-          }
-
+          const privyCollected = await processStateForSource('privy', state, stateIndex);
           loopStats.totalFetched.privy += privyCollected.length;
+          progressTracker.privy.totalProcessed += privyCollected.length;
 
           if (privyCollected.length > 0 && !shouldStopLoop) {
             // Store pending addresses for BofA
             progressTracker.privy.pendingAddresses = privyCollected;
 
             // 2 MINUTE BREAK after collecting
-            currentFetchStatus = `Loop #${loopStats.loopCount} | ${state} PRIVY: Collected ${privyCollected.length}. Taking 2 min break before BofA...`;
+            currentFetchStatus = `PRIVY | ${state}: Collected ${privyCollected.length}. Taking 2 min break before BofA...`;
             L.info(`${state} PRIVY: Collected ${privyCollected.length} addresses. Taking 2 min break...`);
             await sleep(TWO_MINUTES);
 
             if (shouldStopLoop) break;
 
             // BOFA AMV for Privy addresses
-            currentFetchStatus = `Loop #${loopStats.loopCount} | ${state} PRIVY: Getting BofA AMV for ${privyCollected.length} addresses...`;
+            currentFetchStatus = `PRIVY | ${state}: Getting BofA AMV for ${privyCollected.length} addresses...`;
             L.info(`${state} PRIVY: Fetching BofA AMV for ${privyCollected.length} addresses...`);
 
             const privyWithAmv = await fetchBofaAmv(privyCollected, token);
@@ -590,71 +638,60 @@ async function runContinuousLoop(states, targetPerSource, batchSize, delayBetwee
 
             // Clear pending
             progressTracker.privy.pendingAddresses = [];
+            progressTracker.privy.fetchedCount = 0; // Reset for next state
 
             L.info(`${state} PRIVY: Saved ${privySaveResults.saved}, Deals found: ${privySaveResults.dealsCount}`);
 
             // 2 MINUTE BREAK after BofA
-            currentFetchStatus = `Loop #${loopStats.loopCount} | ${state} PRIVY complete. Taking 2 min break before Redfin...`;
-            L.info(`${state} PRIVY complete. Taking 2 min break before Redfin...`);
+            currentFetchStatus = `PRIVY | ${state} complete. Taking 2 min break before next state...`;
+            L.info(`${state} PRIVY complete. Taking 2 min break...`);
             await sleep(TWO_MINUTES);
           }
+
+          // Move to next state
+          progressTracker.privy.currentStateIndex++;
+          L.info(`PRIVY: Moving to state index ${progressTracker.privy.currentStateIndex}`);
         }
 
-        if (shouldStopLoop) break;
+        // Reset Privy state index for next full loop
+        if (progressTracker.privy.currentStateIndex >= states.length) {
+          L.info(`PRIVY: Completed all ${states.length} states. Resetting to 0 for next loop.`);
+          progressTracker.privy.currentStateIndex = 0;
+        }
+      }
 
-        // ========== STEP 2: REDFIN - Collect 500 addresses ==========
-        if (runRedfin) {
-          progressTracker.currentSource = 'redfin';
-          let redfinCollected = [];
+      if (shouldStopLoop) break;
 
-          currentFetchStatus = `Loop #${loopStats.loopCount} | ${state} REDFIN: Collecting addresses (0/${targetPerSource})...`;
-          L.info(`${state} REDFIN: Starting to collect ${targetPerSource} addresses...`);
+      // ========== REDFIN: Process ALL states ==========
+      if (runRedfin && !shouldStopLoop) {
+        progressTracker.currentSource = 'redfin';
+        L.info(`REDFIN: Starting from state index ${progressTracker.redfin.currentStateIndex}`);
 
-          // Collect addresses until we have 500 (or no more available)
-          while (redfinCollected.length < targetPerSource && !shouldStopLoop) {
-            currentFetchStatus = `Loop #${loopStats.loopCount} | ${state} REDFIN: Collecting (${redfinCollected.length}/${targetPerSource})...`;
+        while (progressTracker.redfin.currentStateIndex < states.length && !shouldStopLoop) {
+          const stateIndex = progressTracker.redfin.currentStateIndex;
+          const state = states[stateIndex];
 
-            const redfinAddresses = await fetchFromRedfin(state, batchSize, token, 1);
-            if (redfinAddresses.length === 0) {
-              L.info(`${state} REDFIN: No more addresses available`);
-              break;
-            }
+          loopStats.currentState = `REDFIN: ${state}`;
+          currentFetchStatus = `Loop #${loopStats.loopCount} | REDFIN: Processing ${state} (${stateIndex + 1}/${states.length})`;
+          L.info(`REDFIN: Processing state ${state} (${stateIndex + 1}/${states.length})`);
 
-            const { newAddresses } = await filterNewAddresses(redfinAddresses);
-            if (newAddresses.length === 0) {
-              L.info(`${state} REDFIN: All addresses already exist, trying again...`);
-              await sleep(delayBetweenBatches);
-              continue;
-            }
-
-            // Add to collection
-            const needed = targetPerSource - redfinCollected.length;
-            const toAdd = newAddresses.slice(0, needed);
-            redfinCollected.push(...toAdd);
-
-            // Track progress
-            progressTracker.redfin.fetchedCount = redfinCollected.length;
-            progressTracker.redfin.lastAddress = toAdd[toAdd.length - 1]?.fullAddress || null;
-
-            L.info(`${state} REDFIN: Collected ${toAdd.length} (total: ${redfinCollected.length}/${targetPerSource})`);
-            await sleep(delayBetweenBatches);
-          }
-
+          const redfinCollected = await processStateForSource('redfin', state, stateIndex);
           loopStats.totalFetched.redfin += redfinCollected.length;
+          progressTracker.redfin.totalProcessed += redfinCollected.length;
 
           if (redfinCollected.length > 0 && !shouldStopLoop) {
             // Store pending addresses for BofA
             progressTracker.redfin.pendingAddresses = redfinCollected;
 
             // 2 MINUTE BREAK after collecting
-            currentFetchStatus = `Loop #${loopStats.loopCount} | ${state} REDFIN: Collected ${redfinCollected.length}. Taking 2 min break before BofA...`;
+            currentFetchStatus = `REDFIN | ${state}: Collected ${redfinCollected.length}. Taking 2 min break before BofA...`;
             L.info(`${state} REDFIN: Collected ${redfinCollected.length} addresses. Taking 2 min break...`);
             await sleep(TWO_MINUTES);
 
             if (shouldStopLoop) break;
 
             // BOFA AMV for Redfin addresses
-            currentFetchStatus = `Loop #${loopStats.loopCount} | ${state} REDFIN: Getting BofA AMV for ${redfinCollected.length} addresses...`;
+            currentFetchStatus = `REDFIN | ${state}: Getting BofA AMV for ${redfinCollected.length} addresses...`;
             L.info(`${state} REDFIN: Fetching BofA AMV for ${redfinCollected.length} addresses...`);
 
             const redfinWithAmv = await fetchBofaAmv(redfinCollected, token);
@@ -665,17 +702,26 @@ async function runContinuousLoop(states, targetPerSource, batchSize, delayBetwee
 
             // Clear pending
             progressTracker.redfin.pendingAddresses = [];
+            progressTracker.redfin.fetchedCount = 0; // Reset for next state
 
             L.info(`${state} REDFIN: Saved ${redfinSaveResults.saved}, Deals found: ${redfinSaveResults.dealsCount}`);
 
-            // 2 MINUTE BREAK after BofA (before next loop)
-            currentFetchStatus = `Loop #${loopStats.loopCount} | ${state} REDFIN complete. Taking 2 min break...`;
-            L.info(`${state} REDFIN complete. Taking 2 min break before next cycle...`);
+            // 2 MINUTE BREAK after BofA
+            currentFetchStatus = `REDFIN | ${state} complete. Taking 2 min break before next state...`;
+            L.info(`${state} REDFIN complete. Taking 2 min break...`);
             await sleep(TWO_MINUTES);
           }
+
+          // Move to next state
+          progressTracker.redfin.currentStateIndex++;
+          L.info(`REDFIN: Moving to state index ${progressTracker.redfin.currentStateIndex}`);
         }
 
-        L.info(`${state} complete: Privy=${loopStats.totalFetched.privy}, Redfin=${loopStats.totalFetched.redfin}`);
+        // Reset Redfin state index for next full loop
+        if (progressTracker.redfin.currentStateIndex >= states.length) {
+          L.info(`REDFIN: Completed all ${states.length} states. Resetting to 0 for next loop.`);
+          progressTracker.redfin.currentStateIndex = 0;
+        }
       }
 
       if (!shouldStopLoop) {
