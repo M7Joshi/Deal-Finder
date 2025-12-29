@@ -590,14 +590,16 @@ async function bootstrapScheduler() {
     return;
   }
 
-  // Check if there are pending AMV addresses - if so, run immediately regardless of RUN_IMMEDIATELY setting
+  // Check if there are pending AMV addresses - if so, start with BofA phase to process them first
   try {
     await connectDB();
     const pendingAMV = await ScrapedDeal.countDocuments({
       $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
     });
     if (pendingAMV > 0) {
-      log.info('Scheduler bootstrap: Found pending AMV addresses, starting immediately', { pendingAMV });
+      log.info('Scheduler bootstrap: Found pending AMV addresses, starting with BofA phase', { pendingAMV });
+      // Skip to BofA phase to process pending addresses first
+      schedulerPhase = 'bofa_after_privy';
       scheduleNextRun(0); // Start immediately
       return;
     }
