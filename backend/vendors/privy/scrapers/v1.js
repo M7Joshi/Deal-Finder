@@ -1000,9 +1000,18 @@ const scrapePropertiesV1 = async (page) => {
 
     // Determine starting index (resume from where we left off)
     let startIndex = 0;
+    // ONE-TIME: Start from 5th city (index 4) for first state if no progress exists
+    const INITIAL_CITY_SKIP = parseInt(process.env.PRIVY_INITIAL_CITY_SKIP || '0', 10);
     if (progress.currentState === state && progress.lastCityIndex >= 0) {
       startIndex = progress.lastCityIndex + 1;
       LState.info(`Resuming state from city index ${startIndex}`);
+    } else if (state === 'AL' && progress.totalCitiesProcessed === 0 && INITIAL_CITY_SKIP > 0) {
+      // Skip first N cities for fresh start (one-time)
+      startIndex = INITIAL_CITY_SKIP;
+      LState.info(`One-time skip: Starting from city index ${startIndex} (${stateCities[startIndex] || 'unknown'})`);
+      progress.currentState = state;
+      progress.lastCityIndex = startIndex - 1;
+      await saveProgress(progress);
     } else {
       // Mark as current state
       progress.currentState = state;
