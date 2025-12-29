@@ -970,9 +970,17 @@ const scrapePropertiesV1 = async (page) => {
   };
 
   // Get states sorted alphabetically by FULL NAME (not abbreviation), excluding blocked states
-  const allStates = Object.keys(urls)
+  let allStates = Object.keys(urls)
     .filter(s => !BLOCKED_STATES.includes(s))
     .sort((a, b) => (STATE_NAMES[a] || a).localeCompare(STATE_NAMES[b] || b));
+
+  // ONE-TIME: Skip first N states on fresh start (e.g., PRIVY_INITIAL_STATE_SKIP=1 skips Alabama, starts with Arizona)
+  const INITIAL_STATE_SKIP = parseInt(process.env.PRIVY_INITIAL_STATE_SKIP || '0', 10);
+  if (INITIAL_STATE_SKIP > 0 && progress.totalCitiesProcessed === 0 && !progress.currentState) {
+    const skippedStates = allStates.slice(0, INITIAL_STATE_SKIP);
+    allStates = allStates.slice(INITIAL_STATE_SKIP);
+    logPrivy.info(`One-time skip: Skipping first ${INITIAL_STATE_SKIP} state(s): ${skippedStates.join(', ')}. Starting with ${allStates[0]}`);
+  }
 
   logPrivy.info(`Total states available: ${allStates.length} (excluded ${BLOCKED_STATES.length} blocked states)`);
   logPrivy.info(`States order: ${allStates.map(s => STATE_NAMES[s] || s).join(', ')}`);
