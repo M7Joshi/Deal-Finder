@@ -7,17 +7,23 @@ const scraperProgressSchema = new mongoose.Schema({
   // Current state being scraped (e.g., 'Alabama', 'Texas')
   currentState: { type: String, default: null },
 
+  // Last completed state
+  lastState: { type: String, default: null },
+
   // Current city index within the state (0-based)
-  currentCityIndex: { type: Number, default: 0 },
+  currentCityIndex: { type: Number, default: -1 },
 
   // Current state index (0-based)
   currentStateIndex: { type: Number, default: 0 },
 
-  // Set of processed city URLs (to skip duplicates)
+  // Set of processed city URLs (to skip duplicates) / completed states for Privy
   processedCities: { type: [String], default: [] },
 
   // Total addresses scraped in current session
   totalScraped: { type: Number, default: 0 },
+
+  // Cycle count (how many full cycles through all states)
+  cycleCount: { type: Number, default: 0 },
 
   // Last update timestamp
   updatedAt: { type: Date, default: Date.now },

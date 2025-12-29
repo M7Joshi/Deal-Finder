@@ -1,26 +1,19 @@
 /**
- * Privy Progress Tracker
+ * Privy Progress Tracker (MongoDB-based)
  *
  * Tracks which state and city was last processed, so scraping can resume
- * from where it left off after restarts. Processes states and cities
- * alphabetically.
+ * from where it left off after restarts. Uses MongoDB for persistence
+ * across deployments (file-based storage gets wiped on Render restarts).
  */
 
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import ScraperProgress from '../../models/ScraperProgress.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Progress file location - use /tmp for cloud deployments, local for dev
-const PROGRESS_FILE = process.env.PRIVY_PROGRESS_FILE ||
-  (process.env.NODE_ENV === 'production' ? '/tmp/privy-progress.json' : path.join(__dirname, '../../../privy-progress.json'));
+const SCRAPER_NAME = 'privy';
 
 // Default progress state
 const DEFAULT_PROGRESS = {
   lastState: null,        // Last completed state (e.g., 'AL')
-  lastCityIndex: 0,       // Index of last completed city within current state
+  lastCityIndex: -1,      // Index of last completed city within current state
   currentState: null,     // State currently being processed
   completedStates: [],    // Array of fully completed states
   lastUpdated: null,      // ISO timestamp
@@ -44,46 +37,75 @@ function extractCityFromUrl(url) {
 }
 
 /**
- * Load progress from file
+ * Load progress from MongoDB
  */
-export function loadProgress() {
+export async function loadProgress() {
   try {
-    if (fs.existsSync(PROGRESS_FILE)) {
-      const data = JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8'));
-      console.log('[PrivyProgress] Loaded progress:', {
-        currentState: data.currentState,
-        lastCityIndex: data.lastCityIndex,
-        completedStates: data.completedStates?.length || 0,
-        totalCitiesProcessed: data.totalCitiesProcessed,
-        cycleCount: data.cycleCount,
+    const doc = await ScraperProgress.findOne({ scraper: SCRAPER_NAME }).lean();
+    if (doc) {
+      // Convert MongoDB doc to our progress format
+      const progress = {
+        lastState: doc.lastState || null,
+        lastCityIndex: doc.currentCityIndex ?? -1,
+        currentState: doc.currentState || null,
+        completedStates: doc.processedCities || [], // Using processedCities to store completed states
+        lastUpdated: doc.updatedAt?.toISOString() || null,
+        totalCitiesProcessed: doc.totalScraped || 0,
+        totalStatesCompleted: doc.currentStateIndex || 0,
+        cycleCount: doc.cycleCount || 0,
+      };
+      console.log('[PrivyProgress] Loaded progress from MongoDB:', {
+        currentState: progress.currentState,
+        lastCityIndex: progress.lastCityIndex,
+        completedStates: progress.completedStates?.length || 0,
+        totalCitiesProcessed: progress.totalCitiesProcessed,
+        cycleCount: progress.cycleCount,
       });
-      return { ...DEFAULT_PROGRESS, ...data };
+      return progress;
     }
   } catch (e) {
-    console.warn('[PrivyProgress] Failed to load progress file:', e.message);
+    console.warn('[PrivyProgress] Failed to load progress from MongoDB:', e.message);
   }
+  console.log('[PrivyProgress] No existing progress found, starting fresh');
+  return { ...DEFAULT_PROGRESS };
+}
+
+// Synchronous wrapper for compatibility
+export function loadProgressSync() {
+  // For backward compatibility - return default and let async version update
+  console.warn('[PrivyProgress] loadProgressSync called - use loadProgress() async instead');
   return { ...DEFAULT_PROGRESS };
 }
 
 /**
- * Save progress to file
+ * Save progress to MongoDB
  */
-export function saveProgress(progress) {
+export async function saveProgress(progress) {
   try {
-    const data = {
-      ...progress,
-      lastUpdated: new Date().toISOString(),
-    };
-    fs.writeFileSync(PROGRESS_FILE, JSON.stringify(data, null, 2), 'utf8');
+    await ScraperProgress.findOneAndUpdate(
+      { scraper: SCRAPER_NAME },
+      {
+        scraper: SCRAPER_NAME,
+        currentState: progress.currentState,
+        currentCityIndex: progress.lastCityIndex,
+        currentStateIndex: progress.totalStatesCompleted,
+        processedCities: progress.completedStates, // Store completed states here
+        totalScraped: progress.totalCitiesProcessed,
+        cycleCount: progress.cycleCount,
+        lastState: progress.lastState,
+        updatedAt: new Date(),
+      },
+      { upsert: true, new: true }
+    );
   } catch (e) {
-    console.warn('[PrivyProgress] Failed to save progress:', e.message);
+    console.warn('[PrivyProgress] Failed to save progress to MongoDB:', e.message);
   }
 }
 
 /**
  * Mark a city as completed
  */
-export function markCityComplete(progress, state, cityIndex, cityUrl) {
+export async function markCityComplete(progress, state, cityIndex, cityUrl) {
   const cityName = extractCityFromUrl(cityUrl);
   progress.lastCityIndex = cityIndex;
   progress.currentState = state;
@@ -91,42 +113,42 @@ export function markCityComplete(progress, state, cityIndex, cityUrl) {
   progress.lastUpdated = new Date().toISOString();
 
   console.log(`[PrivyProgress] Completed city: ${cityName} (${state}) - Index ${cityIndex}`);
-  saveProgress(progress);
+  await saveProgress(progress);
   return progress;
 }
 
 /**
  * Mark a state as fully completed
  */
-export function markStateComplete(progress, state) {
+export async function markStateComplete(progress, state) {
   if (!progress.completedStates.includes(state)) {
     progress.completedStates.push(state);
     progress.completedStates.sort(); // Keep alphabetical
   }
   progress.lastState = state;
   progress.currentState = null;
-  progress.lastCityIndex = 0;
+  progress.lastCityIndex = -1;
   progress.totalStatesCompleted = progress.completedStates.length;
   progress.lastUpdated = new Date().toISOString();
 
   console.log(`[PrivyProgress] Completed state: ${state} (${progress.totalStatesCompleted} total states completed)`);
-  saveProgress(progress);
+  await saveProgress(progress);
   return progress;
 }
 
 /**
  * Start a new cycle (all states completed, starting over)
  */
-export function startNewCycle(progress) {
+export async function startNewCycle(progress) {
   progress.cycleCount += 1;
   progress.completedStates = [];
   progress.lastState = null;
   progress.currentState = null;
-  progress.lastCityIndex = 0;
+  progress.lastCityIndex = -1;
   progress.lastUpdated = new Date().toISOString();
 
   console.log(`[PrivyProgress] Starting new cycle #${progress.cycleCount}`);
-  saveProgress(progress);
+  await saveProgress(progress);
   return progress;
 }
 
@@ -134,12 +156,12 @@ export function startNewCycle(progress) {
  * Get the next state and cities to process based on progress
  * Returns { state, cities, startIndex } or null if all done
  */
-export function getNextStateToProcess(urlsData, progress) {
+export async function getNextStateToProcess(urlsData, progress) {
   // Get all states sorted alphabetically
   const allStates = Object.keys(urlsData).sort();
 
   if (!allStates.length) {
-    console.warn('[PrivyProgress] No states found in urls.json');
+    console.warn('[PrivyProgress] No states found in urls data');
     return null;
   }
 
@@ -148,7 +170,7 @@ export function getNextStateToProcess(urlsData, progress) {
 
   if (remainingStates.length === 0) {
     // All states completed - start new cycle
-    startNewCycle(progress);
+    await startNewCycle(progress);
     const firstState = allStates[0];
     const cities = urlsData[firstState] || [];
     // Sort cities alphabetically by city name
@@ -188,7 +210,7 @@ export function getNextStateToProcess(urlsData, progress) {
       };
     } else {
       // State was actually completed, mark it
-      markStateComplete(progress, progress.currentState);
+      await markStateComplete(progress, progress.currentState);
       return getNextStateToProcess(urlsData, progress);
     }
   }
@@ -204,7 +226,7 @@ export function getNextStateToProcess(urlsData, progress) {
 
   progress.currentState = nextState;
   progress.lastCityIndex = -1; // Will start at 0
-  saveProgress(progress);
+  await saveProgress(progress);
 
   console.log(`[PrivyProgress] Starting new state: ${nextState} (${sortedCities.length} cities)`);
   return {
@@ -221,7 +243,7 @@ export function getProgressSummary(progress) {
   return {
     currentState: progress.currentState,
     lastCityIndex: progress.lastCityIndex,
-    completedStates: progress.completedStates.length,
+    completedStates: progress.completedStates?.length || 0,
     totalCitiesProcessed: progress.totalCitiesProcessed,
     cycleCount: progress.cycleCount,
     lastUpdated: progress.lastUpdated,
@@ -231,11 +253,9 @@ export function getProgressSummary(progress) {
 /**
  * Reset progress (for testing or fresh start)
  */
-export function resetProgress() {
+export async function resetProgress() {
   try {
-    if (fs.existsSync(PROGRESS_FILE)) {
-      fs.unlinkSync(PROGRESS_FILE);
-    }
+    await ScraperProgress.deleteOne({ scraper: SCRAPER_NAME });
     console.log('[PrivyProgress] Progress reset');
     return { ...DEFAULT_PROGRESS };
   } catch (e) {
@@ -246,6 +266,7 @@ export function resetProgress() {
 
 export default {
   loadProgress,
+  loadProgressSync,
   saveProgress,
   markCityComplete,
   markStateComplete,

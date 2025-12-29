@@ -947,8 +947,8 @@ const scrapePropertiesV1 = async (page) => {
 
   const allProperties = [];
 
-  // Load progress to resume from where we left off
-  const progress = loadProgress();
+  // Load progress to resume from where we left off (async - uses MongoDB)
+  const progress = await loadProgress();
   logPrivy.info('Privy scraper starting with progress', getProgressSummary(progress));
 
   // Blocked states - excluded from scraping (match Redfin's BLOCKED_STATES)
@@ -1007,7 +1007,7 @@ const scrapePropertiesV1 = async (page) => {
       // Mark as current state
       progress.currentState = state;
       progress.lastCityIndex = -1;
-      saveProgress(progress);
+      await saveProgress(progress);
     }
 
     let stateSaved = 0;
@@ -1563,7 +1563,7 @@ await page.evaluate(() => {
 
               // Mark this state as complete to move to next state
               // The stale cache persists for the whole state, so skip remaining cities
-              markStateComplete(progress, state);
+              await markStateComplete(progress, state);
 
               // Force browser restart by closing the page completely
               try {
@@ -1668,24 +1668,24 @@ await page.evaluate(() => {
           city: extractCityFromUrl(url),
           state
         });
-        saveProgress(progress); // Save progress before exiting
+        await saveProgress(progress); // Save progress before exiting
         return allProperties;
       }
 
       // Mark this city as completed in progress tracker
-      markCityComplete(progress, state, cityIndex, url);
+      await markCityComplete(progress, state, cityIndex, url);
       LState.info(`City completed: ${cityName}`, { cityIndex, totalCities: stateUrls.length });
     } // end cities loop
 
     // Check batch limit after each state
     if (shouldPauseScraping()) {
       logPrivy.warn('Batch limit reached after state - pausing for AMV phase', { state });
-      saveProgress(progress);
+      await saveProgress(progress);
       return allProperties;
     }
 
     // Mark state as fully completed
-    markStateComplete(progress, state);
+    await markStateComplete(progress, state);
     LState.info('State scrape complete', { stateSaved, state });
   }
 
