@@ -3,7 +3,7 @@ import {
   Box, Button, Container, Dialog, DialogActions, DialogContent, DialogTitle,
   TextField, Typography, Chip, IconButton, Table, TableHead, TableRow, TableCell,
   TableBody, Stack, MenuItem, Select, InputLabel, FormControl, OutlinedInput,
-  TableContainer, Paper
+  TableContainer, Paper, FormControlLabel, Checkbox, Divider
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
@@ -65,6 +65,13 @@ export default function Users(): JSX.Element {
   const [phone, setPhone] = useState('');
   const [userId, setUserId] = useState('');
 
+  // SMTP fields
+  const [smtpHost, setSmtpHost] = useState('');
+  const [smtpPort, setSmtpPort] = useState('587');
+  const [smtpUser, setSmtpUser] = useState('');
+  const [smtpPass, setSmtpPass] = useState('');
+  const [smtpSecure, setSmtpSecure] = useState(false);
+
   const load = async () => {
     setLoading(true);
     try {
@@ -108,6 +115,12 @@ export default function Users(): JSX.Element {
     setStates([]);
     setPhone('');
     setUserId('');
+    // Reset SMTP fields
+    setSmtpHost('');
+    setSmtpPort('587');
+    setSmtpUser('');
+    setSmtpPass('');
+    setSmtpSecure(false);
   };
 
   const onAdd = () => { resetForm(); setOpen(true); };
@@ -120,6 +133,12 @@ export default function Users(): JSX.Element {
     setStates(asStates(u.states));          // ← prefill
     setPhone(u.phone || '');
     setUserId(u.user_id || u.userId || '');
+    // Prefill SMTP fields
+    setSmtpHost(u.smtp_host || '');
+    setSmtpPort(String(u.smtp_port || 587));
+    setSmtpUser(u.smtp_user || '');
+    setSmtpPass(''); // Don't prefill password for security
+    setSmtpSecure(u.smtp_secure || false);
     setOpen(true);
   };
 
@@ -138,7 +157,17 @@ export default function Users(): JSX.Element {
       states: normStates,                   // ← send normalized states
       phone: phone || '+1-000-000-0000',
       user_id: ensureUserId(userId),
+      // SMTP settings
+      smtp_host: smtpHost || null,
+      smtp_port: parseInt(smtpPort, 10) || 587,
+      smtp_user: smtpUser || null,
+      smtp_secure: smtpSecure,
     };
+
+    // Only include smtp_pass if provided (don't overwrite with empty)
+    if (smtpPass.trim()) {
+      payload.smtp_pass = smtpPass.trim();
+    }
 
     if (!editing) {
       const pw = (password || '').trim();
@@ -289,6 +318,76 @@ export default function Users(): JSX.Element {
                 <TextField label="Reset password (optional)" type="password" value={password} onChange={e => setPassword(e.target.value)} fullWidth />
               </Box>
             )}
+
+            <Divider sx={{ my: 2 }} />
+            <Typography variant="subtitle1" sx={{ color: 'black', fontWeight: 600, mb: 1 }}>
+              SMTP Settings (for sending emails)
+            </Typography>
+
+            <Box sx={fieldBox}>
+              <TextField
+                label="SMTP Host"
+                value={smtpHost}
+                onChange={e => setSmtpHost(e.target.value)}
+                fullWidth
+                placeholder="smtp.office365.com"
+                helperText="For Outlook: smtp.office365.com | For Gmail: smtp.gmail.com"
+                InputLabelProps={{style:{color:'black'}}}
+                inputProps={{style:{color:'black'}}}
+              />
+            </Box>
+            <Box sx={fieldBox}>
+              <TextField
+                label="SMTP Port"
+                value={smtpPort}
+                onChange={e => setSmtpPort(e.target.value)}
+                fullWidth
+                placeholder="587"
+                helperText="Usually 587 (TLS) or 465 (SSL)"
+                InputLabelProps={{style:{color:'black'}}}
+                inputProps={{style:{color:'black'}}}
+              />
+            </Box>
+            <Box sx={fieldBox}>
+              <TextField
+                label="SMTP User (Email)"
+                value={smtpUser}
+                onChange={e => setSmtpUser(e.target.value)}
+                fullWidth
+                placeholder="user@domain.com"
+                helperText="The email address to send from"
+                InputLabelProps={{style:{color:'black'}}}
+                inputProps={{style:{color:'black'}}}
+              />
+            </Box>
+            <Box sx={fieldBox}>
+              <TextField
+                label={editing ? "SMTP Password (leave blank to keep current)" : "SMTP Password"}
+                type="password"
+                value={smtpPass}
+                onChange={e => setSmtpPass(e.target.value)}
+                fullWidth
+                placeholder="Email password or app password"
+                helperText="For Outlook: use regular password | For Gmail: use App Password"
+                InputLabelProps={{style:{color:'black'}}}
+                inputProps={{style:{color:'black'}}}
+              />
+            </Box>
+            <Box sx={fieldBox}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={smtpSecure}
+                    onChange={e => setSmtpSecure(e.target.checked)}
+                  />
+                }
+                label="Use SSL (port 465)"
+                sx={{ color: 'black' }}
+              />
+              <Typography variant="caption" sx={{ color: '#666', display: 'block', ml: 4 }}>
+                Leave unchecked for port 587 (TLS/STARTTLS)
+              </Typography>
+            </Box>
           </Stack>
         </DialogContent>
         <DialogActions>
