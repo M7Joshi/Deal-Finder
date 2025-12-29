@@ -63,7 +63,7 @@ export default function ManageSubadmins(): JSX.Element {
   const [showPassword, setShowPassword] = useState(false);
 
   // SMTP credentials for sending emails from subadmin's account
-  const [smtpHost, setSmtpHost] = useState('smtp.gmail.com');
+  const [smtpHost, setSmtpHost] = useState('smtp.office365.com');
   const [smtpPort, setSmtpPort] = useState('587');
   const [smtpUser, setSmtpUser] = useState('');
   const [smtpPass, setSmtpPass] = useState('');
@@ -124,7 +124,7 @@ export default function ManageSubadmins(): JSX.Element {
     setStates([]);
     setShowPassword(false);
     // Reset SMTP fields
-    setSmtpHost('smtp.gmail.com');
+    setSmtpHost('smtp.office365.com');
     setSmtpPort('587');
     setSmtpUser('');
     setSmtpPass('');
@@ -141,7 +141,7 @@ export default function ManageSubadmins(): JSX.Element {
     setPassword('');
     setStates(asStates(u.states));
     // Populate SMTP fields
-    setSmtpHost(u.smtp_host || 'smtp.gmail.com');
+    setSmtpHost(u.smtp_host || 'smtp.office365.com');
     setSmtpPort(String(u.smtp_port || 587));
     setSmtpUser(u.smtp_user || '');
     setSmtpPass(''); // Don't show existing password
@@ -164,7 +164,7 @@ export default function ManageSubadmins(): JSX.Element {
         phone: '+1-000-000-0000',
         user_id: userId,
         // SMTP credentials for sending emails
-        smtp_host: smtpHost || 'smtp.gmail.com',
+        smtp_host: smtpHost || 'smtp.office365.com',
         smtp_port: parseInt(smtpPort, 10) || 587,
         smtp_user: smtpUser || '',
         // Email sending toggle
@@ -406,7 +406,8 @@ export default function ManageSubadmins(): JSX.Element {
         scroll="paper"
         PaperProps={{
           sx: {
-            maxHeight: '85vh',
+            maxHeight: '90vh',
+            minHeight: '500px',
             display: 'flex',
             flexDirection: 'column'
           }
@@ -595,9 +596,8 @@ export default function ManageSubadmins(): JSX.Element {
                 />
               </Stack>
               <Alert severity="info" sx={{ mb: 2 }}>
-                For Gmail: Use <strong>smtp.gmail.com</strong> with port <strong>587</strong>.
-                You must use an <strong>App Password</strong> (not your regular password).
-                Enable 2FA and create an App Password in your Google Account settings.
+                <strong>For Outlook/Office365:</strong> Use <strong>smtp.office365.com</strong> with port <strong>587</strong>. Use your regular email password.<br/>
+                <strong>For Gmail:</strong> Use <strong>smtp.gmail.com</strong> with port <strong>587</strong>. You must use an App Password (enable 2FA first).
               </Alert>
               <Stack spacing={2}>
                 <Stack direction="row" spacing={2}>
@@ -632,12 +632,12 @@ export default function ManageSubadmins(): JSX.Element {
                   sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
                 />
                 <TextField
-                  label={editing ? "App Password (leave blank to keep current)" : "App Password (required for sending emails)"}
+                  label={editing ? "Email Password (leave blank to keep current)" : "Email Password (required for sending emails)"}
                   type={showSmtpPass ? 'text' : 'password'}
                   value={smtpPass}
                   onChange={e => setSmtpPass(e.target.value)}
                   fullWidth
-                  placeholder="xxxx xxxx xxxx xxxx"
+                  placeholder="Your email password"
                   InputLabelProps={{ style: { color: '#666' } }}
                   inputProps={{ style: { color: '#111' } }}
                   sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
