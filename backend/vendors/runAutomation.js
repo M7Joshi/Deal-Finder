@@ -599,7 +599,8 @@ async function bootstrapScheduler() {
     if (pendingAMV > 0) {
       log.info('Scheduler bootstrap: Found pending AMV addresses, starting with BofA phase', { pendingAMV });
       // Skip to BofA phase to process pending addresses first
-      schedulerPhase = 'bofa_after_privy';
+      // Use bofa_after_redfin so after completion it starts fresh cycle (privy)
+      schedulerPhase = 'bofa_after_redfin';
       scheduleNextRun(0); // Start immediately
       return;
     }
