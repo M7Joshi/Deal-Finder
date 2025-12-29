@@ -1322,6 +1322,11 @@ const selectedStates = stateList; // keep var for logs if needed
               logPrivy.warn('Stop requested — aborting Privy state batches');
               break;
             }
+            // Check if batch limit reached - stop to allow AMV phase
+            if (shouldPauseScraping()) {
+              logPrivy.info(`Batch limit reached (${addressesScrapedThisBatch}/${SCRAPE_BATCH_LIMIT}) — stopping Privy to run BofA AMV phase`);
+              break;
+            }
             const chunk = stateList.slice(i, i + maxStates);
             logPrivy.info(`Running Privy batch ${i / maxStates + 1}`, { states: chunk });
 
@@ -1363,6 +1368,11 @@ const selectedStates = stateList; // keep var for logs if needed
             for (const st of rest) {
               if (control.abort) {
                 logPrivy.warn('Stop requested — skipping remaining states');
+                break;
+              }
+              // Check batch limit after each state
+              if (shouldPauseScraping()) {
+                logPrivy.info(`Batch limit reached after state ${st} — pausing for AMV phase`);
                 break;
               }
               try {
