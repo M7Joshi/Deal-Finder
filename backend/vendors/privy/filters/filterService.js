@@ -13,10 +13,45 @@ import {
 } from '../config/selection.js';
 
 // Multiple fallback selectors for each filter field
+// Privy now uses dynamic IDs like "g1275216_beds_3" so we use partial matching
 const BEDS_FROM_SELECTORS = ['#beds_from', 'input[name="beds_from"]', '[data-field="beds_from"]', 'input[placeholder*="Beds"]'];
 const SQFT_FROM_SELECTORS = ['#sqft_from', 'input[name="sqft_from"]', '[data-field="sqft_from"]', 'input[placeholder*="Sqft"]'];
 const PRICE_FROM_SELECTORS = ['#list_price_from', 'input[name="list_price_from"]', '[data-field="list_price_from"]'];
 const PRICE_TO_SELECTORS = ['#list_price_to', 'input[name="list_price_to"]', '[data-field="list_price_to"]'];
+
+// Dynamic checkbox finder - Privy uses IDs like "include_detached_g1275216"
+const findDynamicCheckbox = async (page, namePattern) => {
+  return page.evaluate((pattern) => {
+    // Find checkbox by name containing the pattern
+    const checkbox = document.querySelector(`input[name="${pattern}"]`) ||
+                     document.querySelector(`input[id*="${pattern}"]`) ||
+                     document.querySelector(`input[name*="${pattern}"]`);
+    if (checkbox) {
+      if (!checkbox.checked) {
+        checkbox.click();
+        checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      return true;
+    }
+    return false;
+  }, namePattern);
+};
+
+const uncheckDynamicCheckbox = async (page, namePattern) => {
+  return page.evaluate((pattern) => {
+    const checkbox = document.querySelector(`input[name="${pattern}"]`) ||
+                     document.querySelector(`input[id*="${pattern}"]`) ||
+                     document.querySelector(`input[name*="${pattern}"]`);
+    if (checkbox) {
+      if (checkbox.checked) {
+        checkbox.click();
+        checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      return true;
+    }
+    return false;
+  }, namePattern);
+};
 
 const findAndTypeValue = async (page, selectors, value) => {
   for (const selector of selectors) {
@@ -142,11 +177,28 @@ const applyFilters = async (page /*, browser */) => {
   // Sq Ft: 1000+ (using fallback selectors)
   await findAndTypeValue(page, SQFT_FROM_SELECTORS, 1000);
 
-  // Property Type: Detached only
-  await setCheckbox(page, detachedCheckbox, true);    // Check detached
-  await setCheckbox(page, condoCheckbox, false);       // Uncheck condo
-  await setCheckbox(page, attachedCheckbox, false);    // Uncheck attached
-  await setCheckbox(page, multiFamilyCheckbox, false); // Uncheck multi-family
+  // Property Type: Detached only (using dynamic selectors for Privy's new UI)
+  // Try static selectors first, then dynamic
+  let detachedSet = await setCheckbox(page, detachedCheckbox, true);
+  if (!detachedSet) {
+    detachedSet = await findDynamicCheckbox(page, 'include_detached');
+    if (detachedSet) console.log('✅ Set include_detached via dynamic selector');
+  }
+
+  let condoUnset = await setCheckbox(page, condoCheckbox, false);
+  if (!condoUnset) {
+    await uncheckDynamicCheckbox(page, 'include_condo');
+  }
+
+  let attachedUnset = await setCheckbox(page, attachedCheckbox, false);
+  if (!attachedUnset) {
+    await uncheckDynamicCheckbox(page, 'include_attached');
+  }
+
+  let multiUnset = await setCheckbox(page, multiFamilyCheckbox, false);
+  if (!multiUnset) {
+    await uncheckDynamicCheckbox(page, 'include_multi_family');
+  }
 
   // HOA => "No" (check the No checkbox)
   try {
