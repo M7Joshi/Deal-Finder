@@ -403,7 +403,11 @@
             return false;
         }
 
-        // Fetch addresses
+        // Store addresses as they come in
+        let streamedAddresses = [];
+        let eventSource = null;
+
+        // Fetch addresses using SSE for real-time updates
         async function fetchAddresses() {
             const state = document.getElementById('state').value.toUpperCase();
             const limit = document.getElementById('limit').value;
@@ -416,9 +420,16 @@
             spinner.classList.add('show');
             showStatus('Connecting to Privy.pro...', 'info');
 
-            // Hide previous results
+            // Reset state
+            streamedAddresses = [];
             document.getElementById('results').innerHTML = '';
             document.getElementById('otpBox').classList.remove('show');
+
+            // Close any existing connection
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
 
             try {
                 // Login if needed
@@ -426,36 +437,98 @@
                     await autoLogin();
                 }
 
-                // Call live scrape API
-                const response = await fetch(
-                    `${API_BASE}/api/live-scrape/privy?state=${state}&limit=${limit}`,
-                    {
-                        headers: {
-                            'Authorization': `Bearer ${authToken}`,
-                            'Content-Type': 'application/json'
+                // Use SSE endpoint for real-time streaming
+                const sseUrl = `${API_BASE}/api/live-scrape/privy-stream?state=${state}&limit=${limit}`;
+                eventSource = new EventSource(sseUrl);
+
+                // Handle connection event
+                eventSource.addEventListener('connected', (event) => {
+                    console.log('SSE connected:', event.data);
+                    showStatus('🔄 Connected! Starting scrape...', 'info');
+                });
+
+                // Handle incoming addresses in real-time
+                eventSource.addEventListener('address', (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        // Address data is nested: { state, city, address: {...}, progress: {...} }
+                        const addr = data.address || data;
+                        streamedAddresses.push(addr);
+                        // Update display immediately with new address
+                        displayAddresses(streamedAddresses);
+                        const progress = data.progress || {};
+                        showStatus(`🔄 Fetching ${data.city || ''}... ${progress.current || streamedAddresses.length}/${progress.limit || limit} addresses`, 'info');
+                    } catch (e) {
+                        console.error('Error parsing address:', e);
+                    }
+                });
+
+                // Handle status updates (city progress)
+                eventSource.addEventListener('status', (event) => {
+                    try {
+                        const status = JSON.parse(event.data);
+                        if (status.event === 'city_start') {
+                            const cityInfo = `${status.city} (${status.cityIndex}/${status.totalCities})`;
+                            const progress = status.progress || {};
+                            showStatus(`🔄 Scraping ${cityInfo}... ${progress.current || 0}/${progress.limit} addresses`, 'info');
+                        } else {
+                            showStatus(`🔄 ${status.message || status.city || 'Processing...'}`, 'info');
+                        }
+                    } catch (e) {
+                        console.error('Error parsing status:', e);
+                    }
+                });
+
+                // Handle completion
+                eventSource.addEventListener('complete', (event) => {
+                    try {
+                        const result = JSON.parse(event.data);
+                        const total = result.total || streamedAddresses.length;
+                        showStatus(`✅ Complete! Fetched ${total} addresses`, 'success');
+                    } catch (e) {
+                        showStatus(`✅ Complete! Fetched ${streamedAddresses.length} addresses`, 'success');
+                    }
+                    spinner.classList.remove('show');
+                    fetchBtn.disabled = false;
+                    eventSource.close();
+                    eventSource = null;
+                });
+
+                // Handle errors
+                eventSource.addEventListener('error', (event) => {
+                    if (event.data) {
+                        try {
+                            const err = JSON.parse(event.data);
+                            if (err.requiresOTP || (err.message && err.message.includes('OTP'))) {
+                                showOTPBox();
+                                showStatus('Please enter the verification code from your email', 'warning');
+                            } else {
+                                showStatus('❌ Error: ' + (err.message || 'Unknown error'), 'error');
+                            }
+                        } catch (e) {
+                            showStatus('❌ Error: ' + event.data, 'error');
                         }
                     }
-                );
+                    spinner.classList.remove('show');
+                    fetchBtn.disabled = false;
+                    eventSource.close();
+                    eventSource = null;
+                });
 
-                const data = await response.json();
-
-                if (data.requiresOTP || data.error?.includes('OTP')) {
-                    // Show OTP box
-                    showOTPBox();
-                    showStatus('Please enter the verification code from your email', 'warning');
-                } else if (data.ok && data.addresses) {
-                    // Success - display addresses with agent enrichment stats
-                    displayAddresses(data.addresses, data.agentEnrichment);
-
-                    // Build success message with agent info stats
-                    let successMsg = `✅ Successfully fetched ${data.addresses.length} addresses!`;
-                    if (data.agentEnrichment && data.agentEnrichment.withPhone > 0) {
-                        successMsg += ` (${data.agentEnrichment.withPhone} with agent phone numbers)`;
+                // Handle connection errors
+                eventSource.onerror = (event) => {
+                    // Only show error if we haven't received any addresses
+                    if (streamedAddresses.length === 0) {
+                        showStatus('❌ Connection error. Retrying...', 'error');
                     }
-                    showStatus(successMsg, 'success');
-                } else {
-                    showStatus('❌ Error: ' + (data.message || data.error || 'Unknown error'), 'error');
-                }
+                    // EventSource will auto-reconnect, but if closed, cleanup
+                    if (eventSource.readyState === EventSource.CLOSED) {
+                        spinner.classList.remove('show');
+                        fetchBtn.disabled = false;
+                        eventSource = null;
+                    }
+                };
+
             } catch (error) {
                 showStatus('❌ Error: ' + error.message, 'error');
 
@@ -463,7 +536,6 @@
                 if (error.message.includes('OTP') || error.message.includes('verification')) {
                     showOTPBox();
                 }
-            } finally {
                 spinner.classList.remove('show');
                 fetchBtn.disabled = false;
             }

@@ -52,6 +52,11 @@ function generatePrivyUrls(STATES) {
       tags.forEach((tag) => {
         const url = new URL(baseUrl);
 
+        // CRITICAL: Clear any saved search to prevent "Below Market" from being applied
+        url.searchParams.append('id', '');
+        url.searchParams.append('name', '');
+        url.searchParams.append('saved_search', '');
+
         // Add query parameters
         url.searchParams.append('search_text', state.name);
         url.searchParams.append('location_type', 'city');
@@ -75,7 +80,11 @@ function generatePrivyUrls(STATES) {
         url.searchParams.append('sqft_from', sqftFrom);
         url.searchParams.append('hoa', hoa);
         url.searchParams.append('include_detached', includeDetached);
+        url.searchParams.append('include_attached', false);
         url.searchParams.append('include_active', includeActive);
+        url.searchParams.append('include_sold', false);
+        url.searchParams.append('include_pending', false);
+        url.searchParams.append('include_under_contract', false);
         url.searchParams.append('date_range', dateRange);
         url.searchParams.append('source', 'Any');
         url.searchParams.append('sort_by', 'days-on-market');

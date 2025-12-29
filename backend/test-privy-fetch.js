@@ -46,9 +46,9 @@ async function main() {
     await page.setCookie(...cookies);
   }
 
-  // Check login status
+  // Check login status - use clean URL to prevent saved search from being applied
   console.log('Checking login status...');
-  await page.goto('https://app.privy.pro/dashboard', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.goto('https://app.privy.pro/dashboard?id=&name=&saved_search=&include_sold=false&include_active=true', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
   if (page.url().includes('sign_in')) {
     console.log('\n*** Please login manually. Waiting 120 seconds... ***\n');

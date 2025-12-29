@@ -70,6 +70,114 @@ function withQuickTag(url, paramKey) {
   return u.toString();
 }
 
+// State info with geography_shape_id for state-level searching
+const STATE_INFO = {
+  'AL': { name: 'Alabama', geography_shape_id: 50000001, lng: -86.902298, lat: 32.318231 },
+  'AK': { name: 'Alaska', geography_shape_id: 50000002, lng: -154.493062, lat: 64.200841 },
+  'AZ': { name: 'Arizona', geography_shape_id: 50000004, lng: -111.930736, lat: 34.168033 },
+  'AR': { name: 'Arkansas', geography_shape_id: 50000005, lng: -91.831833, lat: 35.201050 },
+  'CA': { name: 'California', geography_shape_id: 50000006, lng: -119.306607, lat: 37.269168 },
+  'CO': { name: 'Colorado', geography_shape_id: 50000008, lng: -105.782067, lat: 39.550051 },
+  'CT': { name: 'Connecticut', geography_shape_id: 50000009, lng: -72.757507, lat: 41.500727 },
+  'DE': { name: 'Delaware', geography_shape_id: 50000010, lng: -75.386594, lat: 39.145324 },
+  'FL': { name: 'Florida', geography_shape_id: 50000012, lng: -83.804601, lat: 27.698638 },
+  'GA': { name: 'Georgia', geography_shape_id: 50000013, lng: -83.194063, lat: 32.678530 },
+  'HI': { name: 'Hawaii', geography_shape_id: 50000015, lng: -155.582779, lat: 19.898682 },
+  'ID': { name: 'Idaho', geography_shape_id: 50000016, lng: -114.742041, lat: 44.068202 },
+  'IL': { name: 'Illinois', geography_shape_id: 50000017, lng: -89.266507, lat: 39.739389 },
+  'IN': { name: 'Indiana', geography_shape_id: 50000018, lng: -86.441214, lat: 39.766520 },
+  'IA': { name: 'Iowa', geography_shape_id: 50000019, lng: -93.097702, lat: 41.878003 },
+  'KS': { name: 'Kansas', geography_shape_id: 50000020, lng: -98.484246, lat: 39.011902 },
+  'KY': { name: 'Kentucky', geography_shape_id: 50000021, lng: -84.270018, lat: 37.839333 },
+  'LA': { name: 'Louisiana', geography_shape_id: 50000022, lng: -91.400870, lat: 30.937374 },
+  'ME': { name: 'Maine', geography_shape_id: 50000023, lng: -69.044701, lat: 45.253783 },
+  'MD': { name: 'Maryland', geography_shape_id: 50000024, lng: -77.236967, lat: 38.804821 },
+  'MA': { name: 'Massachusetts', geography_shape_id: 50000025, lng: -71.683535, lat: 42.036916 },
+  'MI': { name: 'Michigan', geography_shape_id: 50000026, lng: -86.270682, lat: 45.001091 },
+  'MN': { name: 'Minnesota', geography_shape_id: 50000027, lng: -93.361239, lat: 46.441920 },
+  'MS': { name: 'Mississippi', geography_shape_id: 50000028, lng: -89.398528, lat: 32.354668 },
+  'MO': { name: 'Missouri', geography_shape_id: 50000029, lng: -92.436836, lat: 38.304663 },
+  'MT': { name: 'Montana', geography_shape_id: 50000030, lng: -110.362566, lat: 46.879682 },
+  'NE': { name: 'Nebraska', geography_shape_id: 50000031, lng: -99.680902, lat: 41.500820 },
+  'NV': { name: 'Nevada', geography_shape_id: 50000032, lng: -117.022967, lat: 38.501850 },
+  'NH': { name: 'New Hampshire', geography_shape_id: 50000033, lng: -71.566109, lat: 44.001410 },
+  'NJ': { name: 'New Jersey', geography_shape_id: 50000034, lng: -74.724323, lat: 40.073132 },
+  'NM': { name: 'New Mexico', geography_shape_id: 50000035, lng: -105.870090, lat: 34.519940 },
+  'NY': { name: 'New York', geography_shape_id: 50000036, lng: -75.770041, lat: 42.746222 },
+  'NC': { name: 'North Carolina', geography_shape_id: 50000037, lng: -79.860970, lat: 35.170508 },
+  'ND': { name: 'North Dakota', geography_shape_id: 50000038, lng: -101.002012, lat: 47.551493 },
+  'OH': { name: 'Ohio', geography_shape_id: 50000039, lng: -82.669505, lat: 40.365278 },
+  'OK': { name: 'Oklahoma', geography_shape_id: 50000040, lng: -98.716714, lat: 35.309050 },
+  'OR': { name: 'Oregon', geography_shape_id: 50000041, lng: -120.583401, lat: 44.145591 },
+  'PA': { name: 'Pennsylvania', geography_shape_id: 50000042, lng: -77.604706, lat: 41.117936 },
+  'RI': { name: 'Rhode Island', geography_shape_id: 50000044, lng: -71.477429, lat: 41.580095 },
+  'SC': { name: 'South Carolina', geography_shape_id: 50000045, lng: -80.926615, lat: 33.605720 },
+  'SD': { name: 'South Dakota', geography_shape_id: 50000046, lng: -99.901813, lat: 43.969515 },
+  'TN': { name: 'Tennessee', geography_shape_id: 50000047, lng: -85.978696, lat: 35.830589 },
+  'TX': { name: 'Texas', geography_shape_id: 50000048, lng: -100.076843, lat: 31.168934 },
+  'UT': { name: 'Utah', geography_shape_id: 50000049, lng: -111.093731, lat: 39.320980 },
+  'VT': { name: 'Vermont', geography_shape_id: 50000050, lng: -72.577841, lat: 44.558803 },
+  'VA': { name: 'Virginia', geography_shape_id: 50000051, lng: -79.420915, lat: 38.003432 },
+  'WA': { name: 'Washington', geography_shape_id: 50000053, lng: -120.740139, lat: 47.400902 },
+  'WV': { name: 'West Virginia', geography_shape_id: 50000054, lng: -80.454903, lat: 38.597626 },
+  'WI': { name: 'Wisconsin', geography_shape_id: 50000055, lng: -89.616508, lat: 43.784440 },
+  'WY': { name: 'Wyoming', geography_shape_id: 50000056, lng: -107.290284, lat: 43.075968 }
+};
+
+// Build Privy URL for STATE-LEVEL search (searches entire state at once)
+// This is much faster than city-by-city and gets ALL properties in the state
+function buildPrivyStateUrl(stateCode, cacheBust = true) {
+  const stateInfo = STATE_INFO[stateCode];
+  if (!stateInfo) {
+    logPrivy.warn(`Unknown state: ${stateCode}, falling back to city search`);
+    return null;
+  }
+
+  const base = 'https://app.privy.pro/dashboard';
+  const params = new URLSearchParams({
+    // CRITICAL: Clear saved search first to prevent "Below Market" from being applied
+    id: '',
+    name: '',
+    saved_search: '',
+    update_history: 'true',
+    search_text: stateInfo.name,
+    location_type: 'state',
+    geography_shape_id: String(stateInfo.geography_shape_id),
+    lat: String(stateInfo.lat),
+    lng: String(stateInfo.lng),
+    zoom: '7',
+    project_type: 'buy_hold',
+    spread_type: 'umv',
+    spread: '50',
+    isLTRsearch: 'false',
+    preferred_only: 'false',
+    list_price_from: '20000',
+    list_price_to: '600000',
+    price_per_sqft_from: '0',
+    beds_from: '3',
+    sqft_from: '1000',
+    hoa: 'no',
+    basement: 'Any',
+    include_condo: 'false',
+    include_attached: 'false',
+    include_detached: 'true',
+    include_multi_family: 'false',
+    include_active: 'true',
+    include_under_contract: 'false',
+    include_sold: 'false',
+    include_pending: 'false',
+    date_range: 'all',
+    source: 'Any',
+    sort_by: 'days-on-market',
+    sort_dir: 'asc'
+  });
+
+  if (cacheBust) {
+    params.set('_t', Date.now().toString());
+  }
+  return `${base}?${params.toString()}`;
+}
+
 // Build Privy URL for a city - SAME EXACT parameters as working live-scrape
 // This URL includes ALL filters so we can navigate directly without using filter modal
 // CRITICAL: id=&name=&saved_search= MUST be first to clear any saved search like "Below Market"
@@ -1369,6 +1477,85 @@ await page.evaluate(() => {
               return; // Exit callback, try next city
             }
 
+            // ===== IMMEDIATE SAVE: Save addresses to ScrapedDeal RIGHT NOW (before slow agent extraction) =====
+            // This ensures addresses appear in "Pending AMV" immediately as they're fetched
+            // SERVER-SIDE FILTER: Price $20K-$600K (Privy filters are unreliable)
+            const MIN_PRICE = 20000;
+            const MAX_PRICE = 600000;
+
+            let immediateSaveCount = 0;
+            let skippedPrice = 0;
+            for (const prop of parsed) {
+              try {
+                const fullAddress_ci = prop.fullAddress.trim().toLowerCase();
+                const addressLine = prop.address || prop.fullAddress?.split(',')[0]?.trim();
+
+                // Validate state match
+                const addressParts = prop.fullAddress.split(',').map(p => p.trim());
+                const lastPart = addressParts[addressParts.length - 1] || '';
+                const stateMatch = lastPart.match(/\b([A-Z]{2})\b/);
+                const addressState = stateMatch ? stateMatch[1] : null;
+
+                if (addressState && addressState !== state) {
+                  continue; // Skip wrong state
+                }
+
+                if (!addressLine) continue;
+
+                const priceNum = toNumber(prop.price);
+
+                // SERVER-SIDE PRICE FILTER: Skip properties outside $20K-$600K range
+                if (priceNum && (priceNum < MIN_PRICE || priceNum > MAX_PRICE)) {
+                  skippedPrice++;
+                  continue; // Skip - price out of range
+                }
+
+                await ScrapedDeal.updateOne(
+                  { fullAddress_ci },
+                  {
+                    $set: {
+                      address: addressLine,
+                      fullAddress: prop.fullAddress,
+                      fullAddress_ci,
+                      city: prop.city || null,
+                      state: prop.state || state,
+                      zip: prop.zip || null,
+                      listingPrice: priceNum || null,
+                      beds: prop.beds || null,
+                      baths: prop.baths || null,
+                      sqft: prop.sqft || null,
+                      source: 'privy',
+                      scrapedAt: new Date(),
+                    },
+                    $setOnInsert: {
+                      amv: null,
+                      isDeal: false,
+                      agentName: null,
+                      agentEmail: null,
+                      agentPhone: null,
+                      brokerage: null,
+                    }
+                  },
+                  { upsert: true }
+                );
+                immediateSaveCount++;
+              } catch (e) {
+                // Non-fatal - will try again in main loop
+              }
+            }
+
+            if (immediateSaveCount > 0 || skippedPrice > 0) {
+              logPrivy.info(`⚡ IMMEDIATE SAVE: ${immediateSaveCount} addresses saved to Pending AMV`, {
+                city: cityName,
+                state,
+                total: parsed.length,
+                saved: immediateSaveCount,
+                skippedPrice: skippedPrice,
+                priceRange: `$${MIN_PRICE.toLocaleString()}-$${MAX_PRICE.toLocaleString()}`
+              });
+            }
+            // ===== END IMMEDIATE SAVE =====
+
             const normalized = [];
             for (const prop of parsed) {
               const priceNum = toNumber(prop.price);
@@ -1425,6 +1612,7 @@ await page.evaluate(() => {
 
             let urlSaved = 0;
             let skippedWrongState = 0;
+            let skippedPriceMain = 0;
             for (const prop of normalized) {
               // Check for abort signal before processing each property
               if (control.abort) {
@@ -1436,6 +1624,13 @@ await page.evaluate(() => {
                 if (!prop || !prop.fullAddress || typeof prop.fullAddress !== 'string') {
                   logPrivy.warn('Skipping invalid property', { fullAddress: prop?.fullAddress || null, state });
                   continue;
+                }
+
+                // SERVER-SIDE PRICE FILTER: Skip properties outside $20K-$600K range
+                const propPrice = prop.price || 0;
+                if (propPrice && (propPrice < MIN_PRICE || propPrice > MAX_PRICE)) {
+                  skippedPriceMain++;
+                  continue; // Skip - price out of range
                 }
 
                 // Validate that the address matches the expected state
@@ -1467,6 +1662,7 @@ await page.evaluate(() => {
                 }
 
                 // Also save to ScrapedDeal for Deals page (auto-calculates isDeal when AMV is added)
+                // This updates with agent info (if found) after the slow extraction
                 try {
                   const fullAddress_ci = prop.fullAddress.trim().toLowerCase();
                   const addressLine = prop.address || prop.fullAddress?.split(',')[0]?.trim();
@@ -1475,28 +1671,33 @@ await page.evaluate(() => {
                   if (!addressLine) {
                     logPrivy.warn('Skipping ScrapedDeal save - no valid address line', { fullAddress: prop.fullAddress });
                   } else {
+                    // Build update object - only include agent fields if we have data
+                    const updateSet = {
+                      address: addressLine,
+                      fullAddress: prop.fullAddress,
+                      fullAddress_ci,
+                      city: prop.city || null,
+                      state: prop.state || state,
+                      zip: prop.zip || null,
+                      listingPrice: prop.price || prop.listingPrice || null,
+                      beds: prop.beds || null,
+                      baths: prop.baths || null,
+                      sqft: prop.sqft || null,
+                      source: 'privy',
+                      scrapedAt: new Date(),
+                    };
+
+                    // Only update agent fields if we actually extracted agent info
+                    // (don't overwrite with null if extraction failed)
+                    if (prop.details?.agent_name) updateSet.agentName = prop.details.agent_name;
+                    if (prop.details?.agent_email) updateSet.agentEmail = prop.details.agent_email;
+                    if (prop.details?.agent_phone) updateSet.agentPhone = prop.details.agent_phone;
+                    if (prop.details?.brokerage) updateSet.brokerage = prop.details.brokerage;
+
                     const upsertResult = await ScrapedDeal.updateOne(
                       { fullAddress_ci },
                       {
-                        $set: {
-                          address: addressLine,
-                          fullAddress: prop.fullAddress,
-                          fullAddress_ci,
-                          city: prop.city || null,
-                          state: prop.state || state,
-                          zip: prop.zip || null,
-                          listingPrice: prop.price || prop.listingPrice || null,
-                          beds: prop.beds || null,
-                          baths: prop.baths || null,
-                          sqft: prop.sqft || null,
-                          // Save agent details from Privy
-                          agentName: prop.details?.agent_name || null,
-                          agentEmail: prop.details?.agent_email || null,
-                          agentPhone: prop.details?.agent_phone || null,
-                          brokerage: prop.details?.brokerage || null,
-                          source: 'privy',
-                          scrapedAt: new Date(),
-                        },
+                        $set: updateSet,
                         $setOnInsert: {
                           amv: null,
                           isDeal: false,
@@ -1560,9 +1761,11 @@ await page.evaluate(() => {
               saved: urlSaved,
               stateSaved,
               skippedWrongState,
+              skippedPriceFilter: skippedPriceMain,
               city: cityName,
               withAgentInfo: withAgent,
-              agentRate: normalized.length ? `${Math.round(withAgent / normalized.length * 100)}%` : '0%'
+              agentRate: normalized.length ? `${Math.round(withAgent / normalized.length * 100)}%` : '0%',
+              priceRange: `$${MIN_PRICE.toLocaleString()}-$${MAX_PRICE.toLocaleString()}`
             });
 
             // Track successful saves for this city
