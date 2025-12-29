@@ -86,6 +86,8 @@ const setCheckbox = async (page, selector, shouldBeChecked) => {
 };
 
 const applyFilters = async (page /*, browser */) => {
+  let filterFailures = 0; // Track how many filters failed
+
   // Open the filter modal
   try {
     await page.waitForSelector(filterButtonSelector, { timeout: 10000 });
@@ -110,6 +112,7 @@ const applyFilters = async (page /*, browser */) => {
     }
     if (!clicked) {
       console.log('⚠️ Could not find filter button, will try to apply filters via URL params');
+      filterFailures++;
     }
   }
 
@@ -128,8 +131,10 @@ const applyFilters = async (page /*, browser */) => {
   console.log('📋 Available inputs in filter modal:', JSON.stringify(inputDebug, null, 2));
 
   // Price range: $20,000 - $600,000
-  await findAndTypeValue(page, PRICE_FROM_SELECTORS, 20000);
-  await findAndTypeValue(page, PRICE_TO_SELECTORS, 600000);
+  const priceFromSet = await findAndTypeValue(page, PRICE_FROM_SELECTORS, 20000);
+  const priceToSet = await findAndTypeValue(page, PRICE_TO_SELECTORS, 600000);
+  if (!priceFromSet) filterFailures++;
+  if (!priceToSet) filterFailures++;
 
   // Beds: 3+ (using fallback selectors)
   await findAndTypeValue(page, BEDS_FROM_SELECTORS, 3);
@@ -276,7 +281,15 @@ const applyFilters = async (page /*, browser */) => {
 
   // Wait for search to execute and results to load
   await new Promise(r => setTimeout(r, 5000));
+
+  // Check if too many filters failed - signal need to retry
+  if (filterFailures >= 3) {
+    console.log(`❌ FILTER FAILURE: ${filterFailures} filters failed to apply. Need to close and retry.`);
+    return { success: false, failures: filterFailures };
+  }
+
   console.log('✅ Filters applied and search executed successfully');
+  return { success: true, failures: filterFailures };
 };
 
 export { applyFilters };

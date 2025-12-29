@@ -1227,10 +1227,56 @@ const scrapePropertiesV1 = async (page) => {
 
           // Apply filters first (this opens filter modal, sets values, clicks apply)
           L.info('Applying filters...');
+          let filterResult = { success: true, failures: 0 };
           try {
-            await applyFilters(page);
+            filterResult = await applyFilters(page) || { success: true, failures: 0 };
           } catch (e) {
             L.warn('Filter application failed (continuing)', { error: e?.message || String(e) });
+            filterResult = { success: false, failures: 99 };
+          }
+
+          // If filters failed, close tab and retry after 2 minutes
+          if (!filterResult.success || filterResult.failures >= 3) {
+            L.warn(`❌ FILTER FAILURE DETECTED (${filterResult.failures} failures). Closing tab and retrying in 2 minutes...`);
+            try {
+              await page.close();
+            } catch (closeErr) {
+              L.warn('Error closing page:', { error: closeErr?.message });
+            }
+
+            // Wait 2 minutes before retry
+            L.info('Waiting 2 minutes before retry...');
+            await sleep(120000);
+
+            // Open new tab and navigate back to Privy
+            L.info('Opening new tab for retry...');
+            const { initSharedBrowser, ensureVendorPageSetup } = await import('../../../utils/browser.js');
+            const browser = await initSharedBrowser();
+            page = await browser.newPage();
+            page.__df_name = 'privy';
+            await ensureVendorPageSetup(page, {
+              randomizeUA: true,
+              timeoutMs: 180000,
+              jitterViewport: true,
+              baseViewport: { width: 1366, height: 900 },
+            });
+            try { await page.setViewport({ width: 1947, height: 1029 }); } catch {}
+
+            // Navigate back to Privy dashboard
+            const retryUrl = 'https://app.privy.pro/dashboard?id=&name=&saved_search=&include_sold=false&include_active=true&include_pending=false&include_under_contract=false';
+            L.info(`Retrying with URL: ${retryUrl}`);
+            await page.goto(retryUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            await sleep(5000);
+
+            // Try filters again on retry
+            try {
+              filterResult = await applyFilters(page) || { success: true, failures: 0 };
+              if (!filterResult.success) {
+                L.warn('Filters still failing after retry, continuing anyway (server-side filter will catch bad prices)');
+              }
+            } catch (retryErr) {
+              L.warn('Filter retry also failed, continuing anyway', { error: retryErr?.message });
+            }
           }
 
           // Wait 10 seconds for filters to apply
