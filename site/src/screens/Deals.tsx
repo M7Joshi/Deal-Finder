@@ -1766,7 +1766,7 @@ const tdBase: React.CSSProperties = {
   borderBottom: '1px solid #e5e7eb',
   color: '#111827',
   verticalAlign: 'middle',
-  fontSize: '14px',
+  fontSize: '15px',
 };
 const tdR: React.CSSProperties = { ...tdBase, textAlign: 'right', whiteSpace: 'nowrap' };
 const tdL: React.CSSProperties = { ...tdBase, textAlign: 'left' };
