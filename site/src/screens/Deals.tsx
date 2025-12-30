@@ -337,20 +337,11 @@ export default function Deals() {
   // User's allowed states (from API response)
   const [userStates, setUserStates] = useState<string[] | 'all'>('all');
 
-  // State filter for deals table - synced with localStorage for cross-page sharing
-  const [filterState, setFilterState] = useState<string>(() => {
-    const saved = localStorage.getItem('selectedState');
-    return saved || 'all';
-  });
+  // State filter for deals table - always default to All States
+  const [filterState, setFilterState] = useState<string>('all');
   // Limit for deals table display - default to All
   const [displayLimit, setDisplayLimit] = useState<number>(99999);
 
-  // Sync state selection to localStorage when it changes
-  useEffect(() => {
-    if (filterState !== 'all') {
-      localStorage.setItem('selectedState', filterState);
-    }
-  }, [filterState]);
 
   // Summary totals for cards
   const [totals, setTotals] = useState<Totals>({ properties: 0, deals: 0, nonDeals: 0 });
@@ -944,10 +935,63 @@ const cleanAddress = (address?: string | null): string => {
 
   return (
     <div style={{ padding: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, flexWrap: 'wrap', gap: 12 }}>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#111827' }}>Deals</h2>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 14, color: '#6b7280' }}>Total: {rows.length}</div>
+          <Chip
+            label={automationRunning ? 'Running' : 'Stopped'}
+            color={automationRunning ? 'success' : 'default'}
+            size="small"
+          />
+          <Button
+            variant="contained"
+            onClick={handleStartAutomation}
+            disabled={automationLoading || automationRunning}
+            size="small"
+            sx={{
+              backgroundColor: '#22c55e',
+              '&:hover': { backgroundColor: '#16a34a' },
+              '&:disabled': { backgroundColor: '#9ca3af' },
+              textTransform: 'none',
+              fontWeight: 600,
+              px: 2,
+            }}
+          >
+            {automationLoading && !automationRunning ? 'Starting...' : 'Start'}
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleStopAutomation}
+            disabled={automationLoading || !automationRunning}
+            size="small"
+            sx={{
+              backgroundColor: '#ef4444',
+              '&:hover': { backgroundColor: '#dc2626' },
+              '&:disabled': { backgroundColor: '#9ca3af' },
+              textTransform: 'none',
+              fontWeight: 600,
+              px: 2,
+            }}
+          >
+            {automationLoading && automationRunning ? 'Stopping...' : 'Stop'}
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={checkAutomationStatus}
+            disabled={automationLoading}
+            size="small"
+            sx={{
+              borderColor: '#3b82f6',
+              color: '#3b82f6',
+              '&:hover': { borderColor: '#1d4ed8', backgroundColor: '#eff6ff' },
+              textTransform: 'none',
+              fontWeight: 600,
+              px: 2,
+            }}
+          >
+            Status
+          </Button>
         </div>
       </div>
 
@@ -1053,98 +1097,6 @@ const cleanAddress = (address?: string | null): string => {
         <Card title="Total Properties" value={totals.properties} />
         <Card title="Total Deals" value={totals.deals} />
         <Card title="Not Deals" value={totals.nonDeals} />
-      </div>
-
-      {/* Backend Automation Control */}
-      <div
-        style={{
-          background: '#fff',
-          border: '2px solid #3b82f6',
-          borderRadius: 12,
-          padding: 16,
-          marginBottom: 16,
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <div style={{ fontWeight: 700, color: '#1d4ed8', fontSize: 16 }}>
-            Backend Automation Service
-          </div>
-          <Chip
-            label={automationRunning ? 'Running' : 'Stopped'}
-            color={automationRunning ? 'success' : 'default'}
-            size="small"
-          />
-        </div>
-
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <Button
-            variant="contained"
-            onClick={handleStartAutomation}
-            disabled={automationLoading || automationRunning}
-            sx={{
-              backgroundColor: '#22c55e',
-              '&:hover': { backgroundColor: '#16a34a' },
-              '&:disabled': { backgroundColor: '#9ca3af' },
-              textTransform: 'none',
-              fontWeight: 600,
-              px: 3,
-              py: 1,
-            }}
-          >
-            {automationLoading && !automationRunning ? 'Starting...' : 'Start Automation'}
-          </Button>
-
-          <Button
-            variant="contained"
-            onClick={handleStopAutomation}
-            disabled={automationLoading || !automationRunning}
-            sx={{
-              backgroundColor: '#ef4444',
-              '&:hover': { backgroundColor: '#dc2626' },
-              '&:disabled': { backgroundColor: '#9ca3af' },
-              textTransform: 'none',
-              fontWeight: 600,
-              px: 3,
-              py: 1,
-            }}
-          >
-            {automationLoading && automationRunning ? 'Stopping...' : 'Stop Automation'}
-          </Button>
-
-          <Button
-            variant="outlined"
-            onClick={checkAutomationStatus}
-            disabled={automationLoading}
-            sx={{
-              borderColor: '#3b82f6',
-              color: '#3b82f6',
-              '&:hover': { borderColor: '#1d4ed8', backgroundColor: '#eff6ff' },
-              textTransform: 'none',
-              fontWeight: 600,
-              px: 2,
-            }}
-          >
-            Refresh Status
-          </Button>
-        </div>
-
-        {automationStatus && (
-          <div style={{
-            marginTop: 12,
-            padding: 10,
-            background: automationStatus.includes('❌') ? '#fef2f2' : '#f0fdf4',
-            border: `1px solid ${automationStatus.includes('❌') ? '#fecaca' : '#86efac'}`,
-            borderRadius: 8,
-            color: automationStatus.includes('❌') ? '#dc2626' : '#16a34a',
-            fontSize: 14,
-          }}>
-            {automationStatus}
-          </div>
-        )}
-
-        <div style={{ marginTop: 12, color: '#6b7280', fontSize: 13 }}>
-          Controls the backend automation worker that continuously fetches from Privy & Redfin, gets BofA valuations, and saves to database.
-        </div>
       </div>
 
       <div
