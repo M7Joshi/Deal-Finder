@@ -74,7 +74,7 @@ function Sidebar({ open, onClose, isAdmin, onLogout }) {
   const location = useLocation();
   return (
     <Box sx={{
-      width: 240,
+      width: 200,
       height: "100%",
       background: "lightgray",
       overflow: "hidden",
@@ -204,7 +204,7 @@ function Shell({ user, onLogout }) {
       {isMdUp ? (
         <Drawer variant="permanent" open
           PaperProps={{ sx: {
-            width: 240,
+            width: 200,
             borderRight: "1px solid rgba(255,255,255,.08)",
             bgcolor: "lightgray",
             overflow: "hidden",
@@ -217,7 +217,7 @@ function Shell({ user, onLogout }) {
       ) : (
         <Drawer open={open} onClose={() => setOpen(false)}
           PaperProps={{ sx: {
-            width: 240,
+            width: 200,
             bgcolor: "lightgray",
             overflow: "hidden",
             scrollbarWidth: "none",
@@ -234,7 +234,7 @@ function Shell({ user, onLogout }) {
       )}
 
       {/* Main content */}
-      <Box sx={{ ml: { md: "240px" }, p: 3 }}>
+      <Box sx={{ ml: { md: "200px" }, p: 2, overflowX: "hidden" }}>
         <Outlet />
       </Box>
     </Box>

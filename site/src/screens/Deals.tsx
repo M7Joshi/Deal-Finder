@@ -1762,11 +1762,12 @@ function Info({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 const tdBase: React.CSSProperties = {
-  padding: '14px',
+  padding: '10px 8px',
   borderBottom: '1px solid #eef2f7',
   color: '#111827',
   verticalAlign: 'top',
+  fontSize: '13px',
 };
 const tdR: React.CSSProperties = { ...tdBase, textAlign: 'right', whiteSpace: 'nowrap' };
 const tdL: React.CSSProperties = { ...tdBase, textAlign: 'left' };
-const tdLWide: React.CSSProperties = { ...tdL, minWidth: 260 };
+const tdLWide: React.CSSProperties = { ...tdL, minWidth: 180 };
