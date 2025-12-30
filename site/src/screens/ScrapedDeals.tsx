@@ -238,99 +238,6 @@ export default function ScrapedDeals() {
         </div>
       )}
 
-      {/* Auto Fetch Section */}
-      <div
-        style={{
-          background: '#fff',
-          border: '2px solid #22c55e',
-          borderRadius: 12,
-          padding: 16,
-          marginBottom: 16,
-        }}
-      >
-        <div style={{ fontWeight: 700, color: '#16a34a', marginBottom: 12, fontSize: 16 }}>
-          Auto Fetch (Privy + Redfin)
-        </div>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <FormControl size="small" sx={{ minWidth: 300 }}>
-            <InputLabel>Select States</InputLabel>
-            <Select
-              multiple
-              value={autoFetchStates}
-              onChange={(e) => setAutoFetchStates(typeof e.target.value === 'string' ? [e.target.value] : e.target.value)}
-              input={<OutlinedInput label="Select States" />}
-              renderValue={(selected) => selected.join(', ')}
-              MenuProps={{ PaperProps: { sx: { maxHeight: 400 } } }}
-            >
-              {US_STATES.map((s) => (
-                <MenuItem key={s.code} value={s.code}>
-                  <Checkbox checked={autoFetchStates.indexOf(s.code) > -1} />
-                  <ListItemText primary={`${s.code} - ${s.name}`} />
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-
-          <FormControl size="small" sx={{ minWidth: 180 }}>
-            <InputLabel>Addresses per Source</InputLabel>
-            <Select
-              value={autoFetchLimit}
-              label="Addresses per Source"
-              onChange={(e) => setAutoFetchLimit(Number(e.target.value))}
-            >
-              <MenuItem value={5}>5 per source</MenuItem>
-              <MenuItem value={10}>10 per source</MenuItem>
-              <MenuItem value={15}>15 per source</MenuItem>
-              <MenuItem value={20}>20 per source</MenuItem>
-              <MenuItem value={25}>25 per source</MenuItem>
-            </Select>
-          </FormControl>
-
-          <Button
-            variant="contained"
-            onClick={handleAutoFetch}
-            disabled={autoFetching || autoFetchStates.length === 0}
-            sx={{
-              backgroundColor: '#22c55e',
-              '&:hover': { backgroundColor: '#16a34a' },
-              '&:disabled': { backgroundColor: '#9ca3af' },
-              textTransform: 'none',
-              fontWeight: 600,
-              px: 4,
-              py: 1,
-            }}
-          >
-            {autoFetching ? 'Fetching...' : `Auto Fetch (${autoFetchStates.length} states)`}
-          </Button>
-        </div>
-
-        {/* Progress/Status */}
-        {autoFetching && (
-          <Box sx={{ mt: 2 }}>
-            <LinearProgress color="success" />
-          </Box>
-        )}
-        {autoFetchStatus && (
-          <div style={{
-            marginTop: 12,
-            padding: 10,
-            background: autoFetchStatus.startsWith('Error') ? '#fef2f2' : '#f0fdf4',
-            border: `1px solid ${autoFetchStatus.startsWith('Error') ? '#fecaca' : '#86efac'}`,
-            borderRadius: 8,
-            color: autoFetchStatus.startsWith('Error') ? '#dc2626' : '#16a34a',
-            fontSize: 14,
-          }}>
-            {autoFetchStatus}
-          </div>
-        )}
-
-        <div style={{ marginTop: 12, color: '#6b7280', fontSize: 13 }}>
-          Will fetch {autoFetchLimit} addresses from Privy + {autoFetchLimit} from Redfin per state, then auto-fetch BofA AMV and save to database.
-          <br />
-          Total expected: ~{autoFetchStates.length * autoFetchLimit * 2} addresses
-        </div>
-      </div>
-
       {/* Filters */}
       <div
         style={{
@@ -400,13 +307,6 @@ export default function ScrapedDeals() {
           Delete {sourceFilter || stateFilter ? 'Filtered' : 'All'}
         </Button>
       </div>
-
-      {/* Error */}
-      {error && (
-        <div style={{ padding: 16, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, marginBottom: 16, color: '#dc2626' }}>
-          {error}
-        </div>
-      )}
 
       {/* Loading */}
       {loading && (

@@ -342,8 +342,8 @@ export default function Deals() {
     const saved = localStorage.getItem('selectedState');
     return saved || 'all';
   });
-  // Limit for deals table display
-  const [displayLimit, setDisplayLimit] = useState<number>(50);
+  // Limit for deals table display - default to All
+  const [displayLimit, setDisplayLimit] = useState<number>(99999);
 
   // Sync state selection to localStorage when it changes
   useEffect(() => {
@@ -947,67 +947,7 @@ const cleanAddress = (address?: string | null): string => {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#111827' }}>Deals</h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {selectedRows.size > 0 && (
-            <div style={{ fontSize: 14, color: '#0ea5e9', fontWeight: 600 }}>
-              {selectedRows.size} selected
-            </div>
-          )}
           <div style={{ fontSize: 14, color: '#6b7280' }}>Total: {rows.length}</div>
-          <Button
-            variant="contained"
-            size="small"
-            onClick={() => {
-              // Store all displayed addresses in localStorage
-              const allDisplayedAddresses = displayedRows
-                .map(r => r.fullAddress || r.address)
-                .filter(Boolean);
-              console.log('[Deals] Storing addresses:', allDisplayedAddresses);
-              localStorage.setItem('agentFetcherSelectedAddresses', JSON.stringify(allDisplayedAddresses));
-              console.log('[Deals] localStorage after set:', localStorage.getItem('agentFetcherSelectedAddresses'));
-              // Navigate to Agent Fetcher
-              navigate('/agent-fetcher');
-            }}
-            sx={{
-              backgroundColor: '#22c55e',
-              '&:hover': { backgroundColor: '#16a34a' },
-              textTransform: 'none',
-              fontWeight: 600
-            }}
-          >
-            View All {displayedRows.length} in Agent Fetcher
-          </Button>
-          {selectedRows.size > 0 && (
-            <Button
-              variant="contained"
-              size="small"
-              onClick={() => {
-                // Store selected addresses in localStorage
-                const selectedAddresses = rows
-                  .filter(r => selectedRows.has(getId(r)))
-                  .map(r => r.fullAddress || r.address)
-                  .filter(Boolean);
-                localStorage.setItem('agentFetcherSelectedAddresses', JSON.stringify(selectedAddresses));
-                // Navigate to Agent Fetcher
-                navigate('/agent-fetcher');
-              }}
-              sx={{
-                backgroundColor: '#0ea5e9',
-                '&:hover': { backgroundColor: '#0284c7' },
-                textTransform: 'none',
-                fontWeight: 600
-              }}
-            >
-              View Selected ({selectedRows.size}) in Agent Fetcher
-            </Button>
-          )}
-          <Button
-            variant="outlined"
-            size="small"
-            onClick={() => { loadDeals(); loadSummary(); }}
-            sx={{ textTransform: 'none' }}
-          >
-            Refresh
-          </Button>
         </div>
       </div>
 
@@ -1207,99 +1147,6 @@ const cleanAddress = (address?: string | null): string => {
         </div>
       </div>
 
-      {/* Auto Fetch Section */}
-      <div
-        style={{
-          background: '#fff',
-          border: '2px solid #22c55e',
-          borderRadius: 12,
-          padding: 16,
-          marginBottom: 16,
-        }}
-      >
-        <div style={{ fontWeight: 700, color: '#16a34a', marginBottom: 12, fontSize: 16 }}>
-          Auto Fetch (Privy + Redfin)
-        </div>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <FormControl size="small" sx={{ minWidth: 300 }}>
-            <InputLabel>Select States</InputLabel>
-            <Select
-              multiple
-              value={autoFetchStates}
-              onChange={(e) => setAutoFetchStates(typeof e.target.value === 'string' ? [e.target.value] : e.target.value)}
-              input={<OutlinedInput label="Select States" />}
-              renderValue={(selected) => selected.join(', ')}
-              MenuProps={{ PaperProps: { sx: { maxHeight: 400 } } }}
-            >
-              {US_STATES.map((s) => (
-                <MenuItem key={s.code} value={s.code}>
-                  <Checkbox checked={autoFetchStates.indexOf(s.code) > -1} />
-                  <ListItemText primary={`${s.code} - ${s.name}`} />
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-
-          <FormControl size="small" sx={{ minWidth: 180 }}>
-            <InputLabel>Addresses per Source</InputLabel>
-            <Select
-              value={autoFetchLimit}
-              label="Addresses per Source"
-              onChange={(e) => setAutoFetchLimit(Number(e.target.value))}
-            >
-              <MenuItem value={5}>5 per source</MenuItem>
-              <MenuItem value={10}>10 per source</MenuItem>
-              <MenuItem value={15}>15 per source</MenuItem>
-              <MenuItem value={20}>20 per source</MenuItem>
-              <MenuItem value={25}>25 per source</MenuItem>
-            </Select>
-          </FormControl>
-
-          <Button
-            variant="contained"
-            onClick={handleAutoFetch}
-            disabled={autoFetching || autoFetchStates.length === 0}
-            sx={{
-              backgroundColor: '#22c55e',
-              '&:hover': { backgroundColor: '#16a34a' },
-              '&:disabled': { backgroundColor: '#9ca3af' },
-              textTransform: 'none',
-              fontWeight: 600,
-              px: 4,
-              py: 1,
-            }}
-          >
-            {autoFetching ? 'Fetching...' : `Auto Fetch (${autoFetchStates.length} states)`}
-          </Button>
-        </div>
-
-        {/* Progress/Status */}
-        {autoFetching && (
-          <Box sx={{ mt: 2 }}>
-            <LinearProgress color="success" />
-          </Box>
-        )}
-        {autoFetchStatus && (
-          <div style={{
-            marginTop: 12,
-            padding: 10,
-            background: autoFetchStatus.startsWith('Error') ? '#fef2f2' : '#f0fdf4',
-            border: `1px solid ${autoFetchStatus.startsWith('Error') ? '#fecaca' : '#86efac'}`,
-            borderRadius: 8,
-            color: autoFetchStatus.startsWith('Error') ? '#dc2626' : '#16a34a',
-            fontSize: 14,
-          }}>
-            {autoFetchStatus}
-          </div>
-        )}
-
-        <div style={{ marginTop: 12, color: '#6b7280', fontSize: 13 }}>
-          Will fetch {autoFetchLimit} addresses from Privy + {autoFetchLimit} from Redfin per state, then auto-fetch BofA AMV and save to database.
-          <br />
-          Total expected: ~{autoFetchStates.length * autoFetchLimit * 2} addresses
-        </div>
-      </div>
-
       <div
         style={{
           overflowX: 'auto',
@@ -1312,31 +1159,6 @@ const cleanAddress = (address?: string | null): string => {
         <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
           <thead>
             <tr style={{ background: '#111827', color: '#fff' }}>
-              <th
-                style={{
-                  textAlign: 'center',
-                  padding: '12px 14px',
-                  fontSize: 12,
-                  letterSpacing: 0.4,
-                  textTransform: 'uppercase',
-                  borderBottom: '1px solid rgba(255,255,255,0.12)',
-                  position: 'sticky',
-                  top: 0,
-                  zIndex: 1,
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                <Checkbox
-                  checked={selectedRows.size === displayedRows.length && displayedRows.length > 0}
-                  indeterminate={selectedRows.size > 0 && selectedRows.size < displayedRows.length}
-                  onChange={toggleAllRows}
-                  sx={{
-                    color: '#fff',
-                    '&.Mui-checked': { color: '#fff' },
-                    '&.MuiCheckbox-indeterminate': { color: '#fff' },
-                  }}
-                />
-              </th>
               {[
                 'Full address',
                 'L.P',
@@ -1403,18 +1225,24 @@ const cleanAddress = (address?: string | null): string => {
               return (
                 <React.Fragment key={r._id || r.prop_id || (r.fullAddress || r.address)}>
                   <tr style={{ background: zebra }}>
-                    <td style={{ ...tdBase, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
-                      <Checkbox
-                        checked={selectedRows.has(id)}
-                        onChange={() => toggleRowSelection(id)}
-                        sx={{
-                          color: '#111827',
-                          '&.Mui-checked': { color: '#0ea5e9' },
-                        }}
-                      />
-                    </td>
                     <td style={{ ...tdLWide, cursor: 'pointer' }} onClick={() => { setSelected(r); setDetailTab('details'); }}>
-                      <div style={{ fontWeight: 600 }}>{addr || '—'}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          width: 18,
+                          height: 18,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          borderRadius: 4,
+                          backgroundColor: r.source === 'privy' ? '#7c3aed' : r.source === 'redfin' ? '#dc2626' : '#6b7280',
+                          color: '#fff',
+                        }}>
+                          {r.source === 'privy' ? 'P' : r.source === 'redfin' ? 'R' : '?'}
+                        </span>
+                        <span style={{ fontWeight: 600 }}>{addr || '—'}</span>
+                      </div>
                     </td>
                     <td style={tdR}>{fmt(lp)}</td>
                     <td style={tdR}>{fmt(lp80Display)}</td>

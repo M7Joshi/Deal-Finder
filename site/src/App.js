@@ -15,7 +15,7 @@ import PrivyFetcher from "./screens/PrivyFetcher.tsx";
 import RedfinFetcher from "./screens/RedfinFetcher.tsx";
 import BofaViewer from "./screens/BofaViewer.tsx";
 import ScrapedDeals from "./screens/ScrapedDeals.tsx";
-import AgentFetcher from "./screens/AgentFetcher.tsx";
+// import AgentFetcher from "./screens/AgentFetcher.tsx"; // Commented out - can enable later
 import ManageSubadmins from "./screens/ManageSubadmins.tsx";
 import PendingAMV from "./screens/PendingAMV.tsx";
 import Login from "./components/Login/Login.tsx";
@@ -66,7 +66,7 @@ const navItems = [
   { label: "Privy Fetcher", to: "/privy-fetcher" },  // Everyone can see this
   { label: "Redfin Fetcher", to: "/redfin-fetcher" },  // Everyone can see this
   { label: "BofA Viewer", to: "/bofa-viewer" },  // Everyone can see this
-  { label: "Agent Fetcher", to: "/agent-fetcher" },  // Everyone can see this
+  // { label: "Agent Fetcher", to: "/agent-fetcher" },  // Commented out - can enable later
   { label: "Users", to: "/users", adminOnly: true },
 ];
 
@@ -290,7 +290,7 @@ export default function App() {
             <Route path="privy-fetcher" element={<PrivyFetcher />} />
             <Route path="redfin-fetcher" element={<RedfinFetcher />} />
             <Route path="bofa-viewer" element={<BofaViewer />} />
-            <Route path="agent-fetcher" element={<AgentFetcher />} />
+            {/* <Route path="agent-fetcher" element={<AgentFetcher />} /> */}{/* Commented out - can enable later */}
             {/* Admin-only routes */}
             <Route path="manage-subadmins" element={
               (user?.isAdmin || user?.role === "admin") ? <ManageSubadmins /> : <Navigate to="/deals" replace />
