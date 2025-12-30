@@ -1762,10 +1762,10 @@ function Info({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 const tdBase: React.CSSProperties = {
-  padding: '8px 6px',
-  borderBottom: '1px solid #eef2f7',
+  padding: '12px 6px',
+  borderBottom: '1px solid #e5e7eb',
   color: '#111827',
-  verticalAlign: 'top',
+  verticalAlign: 'middle',
   fontSize: '14px',
 };
 const tdR: React.CSSProperties = { ...tdBase, textAlign: 'right', whiteSpace: 'nowrap' };
