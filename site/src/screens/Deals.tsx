@@ -6,7 +6,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Button, Stack, Chip, Snackbar, Alert, TextField, Tabs, Tab,
   FormControl, InputLabel, Select, MenuItem, Checkbox, ListItemText, OutlinedInput,
-  LinearProgress, Box,
+  LinearProgress, Box, useMediaQuery, useTheme,
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { apiFetch, startService, stopService, getServiceStatus } from '../helpers';
@@ -222,6 +222,9 @@ const dedupeByKey = <T,>(items: T[], keyFn: (x: T) => string) => {
 
 export default function Deals() {
   const navigate = useNavigate();
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm')); // < 600px
+  const isTablet = useMediaQuery(theme.breakpoints.down('md')); // < 900px
   const REFRESH_MS = 3 * 60 * 1000; // 3 minutes
   const MIN_BEDS = 3; // hide anything below this count
   const [rows, setRows] = useState<Row[]>([]);
@@ -933,12 +936,25 @@ const cleanAddress = (address?: string | null): string => {
       ? userStates.join(', ')
       : 'No states assigned';
 
+  // Responsive table cell styles
+  const cellPadding = isMobile ? '8px 4px' : '12px 6px';
+  const cellFontSize = isMobile ? '13px' : '15px';
+  const tdBaseResponsive: React.CSSProperties = {
+    padding: cellPadding,
+    borderBottom: '1px solid #e5e7eb',
+    color: '#111827',
+    verticalAlign: 'middle',
+    fontSize: cellFontSize,
+  };
+  const tdRResponsive: React.CSSProperties = { ...tdBaseResponsive, textAlign: 'right', whiteSpace: 'nowrap' };
+  const tdLWideResponsive: React.CSSProperties = { ...tdBaseResponsive, textAlign: 'left', minWidth: isMobile ? 120 : 160 };
+
   return (
-    <div style={{ padding: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, flexWrap: 'wrap', gap: 12 }}>
-        <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#111827' }}>Deals</h2>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <div style={{ fontSize: 14, color: '#6b7280' }}>Total: {rows.length}</div>
+    <div style={{ padding: isMobile ? 12 : 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+        <h2 style={{ margin: 0, fontSize: isMobile ? 18 : 22, fontWeight: 800, color: '#111827' }}>Deals</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: isMobile ? 12 : 14, color: '#6b7280' }}>Total: {rows.length}</div>
           <Chip
             label={automationRunning ? 'Running' : 'Stopped'}
             color={automationRunning ? 'success' : 'default'}
@@ -955,10 +971,11 @@ const cleanAddress = (address?: string | null): string => {
               '&:disabled': { backgroundColor: '#9ca3af' },
               textTransform: 'none',
               fontWeight: 600,
-              px: 2,
+              px: isMobile ? 1 : 2,
+              fontSize: isMobile ? 12 : 14,
             }}
           >
-            {automationLoading && !automationRunning ? 'Starting...' : 'Start'}
+            {automationLoading && !automationRunning ? '...' : 'Start'}
           </Button>
           <Button
             variant="contained"
@@ -971,27 +988,30 @@ const cleanAddress = (address?: string | null): string => {
               '&:disabled': { backgroundColor: '#9ca3af' },
               textTransform: 'none',
               fontWeight: 600,
-              px: 2,
+              px: isMobile ? 1 : 2,
+              fontSize: isMobile ? 12 : 14,
             }}
           >
-            {automationLoading && automationRunning ? 'Stopping...' : 'Stop'}
+            {automationLoading && automationRunning ? '...' : 'Stop'}
           </Button>
-          <Button
-            variant="outlined"
-            onClick={checkAutomationStatus}
-            disabled={automationLoading}
-            size="small"
-            sx={{
-              borderColor: '#3b82f6',
-              color: '#3b82f6',
-              '&:hover': { borderColor: '#1d4ed8', backgroundColor: '#eff6ff' },
-              textTransform: 'none',
-              fontWeight: 600,
-              px: 2,
-            }}
-          >
-            Status
-          </Button>
+          {!isMobile && (
+            <Button
+              variant="outlined"
+              onClick={checkAutomationStatus}
+              disabled={automationLoading}
+              size="small"
+              sx={{
+                borderColor: '#3b82f6',
+                color: '#3b82f6',
+                '&:hover': { borderColor: '#1d4ed8', backgroundColor: '#eff6ff' },
+                textTransform: 'none',
+                fontWeight: 600,
+                px: 2,
+              }}
+            >
+              Status
+            </Button>
+          )}
         </div>
       </div>
 
@@ -1013,17 +1033,18 @@ const cleanAddress = (address?: string | null): string => {
         style={{
           background: '#fff',
           border: '1px solid #e5e7eb',
-          borderRadius: 12,
-          padding: 16,
-          marginBottom: 16,
+          borderRadius: isMobile ? 8 : 12,
+          padding: isMobile ? 12 : 16,
+          marginBottom: isMobile ? 12 : 16,
           boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
         }}
       >
-        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: isMobile ? 8 : 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <FormControl
             size="small"
             sx={{
-              minWidth: 200,
+              minWidth: isMobile ? 140 : 200,
+              flex: isMobile ? '1 1 140px' : 'none',
               '& .MuiOutlinedInput-root': {
                 color: '#000',
                 '& fieldset': { borderColor: '#000' },
@@ -1102,13 +1123,14 @@ const cleanAddress = (address?: string | null): string => {
       <div
         style={{
           overflowX: 'auto',
-          borderRadius: 12,
+          borderRadius: isMobile ? 8 : 12,
           border: '1px solid #e5e7eb',
           background: '#fff',
           boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+          WebkitOverflowScrolling: 'touch',
         }}
       >
-        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
+        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: isMobile ? 800 : 'auto' }}>
           <thead>
             <tr style={{ background: '#111827', color: '#fff' }}>
               {[
@@ -1127,8 +1149,8 @@ const cleanAddress = (address?: string | null): string => {
                   key={h + i}
                   style={{
                     textAlign: i === 0 ? 'left' : 'right',
-                    padding: '10px 6px',
-                    fontSize: 11,
+                    padding: isMobile ? '8px 4px' : '10px 6px',
+                    fontSize: isMobile ? 10 : 11,
                     letterSpacing: 0.3,
                     textTransform: 'uppercase',
                     borderBottom: '1px solid rgba(255,255,255,0.12)',
@@ -1177,23 +1199,23 @@ const cleanAddress = (address?: string | null): string => {
               return (
                 <React.Fragment key={r._id || r.prop_id || (r.fullAddress || r.address)}>
                   <tr style={{ background: zebra }}>
-                    <td style={{ ...tdLWide, cursor: 'pointer' }} onClick={() => { setSelected(r); setDetailTab('details'); }}>
+                    <td style={{ ...tdLWideResponsive, cursor: 'pointer' }} onClick={() => { setSelected(r); setDetailTab('details'); }}>
                       <span style={{ fontWeight: 600 }}>{addr || '—'}</span>
                       <span style={{
-                        marginLeft: 8,
-                        fontSize: 11,
+                        marginLeft: isMobile ? 4 : 8,
+                        fontSize: isMobile ? 10 : 11,
                         fontWeight: 600,
                         color: r.source === 'privy' ? '#7c3aed' : r.source === 'redfin' ? '#dc2626' : '#6b7280',
                       }}>
                         ({r.source === 'privy' ? 'P' : r.source === 'redfin' ? 'R' : '?'})
                       </span>
                     </td>
-                    <td style={tdR}>{fmt(lp)}</td>
-                    <td style={tdR}>{fmt(lp80Display)}</td>
-                    <td style={tdR}>{fmt(r.amv)}</td>
-                    <td style={tdR}>{fmt(amv40Display)}</td>
-                    <td style={tdR}>{fmt(amv30Display)}</td>
-                    <td style={tdR}>{fmt(
+                    <td style={tdRResponsive}>{fmt(lp)}</td>
+                    <td style={tdRResponsive}>{fmt(lp80Display)}</td>
+                    <td style={tdRResponsive}>{fmt(r.amv)}</td>
+                    <td style={tdRResponsive}>{fmt(amv40Display)}</td>
+                    <td style={tdRResponsive}>{fmt(amv30Display)}</td>
+                    <td style={tdRResponsive}>{fmt(
                       (() => {
                         const a = typeof lp80Display === 'number' ? lp80Display : NaN;
                         const b = typeof amv40Display === 'number' ? amv40Display : NaN;
@@ -1203,7 +1225,7 @@ const cleanAddress = (address?: string | null): string => {
                         return null;
                       })()
                     )}</td>
-                    <td style={tdR}>
+                    <td style={tdRResponsive}>
                       {hasAgentInfo ? (
                         <Button
                           size="small"
@@ -1214,32 +1236,35 @@ const cleanAddress = (address?: string | null): string => {
                           }}
                           sx={{
                             textTransform: 'none',
+                            fontSize: isMobile ? 11 : 14,
+                            px: isMobile ? 1 : 2,
                             backgroundColor: isAgentExpanded ? '#7c3aed' : undefined,
                             '&:hover': { backgroundColor: isAgentExpanded ? '#6d28d9' : undefined },
                           }}
                         >
-                          {isAgentExpanded ? 'Hide Agent' : 'View Agent'}
+                          {isAgentExpanded ? 'Hide' : 'View'}
                         </Button>
                       ) : (
-                        <span style={{ color: '#9ca3af', fontSize: 13 }}>No agent</span>
+                        <span style={{ color: '#9ca3af', fontSize: isMobile ? 11 : 13 }}>—</span>
                       )}
                     </td>
-                    <td style={tdR}>
+                    <td style={tdRResponsive}>
                       <Chip
                         size="small"
-                        label={emailStatus ? 'SENT' : 'UNSENT'}
+                        label={emailStatus ? 'SENT' : '—'}
                         color={emailStatus ? 'success' : 'default'}
                         variant={emailStatus ? 'filled' : 'outlined'}
-                        sx={
-                          emailStatus
-                            ? undefined
-                            : { color: '#111827', borderColor: '#9ca3af', bgcolor: 'transparent' }
-                        }
+                        sx={{
+                          fontSize: isMobile ? 10 : 12,
+                          ...(emailStatus
+                            ? {}
+                            : { color: '#111827', borderColor: '#9ca3af', bgcolor: 'transparent' })
+                        }}
                       />
                     </td>
-                    <td style={{ ...tdR, whiteSpace: 'nowrap' }}>
-                      <Button size="small" variant="outlined" onClick={(ev) => { ev.stopPropagation(); openEdit(r); }} sx={{ mr: 1 }}>Edit</Button>
-                      <Button size="small" color="error" variant="outlined" onClick={(ev) => { ev.stopPropagation(); handleDelete(r); }}>Delete</Button>
+                    <td style={{ ...tdRResponsive, whiteSpace: 'nowrap' }}>
+                      <Button size="small" variant="outlined" onClick={(ev) => { ev.stopPropagation(); openEdit(r); }} sx={{ mr: isMobile ? 0.5 : 1, fontSize: isMobile ? 11 : 14, px: isMobile ? 1 : 2 }}>Edit</Button>
+                      {!isMobile && <Button size="small" color="error" variant="outlined" onClick={(ev) => { ev.stopPropagation(); handleDelete(r); }}>Delete</Button>}
                     </td>
                   </tr>
                   {/* Expandable Agent Details Row */}
