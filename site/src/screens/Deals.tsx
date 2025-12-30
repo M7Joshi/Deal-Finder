@@ -1178,23 +1178,15 @@ const cleanAddress = (address?: string | null): string => {
                 <React.Fragment key={r._id || r.prop_id || (r.fullAddress || r.address)}>
                   <tr style={{ background: zebra }}>
                     <td style={{ ...tdLWide, cursor: 'pointer' }} onClick={() => { setSelected(r); setDetailTab('details'); }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{
-                          fontSize: 11,
-                          fontWeight: 700,
-                          width: 18,
-                          height: 18,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          borderRadius: 4,
-                          backgroundColor: r.source === 'privy' ? '#7c3aed' : r.source === 'redfin' ? '#dc2626' : '#6b7280',
-                          color: '#fff',
-                        }}>
-                          {r.source === 'privy' ? 'P' : r.source === 'redfin' ? 'R' : '?'}
-                        </span>
-                        <span style={{ fontWeight: 600 }}>{addr || '—'}</span>
-                      </div>
+                      <span style={{ fontWeight: 600 }}>{addr || '—'}</span>
+                      <span style={{
+                        marginLeft: 8,
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: r.source === 'privy' ? '#7c3aed' : r.source === 'redfin' ? '#dc2626' : '#6b7280',
+                      }}>
+                        ({r.source === 'privy' ? 'P' : r.source === 'redfin' ? 'R' : '?'})
+                      </span>
                     </td>
                     <td style={tdR}>{fmt(lp)}</td>
                     <td style={tdR}>{fmt(lp80Display)}</td>
