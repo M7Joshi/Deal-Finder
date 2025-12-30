@@ -1112,24 +1112,24 @@ const cleanAddress = (address?: string | null): string => {
           <thead>
             <tr style={{ background: '#111827', color: '#fff' }}>
               {[
-                'Full address',
-                'L.P',
-                'L.P 80%',
+                'Address',
+                'LP',
+                '80%',
                 'AMV',
-                'AMV 40%',
-                'AMV 30%',
-                'Offer amount',
+                '40%',
+                '30%',
+                'Offer',
                 'Agent',
-                'Email status',
-                'Actions',
+                'Email',
+                '',
               ].map((h, i) => (
                 <th
-                  key={h}
+                  key={h + i}
                   style={{
                     textAlign: i === 0 ? 'left' : 'right',
-                    padding: '12px 14px',
-                    fontSize: 12,
-                    letterSpacing: 0.4,
+                    padding: '10px 6px',
+                    fontSize: 11,
+                    letterSpacing: 0.3,
                     textTransform: 'uppercase',
                     borderBottom: '1px solid rgba(255,255,255,0.12)',
                     position: 'sticky',
@@ -1762,12 +1762,11 @@ function Info({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 const tdBase: React.CSSProperties = {
-  padding: '10px 8px',
+  padding: '8px 6px',
   borderBottom: '1px solid #eef2f7',
   color: '#111827',
   verticalAlign: 'top',
-  fontSize: '13px',
 };
 const tdR: React.CSSProperties = { ...tdBase, textAlign: 'right', whiteSpace: 'nowrap' };
 const tdL: React.CSSProperties = { ...tdBase, textAlign: 'left' };
-const tdLWide: React.CSSProperties = { ...tdL, minWidth: 180 };
+const tdLWide: React.CSSProperties = { ...tdL, minWidth: 160 };
