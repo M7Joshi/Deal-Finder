@@ -1201,14 +1201,6 @@ const cleanAddress = (address?: string | null): string => {
                   <tr style={{ background: zebra }}>
                     <td style={{ ...tdLWideResponsive, cursor: 'pointer' }} onClick={() => { setSelected(r); setDetailTab('details'); }}>
                       <span style={{ fontWeight: 600 }}>{addr || '—'}</span>
-                      <span style={{
-                        marginLeft: isMobile ? 4 : 8,
-                        fontSize: isMobile ? 10 : 11,
-                        fontWeight: 600,
-                        color: r.source === 'privy' ? '#7c3aed' : r.source === 'redfin' ? '#dc2626' : '#6b7280',
-                      }}>
-                        ({r.source === 'privy' ? 'P' : r.source === 'redfin' ? 'R' : '?'})
-                      </span>
                     </td>
                     <td style={tdRResponsive}>{fmt(lp)}</td>
                     <td style={tdRResponsive}>{fmt(lp80Display)}</td>
