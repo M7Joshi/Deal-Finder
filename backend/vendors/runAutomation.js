@@ -720,67 +720,75 @@ async function runBofaForSource(source, concurrency) {
   log.success(`BofA-${source}: Complete. Total - Success: ${totalSuccess}, NoData: ${totalNoData}, Failed: ${totalFail}`);
 }
 
-// Run Privy scraper with interleaved BofA - triggers BofA every 500 addresses
-// 2 min break before BofA, 3 min break after cycle
+// Privy scraper - scrapes continuously, triggers BofA when pending >= 500
+// BofA runs in background while scraping continues
 async function runPrivyWithBofA() {
   if (privyRunning) return;
   privyRunning = true;
   privyAddressCount = 0;
 
   try {
-    log.info(`PARALLEL-PRIVY: Starting (${BOFA_TRIGGER_BATCH} addresses -> 2min break -> BofA ${BOFA_PRIVY_CONCURRENCY} browsers -> 3min break)`);
+    log.info(`PARALLEL-PRIVY: Starting (max ${BOFA_TRIGGER_BATCH} pending -> triggers BofA ${BOFA_PRIVY_CONCURRENCY} browsers)`);
 
-    // Run scraping and BofA in interleaved batches
-    let cycleCount = 0;
     while (!control.abort) {
-      cycleCount++;
-      log.info(`PARALLEL-PRIVY: Cycle ${cycleCount} - Scraping up to ${BOFA_TRIGGER_BATCH} addresses...`);
-
-      // Reset batch counter for this cycle
-      const startCount = await ScrapedDeal.countDocuments({ source: 'privy' }).catch(() => 0);
-
-      // Run Privy scraper (it will stop after SCRAPE_BATCH_LIMIT addresses due to shouldPauseScraping)
-      await runAutomation(new Set(['privy']));
-
-      // Check how many new addresses were added
-      const endCount = await ScrapedDeal.countDocuments({ source: 'privy' }).catch(() => 0);
-      const newAddresses = endCount - startCount;
-      privyAddressCount += newAddresses;
-
-      log.info(`PARALLEL-PRIVY: Scraped ${newAddresses} new addresses (total: ${privyAddressCount})`);
-
-      // Count pending AMV for Privy
+      // Check pending AMV for Privy
       const pendingPrivyAMV = await ScrapedDeal.countDocuments({
         source: 'privy',
         $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
       }).catch(() => 0);
 
-      if (pendingPrivyAMV > 0) {
-        // 2 minute break before BofA
-        log.info(`PARALLEL-PRIVY: Taking ${BREAK_BEFORE_BOFA_MS / 1000}s break before BofA...`);
+      log.info(`PARALLEL-PRIVY: Pending AMV: ${pendingPrivyAMV}/${BOFA_TRIGGER_BATCH}`);
+
+      // If pending >= 500, trigger BofA and wait for it to finish before scraping more
+      if (pendingPrivyAMV >= BOFA_TRIGGER_BATCH) {
+        log.info(`PARALLEL-PRIVY: Hit ${BOFA_TRIGGER_BATCH} pending! Taking ${BREAK_BEFORE_BOFA_MS / 1000}s break then running BofA...`);
         await new Promise(r => setTimeout(r, BREAK_BEFORE_BOFA_MS));
 
-        log.info(`PARALLEL-PRIVY: Running BofA for ${pendingPrivyAMV} addresses (${BOFA_PRIVY_CONCURRENCY} browsers)...`);
         privyBofaRunning = true;
         await runBofaForSource('privy', BOFA_PRIVY_CONCURRENCY);
         privyBofaRunning = false;
+
+        // 3 min break after BofA completes
+        log.info(`PARALLEL-PRIVY: BofA done. Taking ${BREAK_AFTER_CYCLE_MS / 1000}s break...`);
+        await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
+        continue;
       }
 
-      // Check if scraper has more work or if it finished the cycle
-      if (newAddresses === 0) {
-        log.info('PARALLEL-PRIVY: No new addresses scraped, cycle complete');
-        break;
-      }
+      // Scrape more addresses (will stop when batch limit reached)
+      log.info(`PARALLEL-PRIVY: Scraping addresses...`);
+      const startCount = await ScrapedDeal.countDocuments({ source: 'privy' }).catch(() => 0);
 
-      // 3 minute break after cycle completes
-      log.info(`PARALLEL-PRIVY: Taking ${BREAK_AFTER_CYCLE_MS / 1000}s break after cycle...`);
-      await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
-
-      // Reset batch counter for next iteration
       resetBatchCounter();
+      await runAutomation(new Set(['privy']));
+
+      const endCount = await ScrapedDeal.countDocuments({ source: 'privy' }).catch(() => 0);
+      const newAddresses = endCount - startCount;
+      privyAddressCount += newAddresses;
+
+      log.info(`PARALLEL-PRIVY: Scraped ${newAddresses} new addresses (total session: ${privyAddressCount})`);
+
+      // If no new addresses, scraper finished its cycle
+      if (newAddresses === 0) {
+        // Process any remaining pending
+        const remaining = await ScrapedDeal.countDocuments({
+          source: 'privy',
+          $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+        }).catch(() => 0);
+
+        if (remaining > 0) {
+          log.info(`PARALLEL-PRIVY: Cycle done, processing ${remaining} remaining addresses...`);
+          await new Promise(r => setTimeout(r, BREAK_BEFORE_BOFA_MS));
+          privyBofaRunning = true;
+          await runBofaForSource('privy', BOFA_PRIVY_CONCURRENCY);
+          privyBofaRunning = false;
+        }
+
+        log.info(`PARALLEL-PRIVY: Taking ${BREAK_AFTER_CYCLE_MS / 1000}s break before next cycle...`);
+        await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
+      }
     }
 
-    log.success(`PARALLEL-PRIVY: Complete. Total addresses scraped: ${privyAddressCount}`);
+    log.success(`PARALLEL-PRIVY: Complete. Total: ${privyAddressCount}`);
   } catch (e) {
     log.error('PARALLEL-PRIVY: Error', { error: e?.message });
   } finally {
@@ -789,67 +797,75 @@ async function runPrivyWithBofA() {
   }
 }
 
-// Run Redfin scraper with interleaved BofA - triggers BofA every 500 addresses
-// 2 min break before BofA, 3 min break after cycle
+// Redfin scraper - scrapes continuously, triggers BofA when pending >= 500
+// BofA runs in background while scraping continues
 async function runRedfinWithBofA() {
   if (redfinRunning) return;
   redfinRunning = true;
   redfinAddressCount = 0;
 
   try {
-    log.info(`PARALLEL-REDFIN: Starting (${BOFA_TRIGGER_BATCH} addresses -> 2min break -> BofA ${BOFA_REDFIN_CONCURRENCY} browsers -> 3min break)`);
+    log.info(`PARALLEL-REDFIN: Starting (max ${BOFA_TRIGGER_BATCH} pending -> triggers BofA ${BOFA_REDFIN_CONCURRENCY} browsers)`);
 
-    // Run scraping and BofA in interleaved batches
-    let cycleCount = 0;
     while (!control.abort) {
-      cycleCount++;
-      log.info(`PARALLEL-REDFIN: Cycle ${cycleCount} - Scraping up to ${BOFA_TRIGGER_BATCH} addresses...`);
-
-      // Reset batch counter for this cycle
-      const startCount = await ScrapedDeal.countDocuments({ source: 'redfin' }).catch(() => 0);
-
-      // Run Redfin scraper (it will stop after SCRAPE_BATCH_LIMIT addresses due to shouldPauseScraping)
-      await runAutomation(new Set(['redfin']));
-
-      // Check how many new addresses were added
-      const endCount = await ScrapedDeal.countDocuments({ source: 'redfin' }).catch(() => 0);
-      const newAddresses = endCount - startCount;
-      redfinAddressCount += newAddresses;
-
-      log.info(`PARALLEL-REDFIN: Scraped ${newAddresses} new addresses (total: ${redfinAddressCount})`);
-
-      // Count pending AMV for Redfin
+      // Check pending AMV for Redfin
       const pendingRedfinAMV = await ScrapedDeal.countDocuments({
         source: 'redfin',
         $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
       }).catch(() => 0);
 
-      if (pendingRedfinAMV > 0) {
-        // 2 minute break before BofA
-        log.info(`PARALLEL-REDFIN: Taking ${BREAK_BEFORE_BOFA_MS / 1000}s break before BofA...`);
+      log.info(`PARALLEL-REDFIN: Pending AMV: ${pendingRedfinAMV}/${BOFA_TRIGGER_BATCH}`);
+
+      // If pending >= 500, trigger BofA and wait for it to finish before scraping more
+      if (pendingRedfinAMV >= BOFA_TRIGGER_BATCH) {
+        log.info(`PARALLEL-REDFIN: Hit ${BOFA_TRIGGER_BATCH} pending! Taking ${BREAK_BEFORE_BOFA_MS / 1000}s break then running BofA...`);
         await new Promise(r => setTimeout(r, BREAK_BEFORE_BOFA_MS));
 
-        log.info(`PARALLEL-REDFIN: Running BofA for ${pendingRedfinAMV} addresses (${BOFA_REDFIN_CONCURRENCY} browsers)...`);
         redfinBofaRunning = true;
         await runBofaForSource('redfin', BOFA_REDFIN_CONCURRENCY);
         redfinBofaRunning = false;
+
+        // 3 min break after BofA completes
+        log.info(`PARALLEL-REDFIN: BofA done. Taking ${BREAK_AFTER_CYCLE_MS / 1000}s break...`);
+        await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
+        continue;
       }
 
-      // Check if scraper has more work or if it finished the cycle
-      if (newAddresses === 0) {
-        log.info('PARALLEL-REDFIN: No new addresses scraped, cycle complete');
-        break;
-      }
+      // Scrape more addresses (will stop when batch limit reached)
+      log.info(`PARALLEL-REDFIN: Scraping addresses...`);
+      const startCount = await ScrapedDeal.countDocuments({ source: 'redfin' }).catch(() => 0);
 
-      // 3 minute break after cycle completes
-      log.info(`PARALLEL-REDFIN: Taking ${BREAK_AFTER_CYCLE_MS / 1000}s break after cycle...`);
-      await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
-
-      // Reset batch counter for next iteration
       resetBatchCounter();
+      await runAutomation(new Set(['redfin']));
+
+      const endCount = await ScrapedDeal.countDocuments({ source: 'redfin' }).catch(() => 0);
+      const newAddresses = endCount - startCount;
+      redfinAddressCount += newAddresses;
+
+      log.info(`PARALLEL-REDFIN: Scraped ${newAddresses} new addresses (total session: ${redfinAddressCount})`);
+
+      // If no new addresses, scraper finished its cycle
+      if (newAddresses === 0) {
+        // Process any remaining pending
+        const remaining = await ScrapedDeal.countDocuments({
+          source: 'redfin',
+          $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+        }).catch(() => 0);
+
+        if (remaining > 0) {
+          log.info(`PARALLEL-REDFIN: Cycle done, processing ${remaining} remaining addresses...`);
+          await new Promise(r => setTimeout(r, BREAK_BEFORE_BOFA_MS));
+          redfinBofaRunning = true;
+          await runBofaForSource('redfin', BOFA_REDFIN_CONCURRENCY);
+          redfinBofaRunning = false;
+        }
+
+        log.info(`PARALLEL-REDFIN: Taking ${BREAK_AFTER_CYCLE_MS / 1000}s break before next cycle...`);
+        await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
+      }
     }
 
-    log.success(`PARALLEL-REDFIN: Complete. Total addresses scraped: ${redfinAddressCount}`);
+    log.success(`PARALLEL-REDFIN: Complete. Total: ${redfinAddressCount}`);
   } catch (e) {
     log.error('PARALLEL-REDFIN: Error', { error: e?.message });
   } finally {
