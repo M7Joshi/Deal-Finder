@@ -151,13 +151,35 @@ router.get('/pending-amv', async (req, res) => {
       scraperStatus = getScraperStatus();
     } catch {}
 
-    // Count deals pending AMV
+    // Count deals pending AMV (total)
     const pendingAMV = await ScrapedDeal.countDocuments({
       $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
     });
 
-    // Count deals with AMV
+    // Count pending AMV per source (for the 2 boxes)
+    const pendingPrivy = await ScrapedDeal.countDocuments({
+      source: 'privy',
+      $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+    });
+
+    const pendingRedfin = await ScrapedDeal.countDocuments({
+      source: 'redfin',
+      $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+    });
+
+    // Count deals with AMV (total)
     const withAMV = await ScrapedDeal.countDocuments({
+      amv: { $gt: 0 }
+    });
+
+    // Count done (with AMV) per source
+    const donePrivy = await ScrapedDeal.countDocuments({
+      source: 'privy',
+      amv: { $gt: 0 }
+    });
+
+    const doneRedfin = await ScrapedDeal.countDocuments({
+      source: 'redfin',
       amv: { $gt: 0 }
     });
 
@@ -183,7 +205,13 @@ router.get('/pending-amv', async (req, res) => {
       stats: {
         pendingAMV,
         withAMV,
-        total: pendingAMV + withAMV
+        total: pendingAMV + withAMV,
+        // Per-source counts (for the boxes)
+        pendingPrivy,
+        pendingRedfin,
+        donePrivy,
+        doneRedfin,
+        maxPerSource: 500 // The trigger limit
       },
       pendingByState,
       recentPending

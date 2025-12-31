@@ -49,7 +49,7 @@ export default function PendingAMV() {
     addressesScrapedThisBatch: 0,
     batchLimit: 500,
   });
-  const [stats, setStats] = useState({ pendingAMV: 0, withAMV: 0, total: 0 });
+  const [stats, setStats] = useState({ pendingAMV: 0, withAMV: 0, total: 0, pendingPrivy: 0, pendingRedfin: 0, donePrivy: 0, doneRedfin: 0, maxPerSource: 500 });
   const [pendingByState, setPendingByState] = useState<PendingByState[]>([]);
   const [recentPending, setRecentPending] = useState<PendingDeal[]>([]);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -67,7 +67,7 @@ export default function PendingAMV() {
           addressesScrapedThisBatch: 0,
           batchLimit: 500,
         });
-        setStats(data.stats || { pendingAMV: 0, withAMV: 0, total: 0 });
+        setStats(data.stats || { pendingAMV: 0, withAMV: 0, total: 0, pendingPrivy: 0, pendingRedfin: 0, donePrivy: 0, doneRedfin: 0, maxPerSource: 500 });
         setPendingByState(data.pendingByState || []);
         setRecentPending(data.recentPending || []);
       } else {
@@ -262,6 +262,97 @@ export default function PendingAMV() {
         <Card title="With AMV" value={stats.withAMV} color="#22c55e" />
         <Card title="Total Scraped" value={stats.total} />
         <Card title="Batch Scraped" value={scraperStatus.addressesScrapedThisBatch} color="#3b82f6" />
+      </div>
+
+      {/* Per-Source Counts - Pending & Done */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+        {/* Privy Box */}
+        <div
+          style={{
+            flex: 1,
+            background: '#f5f3ff',
+            border: '2px solid #7c3aed',
+            borderRadius: 10,
+            padding: 16,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#7c3aed' }}>PRIVY</div>
+            <div
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: '50%',
+                background: `conic-gradient(#7c3aed ${(stats.pendingPrivy / stats.maxPerSource) * 100}%, #e9d5ff ${(stats.pendingPrivy / stats.maxPerSource) * 100}%)`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <div style={{ width: 34, height: 34, borderRadius: '50%', background: '#f5f3ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, color: '#7c3aed' }}>
+                {Math.round((stats.pendingPrivy / stats.maxPerSource) * 100)}%
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 16 }}>
+            <div>
+              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>Pending</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: '#f59e0b' }}>
+                {stats.pendingPrivy} <span style={{ fontSize: 12, fontWeight: 600, color: '#9ca3af' }}>/ {stats.maxPerSource}</span>
+              </div>
+            </div>
+            <div style={{ borderLeft: '1px solid #e9d5ff', paddingLeft: 16 }}>
+              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>Done (AMV)</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: '#22c55e' }}>
+                {stats.donePrivy}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Redfin Box */}
+        <div
+          style={{
+            flex: 1,
+            background: '#fef2f2',
+            border: '2px solid #dc2626',
+            borderRadius: 10,
+            padding: 16,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#dc2626' }}>REDFIN</div>
+            <div
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: '50%',
+                background: `conic-gradient(#dc2626 ${(stats.pendingRedfin / stats.maxPerSource) * 100}%, #fecaca ${(stats.pendingRedfin / stats.maxPerSource) * 100}%)`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <div style={{ width: 34, height: 34, borderRadius: '50%', background: '#fef2f2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, color: '#dc2626' }}>
+                {Math.round((stats.pendingRedfin / stats.maxPerSource) * 100)}%
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 16 }}>
+            <div>
+              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>Pending</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: '#f59e0b' }}>
+                {stats.pendingRedfin} <span style={{ fontSize: 12, fontWeight: 600, color: '#9ca3af' }}>/ {stats.maxPerSource}</span>
+              </div>
+            </div>
+            <div style={{ borderLeft: '1px solid #fecaca', paddingLeft: 16 }}>
+              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>Done (AMV)</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: '#22c55e' }}>
+                {stats.doneRedfin}
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Pending by State */}
