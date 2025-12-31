@@ -1264,7 +1264,20 @@ const cleanAddress = (address?: string | null): string => {
                     </td>
                     <td style={{ ...tdRResponsive, whiteSpace: 'nowrap' }}>
                       <Button size="small" variant="outlined" onClick={(ev) => { ev.stopPropagation(); openEdit(r); }} sx={{ mr: isMobile ? 0.5 : 1, fontSize: isMobile ? 11 : 14, px: isMobile ? 1 : 2 }}>Edit</Button>
-                      {!isMobile && <Button size="small" color="error" variant="outlined" onClick={(ev) => { ev.stopPropagation(); handleDelete(r); }}>Delete</Button>}
+                      {!isMobile && (
+                        <Chip
+                          label={r.source === 'privy' ? 'Privy' : r.source === 'redfin' ? 'Redfin' : 'Other'}
+                          size="small"
+                          sx={{
+                            ml: 1,
+                            fontWeight: 600,
+                            fontSize: 11,
+                            backgroundColor: r.source === 'privy' ? '#f5f3ff' : r.source === 'redfin' ? '#fef2f2' : '#f3f4f6',
+                            color: r.source === 'privy' ? '#7c3aed' : r.source === 'redfin' ? '#dc2626' : '#6b7280',
+                            border: `1px solid ${r.source === 'privy' ? '#7c3aed' : r.source === 'redfin' ? '#dc2626' : '#9ca3af'}`,
+                          }}
+                        />
+                      )}
                     </td>
                   </tr>
                   {/* Expandable Agent Details Row */}
