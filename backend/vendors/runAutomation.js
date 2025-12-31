@@ -703,15 +703,14 @@ async function schedulerTick() {
         }
       }
 
-      // Check if still pending - continue BofA if needed
+      // Move to Redfin regardless of pending AMV - don't get stuck on BofA
+      // BofA will run again after Redfin completes
       const stillPending = await ScrapedDeal.countDocuments({
         $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
       }).catch(() => 0);
 
       if (stillPending > 0) {
-        log.info(`Scheduler: Still ${stillPending} pending - continuing BofA`);
-        scheduleNextRun(5000);
-        return;
+        log.info(`Scheduler: ${stillPending} still pending - but moving to Redfin (BofA will continue after)`);
       }
 
       schedulerPhase = 'break_after_privy';

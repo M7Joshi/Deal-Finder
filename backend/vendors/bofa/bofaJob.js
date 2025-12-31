@@ -33,7 +33,7 @@ const _nextBofaProxy = makeProxySupplierFromPool(_bofaPool);
 
 const {
   MONGO_URI,
-  BOFA_MAX_CONCURRENCY = process.env.BOFA_MAX_CONCURRENCY || '12',
+  BOFA_MAX_CONCURRENCY = process.env.BOFA_MAX_CONCURRENCY || '17',
   BOFA_BATCH_SIZE = process.env.BOFA_BATCH_SIZE || '2000',
   BOFA_RESULT_TIMEOUT_MS = process.env.BOFA_RESULT_TIMEOUT_MS || '40000',
   BOFA_EGRESS_COOLDOWN_MS = process.env.BOFA_EGRESS_COOLDOWN_MS || '800',
