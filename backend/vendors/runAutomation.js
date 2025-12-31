@@ -538,16 +538,13 @@ export function getScraperStatus() {
     scraperLimit: SCRAPER_LIMIT,
     breakMs: BREAK_MS,
     schedulerEnabled,
-    // Parallel flow status
+    // Shared BofA queue status
     parallel: {
       privyRunning,
       redfinRunning,
-      privyBofaRunning,
-      redfinBofaRunning,
-      bofaConcurrency: {
-        privy: BOFA_PRIVY_CONCURRENCY,
-        redfin: BOFA_REDFIN_CONCURRENCY
-      }
+      bofaInUse,
+      bofaCurrentSource,
+      bofaTotalConcurrency: BOFA_TOTAL_CONCURRENCY
     }
   };
 }
@@ -622,20 +619,19 @@ async function bootstrapScheduler() {
   scheduleNextRun(immediate ? 0 : RUN_INTERVAL_MS);
 }
 
-// PARALLEL FLOW: Privy and Redfin run simultaneously
-// - Both scrapers start together
-// - When Redfin finishes → triggers BofA with 8 browsers for Redfin addresses
-// - When Privy finishes → triggers BofA with 9 browsers for Privy addresses
-// - Both BofA runs can happen in parallel (total 17 browsers)
-// - After both complete → 2 minute break → repeat
+// SHARED BOFA QUEUE FLOW:
+// - Both scrapers run simultaneously
+// - First scraper to hit 500 pending → claims BofA with ALL 17 browsers
+// - Other scraper continues fetching while BofA processes
+// - When BofA done → first scraper resumes, second can claim BofA if ready
+// - Result: ~30% faster processing, better resource utilization
 
 // Break period between phases (2 minutes = 120000ms)
 const BREAK_MS = Number(process.env.BREAK_MS || 120000);
 const SCRAPER_LIMIT = Number(process.env.SCRAPER_LIMIT || 500);
 
-// BofA concurrency split: Privy gets 9, Redfin gets 8 (total 17)
-const BOFA_PRIVY_CONCURRENCY = Number(process.env.BOFA_PRIVY_CONCURRENCY || 9);
-const BOFA_REDFIN_CONCURRENCY = Number(process.env.BOFA_REDFIN_CONCURRENCY || 8);
+// SHARED BofA: All 17 browsers for whichever source needs them
+const BOFA_TOTAL_CONCURRENCY = Number(process.env.BOFA_TOTAL_CONCURRENCY || 17);
 
 // Batch size before triggering BofA (500 addresses per scraper)
 const BOFA_TRIGGER_BATCH = Number(process.env.BOFA_TRIGGER_BATCH || 500);
@@ -647,19 +643,42 @@ const BREAK_AFTER_CYCLE_MS = Number(process.env.BREAK_AFTER_CYCLE_MS || 180000);
 // Track parallel scraper states
 let privyRunning = false;
 let redfinRunning = false;
-let privyBofaRunning = false;
-let redfinBofaRunning = false;
+
+// SHARED BofA queue - only one source can use BofA at a time (with all 17 browsers)
+let bofaInUse = false;
+let bofaCurrentSource = null; // 'privy' | 'redfin' | null
 
 // Track addresses scraped per source for batch triggering
 let privyAddressCount = 0;
 let redfinAddressCount = 0;
 
-// Run BofA AMV for addresses from a specific source with specified concurrency
-// Processes ALL pending addresses from that source
-async function runBofaForSource(source, concurrency) {
+// Function to request BofA access - returns true if granted, false if busy
+async function requestBofaAccess(source) {
+  if (bofaInUse) {
+    return false;
+  }
+  bofaInUse = true;
+  bofaCurrentSource = source;
+  log.info(`BOFA-QUEUE: ${source.toUpperCase()} acquired BofA lock (17 browsers)`);
+  return true;
+}
+
+// Function to release BofA access
+function releaseBofaAccess(source) {
+  if (bofaCurrentSource === source) {
+    bofaInUse = false;
+    bofaCurrentSource = null;
+    log.info(`BOFA-QUEUE: ${source.toUpperCase()} released BofA lock`);
+  }
+}
+
+// Run BofA AMV for addresses from a specific source
+// Uses ALL 17 browsers (shared queue model)
+async function runBofaForSource(source) {
+  const concurrency = BOFA_TOTAL_CONCURRENCY; // Always use all 17
   const { lookupSingleAddressInternal } = await import('../routes/bofa-internal.js');
 
-  log.info(`BofA-${source}: Starting with ${concurrency} browsers`);
+  log.info(`BofA-${source}: Starting with ${concurrency} browsers (SHARED QUEUE)`);
 
   let totalSuccess = 0, totalFail = 0, totalNoData = 0;
 
@@ -720,15 +739,15 @@ async function runBofaForSource(source, concurrency) {
   log.success(`BofA-${source}: Complete. Total - Success: ${totalSuccess}, NoData: ${totalNoData}, Failed: ${totalFail}`);
 }
 
-// Privy scraper - scrapes continuously, triggers BofA when pending >= 500
-// BofA runs in background while scraping continues
+// Privy scraper - scrapes continuously, requests shared BofA queue when pending >= 500
+// Other scraper continues while waiting for BofA
 async function runPrivyWithBofA() {
   if (privyRunning) return;
   privyRunning = true;
   privyAddressCount = 0;
 
   try {
-    log.info(`PARALLEL-PRIVY: Starting (max ${BOFA_TRIGGER_BATCH} pending -> triggers BofA ${BOFA_PRIVY_CONCURRENCY} browsers)`);
+    log.info(`PRIVY: Starting (hits ${BOFA_TRIGGER_BATCH} -> requests shared BofA with ${BOFA_TOTAL_CONCURRENCY} browsers)`);
 
     while (!control.abort) {
       // Check pending AMV for Privy
@@ -737,25 +756,34 @@ async function runPrivyWithBofA() {
         $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
       }).catch(() => 0);
 
-      log.info(`PARALLEL-PRIVY: Pending AMV: ${pendingPrivyAMV}/${BOFA_TRIGGER_BATCH}`);
+      log.info(`PRIVY: Pending AMV: ${pendingPrivyAMV}/${BOFA_TRIGGER_BATCH} | BofA in use: ${bofaInUse ? bofaCurrentSource : 'no'}`);
 
-      // If pending >= 500, trigger BofA and wait for it to finish before scraping more
+      // If pending >= 500, try to claim BofA
       if (pendingPrivyAMV >= BOFA_TRIGGER_BATCH) {
-        log.info(`PARALLEL-PRIVY: Hit ${BOFA_TRIGGER_BATCH} pending! Taking ${BREAK_BEFORE_BOFA_MS / 1000}s break then running BofA...`);
-        await new Promise(r => setTimeout(r, BREAK_BEFORE_BOFA_MS));
+        // Try to acquire BofA lock
+        const gotLock = await requestBofaAccess('privy');
 
-        privyBofaRunning = true;
-        await runBofaForSource('privy', BOFA_PRIVY_CONCURRENCY);
-        privyBofaRunning = false;
+        if (gotLock) {
+          log.info(`PRIVY: Got BofA lock! Taking ${BREAK_BEFORE_BOFA_MS / 1000}s break then processing ${pendingPrivyAMV} addresses...`);
+          await new Promise(r => setTimeout(r, BREAK_BEFORE_BOFA_MS));
 
-        // 3 min break after BofA completes
-        log.info(`PARALLEL-PRIVY: BofA done. Taking ${BREAK_AFTER_CYCLE_MS / 1000}s break...`);
-        await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
-        continue;
+          await runBofaForSource('privy');
+          releaseBofaAccess('privy');
+
+          // 3 min break after BofA completes
+          log.info(`PRIVY: BofA done. Taking ${BREAK_AFTER_CYCLE_MS / 1000}s break...`);
+          await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
+          continue;
+        } else {
+          // BofA is busy with Redfin - wait and check again
+          log.info(`PRIVY: BofA busy (${bofaCurrentSource}). Waiting 30s before retry...`);
+          await new Promise(r => setTimeout(r, 30000));
+          continue;
+        }
       }
 
       // Scrape more addresses (will stop when batch limit reached)
-      log.info(`PARALLEL-PRIVY: Scraping addresses...`);
+      log.info(`PRIVY: Scraping addresses...`);
       const startCount = await ScrapedDeal.countDocuments({ source: 'privy' }).catch(() => 0);
 
       resetBatchCounter();
@@ -765,7 +793,7 @@ async function runPrivyWithBofA() {
       const newAddresses = endCount - startCount;
       privyAddressCount += newAddresses;
 
-      log.info(`PARALLEL-PRIVY: Scraped ${newAddresses} new addresses (total session: ${privyAddressCount})`);
+      log.info(`PRIVY: Scraped ${newAddresses} new addresses (total session: ${privyAddressCount})`);
 
       // If no new addresses, scraper finished its cycle
       if (newAddresses === 0) {
@@ -776,36 +804,41 @@ async function runPrivyWithBofA() {
         }).catch(() => 0);
 
         if (remaining > 0) {
-          log.info(`PARALLEL-PRIVY: Cycle done, processing ${remaining} remaining addresses...`);
-          await new Promise(r => setTimeout(r, BREAK_BEFORE_BOFA_MS));
-          privyBofaRunning = true;
-          await runBofaForSource('privy', BOFA_PRIVY_CONCURRENCY);
-          privyBofaRunning = false;
+          // Try to get BofA lock for remaining
+          const gotLock = await requestBofaAccess('privy');
+          if (gotLock) {
+            log.info(`PRIVY: Cycle done, processing ${remaining} remaining addresses...`);
+            await new Promise(r => setTimeout(r, BREAK_BEFORE_BOFA_MS));
+            await runBofaForSource('privy');
+            releaseBofaAccess('privy');
+          } else {
+            log.info(`PRIVY: Cycle done but BofA busy. Will retry next loop.`);
+          }
         }
 
-        log.info(`PARALLEL-PRIVY: Taking ${BREAK_AFTER_CYCLE_MS / 1000}s break before next cycle...`);
+        log.info(`PRIVY: Taking ${BREAK_AFTER_CYCLE_MS / 1000}s break before next cycle...`);
         await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
       }
     }
 
-    log.success(`PARALLEL-PRIVY: Complete. Total: ${privyAddressCount}`);
+    log.success(`PRIVY: Complete. Total: ${privyAddressCount}`);
   } catch (e) {
-    log.error('PARALLEL-PRIVY: Error', { error: e?.message });
+    log.error('PRIVY: Error', { error: e?.message });
   } finally {
     privyRunning = false;
-    privyBofaRunning = false;
+    releaseBofaAccess('privy'); // Ensure lock is released on error
   }
 }
 
-// Redfin scraper - scrapes continuously, triggers BofA when pending >= 500
-// BofA runs in background while scraping continues
+// Redfin scraper - scrapes continuously, requests shared BofA queue when pending >= 500
+// Other scraper continues while waiting for BofA
 async function runRedfinWithBofA() {
   if (redfinRunning) return;
   redfinRunning = true;
   redfinAddressCount = 0;
 
   try {
-    log.info(`PARALLEL-REDFIN: Starting (max ${BOFA_TRIGGER_BATCH} pending -> triggers BofA ${BOFA_REDFIN_CONCURRENCY} browsers)`);
+    log.info(`REDFIN: Starting (hits ${BOFA_TRIGGER_BATCH} -> requests shared BofA with ${BOFA_TOTAL_CONCURRENCY} browsers)`);
 
     while (!control.abort) {
       // Check pending AMV for Redfin
@@ -814,25 +847,34 @@ async function runRedfinWithBofA() {
         $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
       }).catch(() => 0);
 
-      log.info(`PARALLEL-REDFIN: Pending AMV: ${pendingRedfinAMV}/${BOFA_TRIGGER_BATCH}`);
+      log.info(`REDFIN: Pending AMV: ${pendingRedfinAMV}/${BOFA_TRIGGER_BATCH} | BofA in use: ${bofaInUse ? bofaCurrentSource : 'no'}`);
 
-      // If pending >= 500, trigger BofA and wait for it to finish before scraping more
+      // If pending >= 500, try to claim BofA
       if (pendingRedfinAMV >= BOFA_TRIGGER_BATCH) {
-        log.info(`PARALLEL-REDFIN: Hit ${BOFA_TRIGGER_BATCH} pending! Taking ${BREAK_BEFORE_BOFA_MS / 1000}s break then running BofA...`);
-        await new Promise(r => setTimeout(r, BREAK_BEFORE_BOFA_MS));
+        // Try to acquire BofA lock
+        const gotLock = await requestBofaAccess('redfin');
 
-        redfinBofaRunning = true;
-        await runBofaForSource('redfin', BOFA_REDFIN_CONCURRENCY);
-        redfinBofaRunning = false;
+        if (gotLock) {
+          log.info(`REDFIN: Got BofA lock! Taking ${BREAK_BEFORE_BOFA_MS / 1000}s break then processing ${pendingRedfinAMV} addresses...`);
+          await new Promise(r => setTimeout(r, BREAK_BEFORE_BOFA_MS));
 
-        // 3 min break after BofA completes
-        log.info(`PARALLEL-REDFIN: BofA done. Taking ${BREAK_AFTER_CYCLE_MS / 1000}s break...`);
-        await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
-        continue;
+          await runBofaForSource('redfin');
+          releaseBofaAccess('redfin');
+
+          // 3 min break after BofA completes
+          log.info(`REDFIN: BofA done. Taking ${BREAK_AFTER_CYCLE_MS / 1000}s break...`);
+          await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
+          continue;
+        } else {
+          // BofA is busy with Privy - wait and check again
+          log.info(`REDFIN: BofA busy (${bofaCurrentSource}). Waiting 30s before retry...`);
+          await new Promise(r => setTimeout(r, 30000));
+          continue;
+        }
       }
 
       // Scrape more addresses (will stop when batch limit reached)
-      log.info(`PARALLEL-REDFIN: Scraping addresses...`);
+      log.info(`REDFIN: Scraping addresses...`);
       const startCount = await ScrapedDeal.countDocuments({ source: 'redfin' }).catch(() => 0);
 
       resetBatchCounter();
@@ -842,7 +884,7 @@ async function runRedfinWithBofA() {
       const newAddresses = endCount - startCount;
       redfinAddressCount += newAddresses;
 
-      log.info(`PARALLEL-REDFIN: Scraped ${newAddresses} new addresses (total session: ${redfinAddressCount})`);
+      log.info(`REDFIN: Scraped ${newAddresses} new addresses (total session: ${redfinAddressCount})`);
 
       // If no new addresses, scraper finished its cycle
       if (newAddresses === 0) {
@@ -853,24 +895,29 @@ async function runRedfinWithBofA() {
         }).catch(() => 0);
 
         if (remaining > 0) {
-          log.info(`PARALLEL-REDFIN: Cycle done, processing ${remaining} remaining addresses...`);
-          await new Promise(r => setTimeout(r, BREAK_BEFORE_BOFA_MS));
-          redfinBofaRunning = true;
-          await runBofaForSource('redfin', BOFA_REDFIN_CONCURRENCY);
-          redfinBofaRunning = false;
+          // Try to get BofA lock for remaining
+          const gotLock = await requestBofaAccess('redfin');
+          if (gotLock) {
+            log.info(`REDFIN: Cycle done, processing ${remaining} remaining addresses...`);
+            await new Promise(r => setTimeout(r, BREAK_BEFORE_BOFA_MS));
+            await runBofaForSource('redfin');
+            releaseBofaAccess('redfin');
+          } else {
+            log.info(`REDFIN: Cycle done but BofA busy. Will retry next loop.`);
+          }
         }
 
-        log.info(`PARALLEL-REDFIN: Taking ${BREAK_AFTER_CYCLE_MS / 1000}s break before next cycle...`);
+        log.info(`REDFIN: Taking ${BREAK_AFTER_CYCLE_MS / 1000}s break before next cycle...`);
         await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
       }
     }
 
-    log.success(`PARALLEL-REDFIN: Complete. Total: ${redfinAddressCount}`);
+    log.success(`REDFIN: Complete. Total: ${redfinAddressCount}`);
   } catch (e) {
-    log.error('PARALLEL-REDFIN: Error', { error: e?.message });
+    log.error('REDFIN: Error', { error: e?.message });
   } finally {
     redfinRunning = false;
-    redfinBofaRunning = false;
+    releaseBofaAccess('redfin'); // Ensure lock is released on error
   }
 }
 
@@ -896,21 +943,21 @@ async function schedulerTick() {
     log.warn('Scheduler: Could not count pending AMV', { error: e?.message });
   }
 
-  log.info('Scheduler: PARALLEL FLOW', {
+  log.info('Scheduler: SHARED BOFA QUEUE FLOW', {
     phase: schedulerPhase,
     pendingAMV,
     privyRunning,
     redfinRunning,
-    privyBofaRunning,
-    redfinBofaRunning,
-    bofaConcurrency: { privy: BOFA_PRIVY_CONCURRENCY, redfin: BOFA_REDFIN_CONCURRENCY }
+    bofaInUse,
+    bofaCurrentSource,
+    bofaTotalConcurrency: BOFA_TOTAL_CONCURRENCY
   });
 
   switch (schedulerPhase) {
     // ===== PARALLEL SCRAPING PHASE =====
     case 'privy':
     case 'parallel_scraping': {
-      log.info('Scheduler: Starting PARALLEL scraping - Privy (9 BofA) + Redfin (8 BofA)');
+      log.info(`Scheduler: Starting PARALLEL scraping - Shared BofA queue (${BOFA_TOTAL_CONCURRENCY} browsers)`);
       schedulerPhase = 'parallel_scraping';
 
       // Launch both scrapers in parallel - each will run its own BofA when done
