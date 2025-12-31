@@ -637,49 +637,48 @@ const SCRAPER_LIMIT = Number(process.env.SCRAPER_LIMIT || 500);
 const BOFA_PRIVY_CONCURRENCY = Number(process.env.BOFA_PRIVY_CONCURRENCY || 9);
 const BOFA_REDFIN_CONCURRENCY = Number(process.env.BOFA_REDFIN_CONCURRENCY || 8);
 
+// Batch size before triggering BofA (500 addresses per scraper)
+const BOFA_TRIGGER_BATCH = Number(process.env.BOFA_TRIGGER_BATCH || 500);
+
 // Track parallel scraper states
 let privyRunning = false;
 let redfinRunning = false;
 let privyBofaRunning = false;
 let redfinBofaRunning = false;
 
+// Track addresses scraped per source for batch triggering
+let privyAddressCount = 0;
+let redfinAddressCount = 0;
+
 // Run BofA AMV for addresses from a specific source with specified concurrency
+// Processes ALL pending addresses from that source
 async function runBofaForSource(source, concurrency) {
   const { lookupSingleAddressInternal } = await import('../routes/bofa-internal.js');
 
-  const BATCH_SIZE = 100;
   log.info(`BofA-${source}: Starting with ${concurrency} browsers`);
 
-  // Find addresses needing AMV from this source
-  const dealsNeedingAMV = await ScrapedDeal.find({
-    source: source,
-    $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
-  })
-    .sort({ scrapedAt: -1 })
-    .limit(BATCH_SIZE)
-    .lean();
+  let totalSuccess = 0, totalFail = 0, totalNoData = 0;
 
-  if (!dealsNeedingAMV.length) {
-    log.info(`BofA-${source}: No addresses need AMV`);
-    return;
-  }
+  // Keep processing until no more addresses need AMV from this source
+  while (!control.abort) {
+    // Find next batch of addresses needing AMV from this source
+    const dealsNeedingAMV = await ScrapedDeal.find({
+      source: source,
+      $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+    })
+      .sort({ scrapedAt: -1 })
+      .limit(concurrency) // Process one chunk at a time
+      .lean();
 
-  log.info(`BofA-${source}: Found ${dealsNeedingAMV.length} addresses needing AMV`);
-
-  let successCount = 0, failCount = 0, noDataCount = 0;
-
-  // Process in chunks with specified concurrency
-  for (let i = 0; i < dealsNeedingAMV.length; i += concurrency) {
-    if (control.abort) {
-      log.warn(`BofA-${source}: Abort requested`);
+    if (!dealsNeedingAMV.length) {
+      log.info(`BofA-${source}: No more addresses need AMV`);
       break;
     }
 
-    const chunk = dealsNeedingAMV.slice(i, i + concurrency);
-    log.info(`BofA-${source}: Processing chunk ${Math.floor(i / concurrency) + 1}/${Math.ceil(dealsNeedingAMV.length / concurrency)}`);
+    log.info(`BofA-${source}: Processing ${dealsNeedingAMV.length} addresses...`);
 
     const chunkResults = await Promise.all(
-      chunk.map(async (deal) => {
+      dealsNeedingAMV.map(async (deal) => {
         try {
           const result = await lookupSingleAddressInternal(deal.fullAddress);
           return { deal, result };
@@ -698,64 +697,139 @@ async function runBofaForSource(source, concurrency) {
           { _id: deal._id },
           { $set: { amv: result.amv, bofaFetchedAt: new Date(), isDeal } }
         );
-        successCount++;
+        totalSuccess++;
       } else if (result?.noDataFound) {
         await ScrapedDeal.updateOne(
           { _id: deal._id },
           { $set: { amv: -1, bofaFetchedAt: new Date(), isDeal: false } }
         );
-        noDataCount++;
+        totalNoData++;
       } else {
-        failCount++;
+        totalFail++;
       }
     }
+
+    // Log progress every chunk
+    log.info(`BofA-${source}: Progress - Success: ${totalSuccess}, NoData: ${totalNoData}, Failed: ${totalFail}`);
   }
 
-  log.success(`BofA-${source}: Done. Success: ${successCount}, NoData: ${noDataCount}, Failed: ${failCount}`);
+  log.success(`BofA-${source}: Complete. Total - Success: ${totalSuccess}, NoData: ${totalNoData}, Failed: ${totalFail}`);
 }
 
-// Run Privy scraper and then trigger BofA with 9 browsers
+// Run Privy scraper with interleaved BofA - triggers BofA every 500 addresses
 async function runPrivyWithBofA() {
   if (privyRunning) return;
   privyRunning = true;
+  privyAddressCount = 0;
 
   try {
-    log.info('PARALLEL: Starting Privy scraper...');
-    await runAutomation(new Set(['privy']));
-    log.info('PARALLEL: Privy scraping complete, starting BofA (9 browsers)...');
+    log.info(`PARALLEL-PRIVY: Starting scraper (BofA triggers every ${BOFA_TRIGGER_BATCH} addresses with ${BOFA_PRIVY_CONCURRENCY} browsers)`);
 
-    // Run BofA for Privy addresses
-    privyBofaRunning = true;
-    await runBofaForSource('privy', BOFA_PRIVY_CONCURRENCY);
-    privyBofaRunning = false;
+    // Run scraping and BofA in interleaved batches
+    let cycleCount = 0;
+    while (!control.abort) {
+      cycleCount++;
+      log.info(`PARALLEL-PRIVY: Cycle ${cycleCount} - Scraping up to ${BOFA_TRIGGER_BATCH} addresses...`);
 
-    log.success('PARALLEL: Privy + BofA cycle complete');
+      // Reset batch counter for this cycle
+      const startCount = await ScrapedDeal.countDocuments({ source: 'privy' }).catch(() => 0);
+
+      // Run Privy scraper (it will stop after SCRAPE_BATCH_LIMIT addresses due to shouldPauseScraping)
+      await runAutomation(new Set(['privy']));
+
+      // Check how many new addresses were added
+      const endCount = await ScrapedDeal.countDocuments({ source: 'privy' }).catch(() => 0);
+      const newAddresses = endCount - startCount;
+      privyAddressCount += newAddresses;
+
+      log.info(`PARALLEL-PRIVY: Scraped ${newAddresses} new addresses (total this session: ${privyAddressCount})`);
+
+      // Count pending AMV for Privy
+      const pendingPrivyAMV = await ScrapedDeal.countDocuments({
+        source: 'privy',
+        $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+      }).catch(() => 0);
+
+      if (pendingPrivyAMV > 0) {
+        log.info(`PARALLEL-PRIVY: Running BofA for ${pendingPrivyAMV} pending addresses (${BOFA_PRIVY_CONCURRENCY} browsers)...`);
+        privyBofaRunning = true;
+        await runBofaForSource('privy', BOFA_PRIVY_CONCURRENCY);
+        privyBofaRunning = false;
+      }
+
+      // Check if scraper has more work or if it finished the cycle
+      if (newAddresses === 0) {
+        log.info('PARALLEL-PRIVY: No new addresses scraped, cycle complete');
+        break;
+      }
+
+      // Reset batch counter for next iteration
+      resetBatchCounter();
+    }
+
+    log.success(`PARALLEL-PRIVY: Complete. Total addresses scraped: ${privyAddressCount}`);
   } catch (e) {
-    log.error('PARALLEL: Privy cycle error', { error: e?.message });
+    log.error('PARALLEL-PRIVY: Error', { error: e?.message });
   } finally {
     privyRunning = false;
     privyBofaRunning = false;
   }
 }
 
-// Run Redfin scraper and then trigger BofA with 8 browsers
+// Run Redfin scraper with interleaved BofA - triggers BofA every 500 addresses
 async function runRedfinWithBofA() {
   if (redfinRunning) return;
   redfinRunning = true;
+  redfinAddressCount = 0;
 
   try {
-    log.info('PARALLEL: Starting Redfin scraper...');
-    await runAutomation(new Set(['redfin']));
-    log.info('PARALLEL: Redfin scraping complete, starting BofA (8 browsers)...');
+    log.info(`PARALLEL-REDFIN: Starting scraper (BofA triggers every ${BOFA_TRIGGER_BATCH} addresses with ${BOFA_REDFIN_CONCURRENCY} browsers)`);
 
-    // Run BofA for Redfin addresses
-    redfinBofaRunning = true;
-    await runBofaForSource('redfin', BOFA_REDFIN_CONCURRENCY);
-    redfinBofaRunning = false;
+    // Run scraping and BofA in interleaved batches
+    let cycleCount = 0;
+    while (!control.abort) {
+      cycleCount++;
+      log.info(`PARALLEL-REDFIN: Cycle ${cycleCount} - Scraping up to ${BOFA_TRIGGER_BATCH} addresses...`);
 
-    log.success('PARALLEL: Redfin + BofA cycle complete');
+      // Reset batch counter for this cycle
+      const startCount = await ScrapedDeal.countDocuments({ source: 'redfin' }).catch(() => 0);
+
+      // Run Redfin scraper (it will stop after SCRAPE_BATCH_LIMIT addresses due to shouldPauseScraping)
+      await runAutomation(new Set(['redfin']));
+
+      // Check how many new addresses were added
+      const endCount = await ScrapedDeal.countDocuments({ source: 'redfin' }).catch(() => 0);
+      const newAddresses = endCount - startCount;
+      redfinAddressCount += newAddresses;
+
+      log.info(`PARALLEL-REDFIN: Scraped ${newAddresses} new addresses (total this session: ${redfinAddressCount})`);
+
+      // Count pending AMV for Redfin
+      const pendingRedfinAMV = await ScrapedDeal.countDocuments({
+        source: 'redfin',
+        $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+      }).catch(() => 0);
+
+      if (pendingRedfinAMV > 0) {
+        log.info(`PARALLEL-REDFIN: Running BofA for ${pendingRedfinAMV} pending addresses (${BOFA_REDFIN_CONCURRENCY} browsers)...`);
+        redfinBofaRunning = true;
+        await runBofaForSource('redfin', BOFA_REDFIN_CONCURRENCY);
+        redfinBofaRunning = false;
+      }
+
+      // Check if scraper has more work or if it finished the cycle
+      if (newAddresses === 0) {
+        log.info('PARALLEL-REDFIN: No new addresses scraped, cycle complete');
+        break;
+      }
+
+      // Reset batch counter for next iteration
+      resetBatchCounter();
+    }
+
+    log.success(`PARALLEL-REDFIN: Complete. Total addresses scraped: ${redfinAddressCount}`);
   } catch (e) {
-    log.error('PARALLEL: Redfin cycle error', { error: e?.message });
+    log.error('PARALLEL-REDFIN: Error', { error: e?.message });
   } finally {
     redfinRunning = false;
     redfinBofaRunning = false;
