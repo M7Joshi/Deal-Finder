@@ -158,10 +158,7 @@ async function runCity(stateCode, city) {
         console.log('[Redfin] Abort signal received');
         break;
       }
-      if (shouldPauseScraping()) {
-        console.log('[Redfin] Batch limit reached');
-        break;
-      }
+      // NOTE: We do NOT check batch limit here - we complete ALL cities in the state first
 
       // Apply filters
       if (!filterHome(home, stateCode)) {
@@ -274,15 +271,11 @@ export async function runAllCities() {
         await updateProgress({ currentStateIndex: stateIdx, currentState: stateCode });
         break;
       }
-      if (shouldPauseScraping()) {
-        console.log('[Redfin] Batch limit reached, stopping');
-        await updateProgress({ currentStateIndex: stateIdx, currentState: stateCode });
-        break;
-      }
 
       console.log(`\n[Redfin] === State ${stateIdx + 1}/${STATES_TO_PROCESS.length}: ${stateCode} (${cities.length} cities) ===`);
       await updateProgress({ currentStateIndex: stateIdx, currentState: stateCode });
 
+      // Process ALL cities in this state before checking batch limit
       for (const city of cities) {
         const cityKey = `${stateCode}-${city.id}`;
 
@@ -290,7 +283,7 @@ export async function runAllCities() {
           continue;
         }
 
-        if (control.abort || shouldPauseScraping()) {
+        if (control.abort) {
           break;
         }
 
@@ -304,7 +297,14 @@ export async function runAllCities() {
         await new Promise(r => setTimeout(r, 1000));
       }
 
-      if (control.abort || shouldPauseScraping()) {
+      // Check batch limit ONLY after completing ALL cities in the state
+      if (shouldPauseScraping()) {
+        console.log(`[Redfin] Batch limit reached after completing state ${stateCode} - pausing for AMV phase`);
+        await updateProgress({ currentStateIndex: stateIdx + 1, currentState: null }); // Move to next state
+        break;
+      }
+
+      if (control.abort) {
         break;
       }
     }

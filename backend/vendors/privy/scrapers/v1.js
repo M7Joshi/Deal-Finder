@@ -1778,14 +1778,8 @@ await page.evaluate(() => {
                 stateSaved += 1;
                 allProperties.push(prop);
 
-                // Check if we should pause scraping (batch limit reached)
-                if (shouldPauseScraping()) {
-                  logPrivy.warn('Batch limit reached - stopping scrape to allow AMV processing', {
-                    urlSaved,
-                    stateSaved
-                  });
-                  break; // Exit the property loop
-                }
+                // NOTE: We do NOT check batch limit here - we complete ALL cities in the state first
+                // Batch limit is only checked after completing the entire state
               } catch (error) {
                 logPrivy.warn('Failed to upsert property', {
                   fullAddress: prop?.fullAddress || 'Unknown Address',
@@ -1795,11 +1789,8 @@ await page.evaluate(() => {
               }
             }
 
-            // Check batch limit after processing each URL
-            if (shouldPauseScraping()) {
-              logPrivy.warn('Batch limit reached - exiting URL loop');
-              return; // Exit the withDeadline callback
-            }
+            // NOTE: We do NOT check batch limit here - we complete ALL cities in the state first
+            // Batch limit is only checked after completing the entire state
 
             // Log agent extraction stats and skipped count
             const withAgent = normalized.filter(p => p.details?.agent_name || p.details?.agent_email || p.details?.agent_phone).length;
@@ -1928,25 +1919,19 @@ await page.evaluate(() => {
         }
       } // end city processing block
 
-      // Check batch limit after each city
-      if (shouldPauseScraping()) {
-        logPrivy.warn('Batch limit reached after city - pausing for AMV phase', {
-          city: extractCityFromUrl(url),
-          state
-        });
-        await saveProgress(progress); // Save progress before exiting
-        return allProperties;
-      }
-
       // Mark this city as completed in progress tracker
       await markCityComplete(progress, state, cityIndex, url);
       LState.info(`City completed: ${cityName}`, { cityIndex, totalCities: stateUrls.length });
+
+      // NOTE: We do NOT check batch limit here - we complete ALL cities in the state first
     } // end cities loop
 
-    // Check batch limit after each state
+    // Check batch limit ONLY after completing ALL cities in state
     if (shouldPauseScraping()) {
-      logPrivy.warn('Batch limit reached after state - pausing for AMV phase', { state });
+      logPrivy.warn('Batch limit reached after completing state - pausing for AMV phase', { state, citiesCompleted: stateUrls.length });
       await saveProgress(progress);
+      // Mark state complete before returning so we don't redo it
+      await markStateComplete(progress, state);
       return allProperties;
     }
 
