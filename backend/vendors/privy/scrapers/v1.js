@@ -1890,52 +1890,60 @@ await page.evaluate(() => {
               // If we've hit max retries, skip this city
               if (staleCacheRetryCount > MAX_STALE_CACHE_RETRIES) {
                 LC.warn('⏭️ Max stale cache retries reached, skipping city', { city: cityName, retries: staleCacheRetryCount });
-                continue;
+                return 'skip_city';
               }
 
               // DON'T mark state complete - we want to retry it after browser restart
-              // Restart browser immediately to clear cache
-              try {
-                const { initSharedBrowser, ensureVendorPageSetup, closeSharedBrowser } = await import('../../../utils/browser.js');
-
-                LC.info('🔄 Closing browser to clear stale cache...');
-                await closeSharedBrowser();
-                await sleep(2000);
-
-                // Create fresh browser
-                LC.info('🔄 Creating fresh browser...');
-                const browser = await initSharedBrowser();
-                const newPage = await browser.newPage();
-                newPage.__df_name = 'privy';
-
-                await ensureVendorPageSetup(newPage, {
-                  randomizeUA: true,
-                  timeoutMs: 180000,
-                  jitterViewport: true,
-                  baseViewport: { width: 1366, height: 900 },
-                });
-                try { await newPage.setViewport({ width: 1947, height: 1029 }); } catch {}
-                try { await enableRequestBlocking(newPage); } catch {}
-
-                // Login to Privy
-                LC.info('🔐 Logging into Privy on fresh browser...');
-                await loginToPrivy(newPage);
-                await sleep(10000);
-
-                // Replace page reference and continue with same city
-                page = newPage;
-                LC.success('✅ Browser restarted, retrying city...');
-
-                // Decrement cityIndex to retry this same city
-                cityIndex--;
-                continue;
-              } catch (restartErr) {
-                LC.error('Failed to restart browser for stale cache recovery', { error: restartErr?.message });
-                // Skip this city and continue - browser restart at end of state will help
-                continue;
-              }
+              // Return signal to outer loop to handle browser restart
+              return 'stale_cache_retry';
             }
           });
+
+          // Handle stale cache signals from callback
+          if (clusterResult === 'stale_cache_retry') {
+            try {
+              const { initSharedBrowser, ensureVendorPageSetup, closeSharedBrowser } = await import('../../../utils/browser.js');
+
+              L.info('🔄 Closing browser to clear stale cache...');
+              await closeSharedBrowser();
+              await sleep(2000);
+
+              // Create fresh browser
+              L.info('🔄 Creating fresh browser...');
+              const browser = await initSharedBrowser();
+              const newPage = await browser.newPage();
+              newPage.__df_name = 'privy';
+
+              await ensureVendorPageSetup(newPage, {
+                randomizeUA: true,
+                timeoutMs: 180000,
+                jitterViewport: true,
+                baseViewport: { width: 1366, height: 900 },
+              });
+              try { await newPage.setViewport({ width: 1947, height: 1029 }); } catch {}
+              try { await enableRequestBlocking(newPage); } catch {}
+
+              // Login to Privy
+              L.info('🔐 Logging into Privy on fresh browser...');
+              await loginToPrivy(newPage);
+              await sleep(10000);
+
+              // Replace page reference and retry same city
+              page = newPage;
+              L.success('✅ Browser restarted, retrying city...');
+              cityIndex--;
+              continue;
+            } catch (restartErr) {
+              L.error('Failed to restart browser for stale cache recovery', { error: restartErr?.message });
+              // Skip this city - browser restart at end of state will help
+              continue;
+            }
+          }
+
+          if (clusterResult === 'skip_city') {
+            // Max retries reached, skip to next city
+            continue;
+          }
 
           // Handle session_dead from cluster crawler - page needs recovery
           if (clusterResult === 'session_dead') {
