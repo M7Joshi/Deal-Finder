@@ -319,6 +319,21 @@ export async function runAllCities() {
           break;
         }
 
+        // ADDITIONAL CHECK: Also check actual database pending count to prevent pileup
+        try {
+          const currentPending = await ScrapedDeal.countDocuments({
+            source: 'redfin',
+            $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+          });
+          if (currentPending >= BATCH_THRESHOLD) {
+            console.log(`[Redfin] ⚠️ Database pending AMV reached ${currentPending}/${BATCH_THRESHOLD} - pausing for AMV phase`);
+            await updateProgress({ currentStateIndex: stateIdx, currentState: stateCode });
+            break;
+          }
+        } catch (dbErr) {
+          console.warn('[Redfin] Could not check pending AMV:', dbErr?.message);
+        }
+
         // Small delay between cities
         await new Promise(r => setTimeout(r, 1000));
       }
@@ -326,6 +341,20 @@ export async function runAllCities() {
       // If batch limit was reached inside city loop, break out of state loop too
       if (shouldPauseScraping()) {
         break;
+      }
+
+      // Also check database pending count
+      try {
+        const currentPending = await ScrapedDeal.countDocuments({
+          source: 'redfin',
+          $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+        });
+        if (currentPending >= BATCH_THRESHOLD) {
+          console.log(`[Redfin] ⚠️ Database pending AMV reached ${currentPending}/${BATCH_THRESHOLD} - breaking state loop`);
+          break;
+        }
+      } catch (dbErr) {
+        // Non-fatal
       }
 
       if (control.abort) {
