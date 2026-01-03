@@ -1056,6 +1056,23 @@ const scrapePropertiesV1 = async (page) => {
 
   const allProperties = [];
 
+  // SAFEGUARD: Check pending AMV before scraping - if already have 500+, skip scraping
+  // This prevents piling up addresses after crashes/restarts
+  const BATCH_THRESHOLD = 500;
+  try {
+    const pendingAMV = await ScrapedDeal.countDocuments({
+      source: 'privy',
+      $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+    });
+    if (pendingAMV >= BATCH_THRESHOLD) {
+      logPrivy.warn(`⏭️ SKIPPING SCRAPE: Already have ${pendingAMV} pending AMV addresses (threshold: ${BATCH_THRESHOLD}). Process AMV first!`);
+      return allProperties; // Return empty - let BofA process pending first
+    }
+    logPrivy.info(`Pending AMV check passed: ${pendingAMV}/${BATCH_THRESHOLD} - proceeding with scrape`);
+  } catch (e) {
+    logPrivy.warn('Could not check pending AMV count', { error: e?.message });
+  }
+
   // Load progress to resume from where we left off (async - uses MongoDB)
   const progress = await loadProgress();
   logPrivy.info('Privy scraper starting with progress', getProgressSummary(progress));
@@ -1142,6 +1159,11 @@ const scrapePropertiesV1 = async (page) => {
     const MAX_CITY_RETRIES = 2; // Max retries before moving to next city
     let cityRetryCount = 0;
 
+    // Track stale cache retries per city to prevent infinite loops
+    const MAX_STALE_CACHE_RETRIES = 2;
+    let staleCacheRetryCount = 0;
+    let lastStaleCacheCityIndex = -1;
+
     // City timeout: skip if no new addresses in 15 minutes
     const CITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
     let cityStartTime = Date.now();
@@ -1156,6 +1178,10 @@ const scrapePropertiesV1 = async (page) => {
 
       // Reset retry count and timers for new city
       cityRetryCount = 0;
+      // Reset stale cache retry count when moving to a new city
+      if (cityIndex !== lastStaleCacheCityIndex) {
+        staleCacheRetryCount = 0;
+      }
       let citySavedTotal = 0;
       cityStartTime = Date.now();
       lastAddressSavedTime = Date.now();
@@ -1840,42 +1866,74 @@ await page.evaluate(() => {
             }
 
             // If all properties were from wrong state, this is a stale cache issue
-            // The Privy SPA keeps React state in memory - we need to completely restart the browser
+            // The Privy SPA keeps React state in memory - restart browser immediately
             if (skippedWrongState > 0 && urlSaved === 0) {
+              // Track retries to prevent infinite loops
+              if (lastStaleCacheCityIndex === cityIndex) {
+                staleCacheRetryCount++;
+              } else {
+                staleCacheRetryCount = 1;
+                lastStaleCacheCityIndex = cityIndex;
+              }
+
               LC.error('🚨 STALE CACHE DETECTED - All properties from wrong state!', {
                 city: extractCityFromUrl(url),
                 skippedWrongState,
                 expectedState: state,
-                action: 'Marking state complete and restarting browser to clear SPA cache'
+                retryAttempt: staleCacheRetryCount,
+                maxRetries: MAX_STALE_CACHE_RETRIES,
+                action: staleCacheRetryCount <= MAX_STALE_CACHE_RETRIES
+                  ? 'Restarting browser and retrying this city'
+                  : 'Max retries reached, skipping city'
               });
 
-              // Mark this state as complete to move to next state
-              // The stale cache persists for the whole state, so skip remaining cities
-              await markStateComplete(progress, state);
-
-              // Force browser restart by closing the page completely
-              try {
-                await page.evaluate(() => {
-                  sessionStorage.clear();
-                  localStorage.clear();
-                  // Clear all caches
-                  if (window.caches) {
-                    caches.keys().then(names => names.forEach(name => caches.delete(name)));
-                  }
-                });
-                await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 5000 }).catch(() => {});
-                // Close and reopen the browser context to fully clear React state
-                const browser = page.browser();
-                if (browser) {
-                  const context = page.browserContext();
-                  await context.clearCookies().catch(() => {});
-                }
-              } catch (e) {
-                LC.warn('Cache clearing failed', { error: e?.message });
+              // If we've hit max retries, skip this city
+              if (staleCacheRetryCount > MAX_STALE_CACHE_RETRIES) {
+                LC.warn('⏭️ Max stale cache retries reached, skipping city', { city: cityName, retries: staleCacheRetryCount });
+                continue;
               }
 
-              // Signal to exit this state entirely
-              throw new Error('STALE_CACHE_SKIP_STATE');
+              // DON'T mark state complete - we want to retry it after browser restart
+              // Restart browser immediately to clear cache
+              try {
+                const { initSharedBrowser, ensureVendorPageSetup, closeSharedBrowser } = await import('../../../utils/browser.js');
+
+                LC.info('🔄 Closing browser to clear stale cache...');
+                await closeSharedBrowser();
+                await sleep(2000);
+
+                // Create fresh browser
+                LC.info('🔄 Creating fresh browser...');
+                const browser = await initSharedBrowser();
+                const newPage = await browser.newPage();
+                newPage.__df_name = 'privy';
+
+                await ensureVendorPageSetup(newPage, {
+                  randomizeUA: true,
+                  timeoutMs: 180000,
+                  jitterViewport: true,
+                  baseViewport: { width: 1366, height: 900 },
+                });
+                try { await newPage.setViewport({ width: 1947, height: 1029 }); } catch {}
+                try { await enableRequestBlocking(newPage); } catch {}
+
+                // Login to Privy
+                LC.info('🔐 Logging into Privy on fresh browser...');
+                await loginToPrivy(newPage);
+                await sleep(10000);
+
+                // Replace page reference and continue with same city
+                page = newPage;
+                LC.success('✅ Browser restarted, retrying city...');
+
+                // Decrement cityIndex to retry this same city
+                cityIndex--;
+                continue;
+              } catch (restartErr) {
+                LC.error('Failed to restart browser for stale cache recovery', { error: restartErr?.message });
+                // Skip this city and continue - browser restart at end of state will help
+                continue;
+              }
             }
           });
 
@@ -1941,10 +1999,7 @@ await page.evaluate(() => {
             // If recovery failed, skip this city and continue
             continue;
           }
-          if (err?.message === 'STALE_CACHE_SKIP_STATE') {
-            L.warn('Stale cache detected - skipping remaining cities in this state', { state });
-            break; // Exit the city loop, move to next state
-          }
+          // STALE_CACHE_SKIP_STATE is no longer thrown - we restart browser and retry instead
           L.warn('Timeout or error on URL — skipping', { error: err.message, city: cityName });
           continue;
         }
@@ -1969,6 +2024,57 @@ await page.evaluate(() => {
     // Mark state as fully completed
     await markStateComplete(progress, state);
     LState.info('State scrape complete', { stateSaved, state });
+
+    // CRITICAL: Restart browser after each state to clear React SPA cache
+    // This prevents stale data from previous state appearing in next state's search results
+    LState.info('🔄 Restarting browser to clear SPA cache before next state...');
+    try {
+      const { initSharedBrowser, ensureVendorPageSetup, closeSharedBrowser } = await import('../../../utils/browser.js');
+
+      // Close old browser completely
+      try {
+        const oldBrowser = page.browser();
+        if (oldBrowser) {
+          await closeSharedBrowser();
+        }
+      } catch (closeErr) {
+        LState.warn('Error closing old browser', { error: closeErr?.message });
+      }
+
+      // Wait a moment for browser to fully close
+      await sleep(2000);
+
+      // Create fresh browser
+      const browser = await initSharedBrowser();
+      const newPage = await browser.newPage();
+      newPage.__df_name = 'privy';
+
+      // Set up the new page
+      await ensureVendorPageSetup(newPage, {
+        randomizeUA: true,
+        timeoutMs: 180000,
+        jitterViewport: true,
+        baseViewport: { width: 1366, height: 900 },
+      });
+      try { await newPage.setViewport({ width: 1947, height: 1029 }); } catch {}
+      try { await enableRequestBlocking(newPage); } catch {}
+
+      // Login to Privy on new page
+      LState.info('🔐 Logging into Privy on fresh browser...');
+      await loginToPrivy(newPage);
+
+      // Wait for dashboard to be ready
+      LState.info('⏳ Waiting for dashboard to stabilize...');
+      await sleep(10000);
+
+      // Replace page reference for next state
+      page = newPage;
+      LState.success('✅ Browser restarted successfully, ready for next state');
+    } catch (restartErr) {
+      LState.error('Failed to restart browser', { error: restartErr?.message });
+      // If restart fails, try to continue with existing page
+      // The stale cache detection will catch issues
+    }
   }
 
   // Log final progress summary

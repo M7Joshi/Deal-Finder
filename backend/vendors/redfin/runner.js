@@ -4,6 +4,7 @@ import { fetchListingsFromApi, closeSharedBrowser as closeFetcherBrowser } from 
 import { upsertRaw, upsertProperty, shouldPauseScraping } from './save.js';
 import { extractAgentDetails, closeSharedBrowser as closeAgentBrowser } from './agentExtractor.js';
 import ScraperProgress from '../../models/ScraperProgress.js';
+import ScrapedDeal from '../../models/ScrapedDeal.js';
 
 // Import control object for abort checking
 import { control } from '../runAutomation.js';
@@ -252,6 +253,23 @@ async function runCity(stateCode, city) {
 // Main runner - process all states and cities
 export async function runAllCities() {
   console.log(`[Redfin] Starting API-based scraping for ${STATES_TO_PROCESS.length} states`);
+
+  // SAFEGUARD: Check pending AMV before scraping - if already have 500+, skip scraping
+  // This prevents piling up addresses after crashes/restarts
+  const BATCH_THRESHOLD = 500;
+  try {
+    const pendingAMV = await ScrapedDeal.countDocuments({
+      source: 'redfin',
+      $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+    });
+    if (pendingAMV >= BATCH_THRESHOLD) {
+      console.log(`[Redfin] ⏭️ SKIPPING SCRAPE: Already have ${pendingAMV} pending AMV addresses (threshold: ${BATCH_THRESHOLD}). Process AMV first!`);
+      return; // Exit - let BofA process pending first
+    }
+    console.log(`[Redfin] Pending AMV check passed: ${pendingAMV}/${BATCH_THRESHOLD} - proceeding with scrape`);
+  } catch (e) {
+    console.warn('[Redfin] Could not check pending AMV count:', e?.message);
+  }
 
   const progress = await getProgress();
   const startStateIndex = progress.currentStateIndex || 0;
