@@ -85,6 +85,28 @@ export async function extractAgentDetails(propertyUrl) {
       }
     }
 
+    // Method 1d2: Extract email from "Contact: (phone), email" pattern (email after phone)
+    if (!agentEmail) {
+      const contactAfterPhoneMatch = html.match(/Contact:[^<]*?\d{3}[-.\s)]+\d{3}[-.\s]+\d{4}[,\s]+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+      if (contactAfterPhoneMatch && contactAfterPhoneMatch[1]) {
+        const email = contactAfterPhoneMatch[1].toLowerCase();
+        if (!email.includes('@redfin.com')) {
+          agentEmail = contactAfterPhoneMatch[1].trim();
+        }
+      }
+    }
+
+    // Method 1d3: Extract email anywhere on the Contact line
+    if (!agentEmail) {
+      const contactLineMatch = html.match(/Contact:[^<]{0,100}?([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+      if (contactLineMatch && contactLineMatch[1]) {
+        const email = contactLineMatch[1].toLowerCase();
+        if (!email.includes('@redfin.com')) {
+          agentEmail = contactLineMatch[1].trim();
+        }
+      }
+    }
+
     // Method 1e: Extract any email near agent/listing text as last resort
     if (!agentEmail) {
       // Look for email addresses that appear after "Listed by" or near agent info
