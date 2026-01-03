@@ -119,11 +119,47 @@ export async function extractAgentDetails(propertyUrl) {
       }
     }
 
+    // Method 3c: Extract brokerage from "Listed by Name • Brokerage" pattern
+    if (!brokerage) {
+      const bulletBrokerMatch = html.match(/Listed by[^•·<]*[•·]\s*([^<\n]+?)(?:\s*<|Contact:|$)/i);
+      if (bulletBrokerMatch && bulletBrokerMatch[1]) {
+        const candidate = bulletBrokerMatch[1].trim();
+        // Make sure it's not a phone number
+        if (candidate && !/^\(?\d{3}\)?[-.\s]?\d{3}/.test(candidate)) {
+          brokerage = candidate;
+        }
+      }
+    }
+
+    // Method 3d: Extract brokerage from officeName in JSON
+    if (!brokerage) {
+      const officeMatch = html.match(/officeName\\?":\\?"([^"\\]+)/);
+      if (officeMatch && officeMatch[1]) {
+        brokerage = officeMatch[1].trim();
+      }
+    }
+
     // Method 4: Fallback - Look for phone in tel: links
     if (!agentPhone) {
       const telMatch = html.match(/href="tel:([^"]+)"/);
       if (telMatch && telMatch[1]) {
         agentPhone = telMatch[1].replace(/[^\d-]/g, '');
+      }
+    }
+
+    // Method 4b: Look for "Contact: (xxx) xxx-xxxx" pattern in plain text
+    if (!agentPhone) {
+      const contactPhoneMatch = html.match(/Contact:(?:\s|&nbsp;|<!--.*?-->)*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})/i);
+      if (contactPhoneMatch) {
+        agentPhone = `${contactPhoneMatch[1]}-${contactPhoneMatch[2]}-${contactPhoneMatch[3]}`;
+      }
+    }
+
+    // Method 4c: Look for phone number after bullet point near agent info
+    if (!agentPhone) {
+      const bulletPhoneMatch = html.match(/[•·]\s*(?:[^<]*?)\s*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})/);
+      if (bulletPhoneMatch) {
+        agentPhone = `${bulletPhoneMatch[1]}-${bulletPhoneMatch[2]}-${bulletPhoneMatch[3]}`;
       }
     }
 
