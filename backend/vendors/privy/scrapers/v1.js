@@ -377,9 +377,24 @@ async function extractAgentFromPageText(page) {
   try {
     return await page.evaluate(() => {
       const result = { name: null, email: null, phone: null, brokerage: null };
-      const pageText = document.body.innerText || '';
+
+      // IMPORTANT: Only look in the detail panel/modal, NOT the whole page
+      // The whole page includes sidebar agent info which is NOT the listing agent
+      const detailPanel = document.querySelector(
+        '.modal, .drawer, .detail-panel, .property-detail, ' +
+        '[class*="modal"], [class*="drawer"], [class*="detail"], ' +
+        '[class*="sidebar"]:not([class*="nav"]), .ReactModal__Content'
+      );
+
+      // Use detail panel text if found, otherwise skip (don't use body - captures sidebar agent)
+      if (!detailPanel) {
+        return result; // No detail panel found, return empty
+      }
+
+      const pageText = detailPanel.innerText || '';
 
       // ========== PRIVY-SPECIFIC LABELED FIELDS ==========
+      // These are the ONLY reliable patterns - they explicitly say "List Agent"
 
       // 1. PHONE: "List Agent Direct Phone: 678-951-7041"
       const phoneLabeled = pageText.match(/List\s+Agent\s+(?:Direct\s+)?Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
@@ -430,47 +445,9 @@ async function extractAgentFromPageText(page) {
         }
       }
 
-      // ========== FALLBACK PATTERNS ==========
-      // If Privy-specific patterns didn't work, try generic patterns
-
-      if (!result.email) {
-        const emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-        const allEmails = pageText.match(emailPattern) || [];
-        for (const email of allEmails) {
-          const lower = email.toLowerCase();
-          if (!lower.includes('privy') && !lower.includes('noreply') &&
-              !lower.includes('support') && !lower.includes('mioym') &&
-              !lower.includes('info@') && !lower.includes('admin')) {
-            result.email = email;
-            break;
-          }
-        }
-      }
-
-      if (!result.phone) {
-        const phoneMatch = pageText.match(/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
-        if (phoneMatch) {
-          result.phone = phoneMatch[0];
-        }
-      }
-
-      // Also try mailto/tel links as last resort
-      if (!result.email || !result.phone) {
-        const links = Array.from(document.querySelectorAll('a[href^="mailto:"], a[href^="tel:"]'));
-        for (const link of links) {
-          const href = (link.getAttribute('href') || '').trim();
-          if (href.startsWith('mailto:') && !result.email) {
-            const email = href.slice(7).split('?')[0];
-            const lower = email.toLowerCase();
-            if (!lower.includes('privy') && !lower.includes('noreply')) {
-              result.email = email;
-            }
-          }
-          if (href.startsWith('tel:') && !result.phone) {
-            result.phone = href.slice(4);
-          }
-        }
-      }
+      // NOTE: We do NOT use generic email/phone fallbacks anymore
+      // Generic patterns capture sidebar agent info (wrong agent for the listing)
+      // Only the explicit "List Agent..." patterns are reliable
 
       return result;
     });
@@ -1663,7 +1640,9 @@ await page.evaluate(() => {
                 details.agent_phone = prop.agentPhone || null;
               }
 
-              // If no agent info from card, try fallback extraction (slower but more thorough)
+              // If no agent info from card, try clicking the card to open detail panel
+              // NOTE: We do NOT use page-level text extraction as fallback because it captures
+              // sidebar/logged-in user agent info, not the property's listing agent
               if (!details.agent_name && !details.agent_email && !details.agent_phone) {
                 try {
                   // Try to find the card and click it for detail panel
@@ -1682,16 +1661,9 @@ await page.evaluate(() => {
                       details.agent_phone = agent.phone || null;
                       details.brokerage   = agent.brokerage || null;
                     }
-                  } else {
-                    // Fallback: use page-level text pattern extraction
-                    const fromText = await extractAgentFromPageText(page);
-                    if (fromText?.name || fromText?.email || fromText?.phone || fromText?.brokerage) {
-                      details.agent_name  = fromText.name  || null;
-                      details.agent_email = fromText.email || null;
-                      details.agent_phone = fromText.phone || null;
-                      details.brokerage   = fromText.brokerage || null;
-                    }
                   }
+                  // If handle not found, leave agent fields null - don't use page-level fallback
+                  // Page-level extraction captures sidebar agent info (wrong agent)
                 } catch (e) {
                   logPrivy.warn('Agent extraction fallback failed (non-fatal)', { error: e?.message, fullAddress: prop?.fullAddress || null });
                 }
