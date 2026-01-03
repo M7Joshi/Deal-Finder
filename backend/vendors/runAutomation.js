@@ -653,10 +653,31 @@ let privyAddressCount = 0;
 let redfinAddressCount = 0;
 
 // Function to request BofA access - returns true if granted, false if busy
+// PRIORITY: Privy gets priority over Redfin when both have pending addresses
 async function requestBofaAccess(source) {
   if (bofaInUse) {
     return false;
   }
+
+  // If Redfin is requesting, check if Privy has pending addresses first
+  if (source === 'redfin') {
+    try {
+      const ScrapedDeal = (await import('../models/ScrapedDeal.js')).default;
+      const pendingPrivy = await ScrapedDeal.countDocuments({
+        source: 'privy',
+        $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+      });
+
+      // If Privy has 500+ pending, deny Redfin and let Privy go first
+      if (pendingPrivy >= BOFA_TRIGGER_BATCH) {
+        log.info(`BOFA-QUEUE: Redfin denied - Privy has ${pendingPrivy} pending (priority)`);
+        return false;
+      }
+    } catch (e) {
+      // If check fails, allow Redfin to proceed
+    }
+  }
+
   bofaInUse = true;
   bofaCurrentSource = source;
   log.info(`BOFA-QUEUE: ${source.toUpperCase()} acquired BofA lock (17 browsers)`);
@@ -2069,6 +2090,7 @@ if (jobs.has('home_valuations')) {
 }
 
 // Export function to manually start scheduler (for single-process mode)
+// This runs Privy and Redfin IN PARALLEL with shared BofA queue
 export function startSchedulerManually() {
   log.info('=== startSchedulerManually called ===');
   log.info('Current state before start', {
@@ -2078,13 +2100,20 @@ export function startSchedulerManually() {
     schedulerPhase
   });
 
+  // Set progressTracker so UI shows "running"
+  progressTracker.isRunning = true;
+  progressTracker.status = 'running';
+  progressTracker.lastRun = new Date().toISOString();
+  progressTracker.error = null;
+  control.abort = false;
+
   schedulerEnabled = true;
 
   // Always call bootstrapScheduler - it handles the actual scheduling
   // The old check was preventing startup when schedulerEnabled was already true
   bootstrapScheduler().catch(e => log.error('bootstrapScheduler error', { error: e?.message }));
 
-  log.info('=== startSchedulerManually complete ===');
+  log.info('=== startSchedulerManually complete (Privy + Redfin running in parallel) ===');
 }
 
 // Bootstrap the sequential scheduler (only in worker mode is now handled above)

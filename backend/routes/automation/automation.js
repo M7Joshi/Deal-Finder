@@ -1,35 +1,34 @@
 import express from 'express';
-import runAutomation, { progressTracker } from '../../vendors/runAutomation.js';
+import runAutomation, { progressTracker, startSchedulerManually } from '../../vendors/runAutomation.js';
 import { getOtpStateDB, submitOtpCodeDB, cancelOtpRequestDB } from '../../state/otpState.js';
 
 const router = express.Router();
 
 // Start the automation run (non-blocking)
+// Uses scheduler which runs Privy + Redfin IN PARALLEL with shared BofA queue
 router.post('/start', async (req, res) => {
   try {
-    // Optional jobs selection: array or comma-separated string (privy,home_valuations,current_listings)
-    const jobs = req.body?.jobs ?? undefined;
-
     if (progressTracker.isRunning) {
       return res.status(409).json({ ok: false, message: 'Automation already running', status: progressTracker.status });
     }
 
-    // Fire-and-forget; progress is visible via /api/automation/status and /api/automation/logs
-    Promise.resolve().then(() => runAutomation(jobs));
+    // Use scheduler which runs Privy and Redfin in parallel
+    // Whoever hits 500 addresses first gets BofA, other continues scraping
+    startSchedulerManually();
 
-    return res.status(202).json({ ok: true, message: 'Automation started', jobs: jobs || '(default)' });
+    return res.status(202).json({ ok: true, message: 'Automation started (Privy + Redfin in parallel)' });
   } catch (err) {
     return res.status(500).json({ ok: false, message: 'Failed to start automation', error: err?.message || String(err) });
   }
 });
 
-// Backward-compatible endpoint
+// Backward-compatible endpoint - also uses parallel scheduler
 router.post('/run', async (req, res) => {
   if (progressTracker.isRunning) {
     return res.status(409).json({ ok: false, message: 'Automation already running', status: progressTracker.status });
   }
-  Promise.resolve().then(() => runAutomation(req.body?.jobs));
-  return res.status(202).json({ ok: true, message: 'Automation started (compat /run)' });
+  startSchedulerManually();
+  return res.status(202).json({ ok: true, message: 'Automation started (Privy + Redfin in parallel)' });
 });
 
 // Stop request — FORCE STOP - kills everything immediately

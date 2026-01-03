@@ -480,9 +480,9 @@ async function extractAgentFromPageText(page) {
 }
 
 async function extractAgentWithFallback(page, cardHandle) {
-  // Try on-card first with multiple selectors
-  const onCard = await extractAgentFromContext(cardHandle);
-  if (onCard.name || onCard.email || onCard.phone) return onCard;
+  // ALWAYS click the card to open detail panel first
+  // Don't use on-card agent - it shows sidebar agent (wrong for all properties)
+  // We need "List Agent Full Name:" from the property detail page
 
   // Open details panel/modal by clicking the card
   try { await cardHandle.click({ delay: 50 }); } catch {}
@@ -523,16 +523,17 @@ async function extractAgentWithFallback(page, cardHandle) {
     await sleep(500);
   } catch {}
 
-  // Try common detail roots (main page + any iframes)
+  // Try Privy-specific labeled fields FIRST (most accurate)
+  // Looks for "List Agent Full Name:", "List Agent Email:", etc.
+  const fromText = await extractAgentFromPageText(page);
+  if (fromText.name || fromText.email || fromText.phone) return fromText;
+
+  // Fallback: Try common detail roots (main page + any iframes)
   const roots = [page, ...page.frames()];
   for (const r of roots) {
     const got = await extractAgentFromContext(r);
     if (got.name || got.email || got.phone) return got;
   }
-
-  // Try full page text pattern extraction using Privy-specific labeled fields
-  const fromText = await extractAgentFromPageText(page);
-  if (fromText.name || fromText.email || fromText.phone) return fromText;
 
   // Last resort: scan mailto/tel anywhere on page
   try {
@@ -1141,6 +1142,11 @@ const scrapePropertiesV1 = async (page) => {
     const MAX_CITY_RETRIES = 2; // Max retries before moving to next city
     let cityRetryCount = 0;
 
+    // City timeout: skip if no new addresses in 15 minutes
+    const CITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+    let cityStartTime = Date.now();
+    let lastAddressSavedTime = Date.now();
+
     for (let cityIndex = startIndex; cityIndex < stateUrls.length; cityIndex++) {
       const url = stateUrls[cityIndex];
       if (!url) continue;
@@ -1148,9 +1154,11 @@ const scrapePropertiesV1 = async (page) => {
       // Get city name for logging
       const cityName = stateCities[cityIndex] || extractCityFromUrl(url);
 
-      // Reset retry count for new city
+      // Reset retry count and timers for new city
       cityRetryCount = 0;
       let citySavedTotal = 0;
+      cityStartTime = Date.now();
+      lastAddressSavedTime = Date.now();
 
       // SIMPLIFIED: Just use the base URL with all filters (no tag variants)
       // The buildPrivyUrl already includes all necessary filters
@@ -1162,7 +1170,22 @@ const scrapePropertiesV1 = async (page) => {
         return []; // Exit immediately
       }
 
+      // Check for city timeout - if stuck on same city for 15 mins with no new addresses, skip
+      const timeSinceLastAddress = Date.now() - lastAddressSavedTime;
+      if (timeSinceLastAddress > CITY_TIMEOUT_MS) {
+        LState.warn(`⏱️ CITY TIMEOUT: No new addresses in ${Math.round(timeSinceLastAddress / 60000)} mins - skipping to next city`, {
+          city: cityName,
+          timeoutMinutes: Math.round(CITY_TIMEOUT_MS / 60000)
+        });
+        continue; // Skip to next city
+      }
+
       LState.info(`📍 Processing city: ${cityName} (${cityIndex + 1}/${stateUrls.length})`);
+
+      // CRITICAL: Save progress BEFORE processing city so crash will resume from THIS city
+      progress.lastCityIndex = cityIndex;
+      progress.currentState = state;
+      await saveProgress(progress);
 
       {
         // PROPER FLOW: Stay on dashboard, apply filters, then search for city
@@ -1778,6 +1801,9 @@ await page.evaluate(() => {
                 stateSaved += 1;
                 allProperties.push(prop);
 
+                // Update lastAddressSavedTime to reset city timeout
+                lastAddressSavedTime = Date.now();
+
                 // NOTE: We do NOT check batch limit here - we complete ALL cities in the state first
                 // Batch limit is only checked after completing the entire state
               } catch (error) {
@@ -1807,6 +1833,11 @@ await page.evaluate(() => {
 
             // Track successful saves for this city
             citySavedTotal += urlSaved;
+
+            // If city has 0 properties, log and continue quickly (don't waste time)
+            if (urlSaved === 0 && skippedWrongState === 0) {
+              LC.info('📭 City has 0 properties matching filters - moving to next city', { city: cityName });
+            }
 
             // If all properties were from wrong state, this is a stale cache issue
             // The Privy SPA keeps React state in memory - we need to completely restart the browser

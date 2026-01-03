@@ -285,8 +285,8 @@ export default function Deals() {
   const checkAutomationStatus = useCallback(async () => {
     try {
       const res = await getServiceStatus();
-      // Backend returns { ok, status: 'running'|'exited', runtime: 'node'|'docker' }
-      const isRunning = res?.status === 'running' || res?.running === true;
+      // Backend returns progressTracker: { isRunning, status: 'running'|'idle'|'completed'|'error' }
+      const isRunning = res?.isRunning === true || res?.status === 'running';
       setAutomationRunning(isRunning);
     } catch (e) {
       console.error('Failed to check automation status:', e);

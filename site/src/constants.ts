@@ -71,9 +71,10 @@ export const routes = {
   automation: {
     run: `${API_BASE}/api/automation/run`,
     service: {
-      status: `${API_BASE}/api/automation/service/status`,
-      start:  `${API_BASE}/api/automation/service/start`,
-      stop:   `${API_BASE}/api/automation/service/stop`,
+      // Direct routes that use progressTracker (resume from where left off)
+      status: `${API_BASE}/api/automation/status`,
+      start:  `${API_BASE}/api/automation/start`,
+      stop:   `${API_BASE}/api/automation/stop`,
       restart:`${API_BASE}/api/automation/service/restart`,
     },
     otp: `${API_BASE}/api/automation/otp`,

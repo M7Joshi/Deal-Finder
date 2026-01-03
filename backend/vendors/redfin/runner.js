@@ -147,7 +147,8 @@ async function runCity(stateCode, city) {
   console.log(`\n[Redfin] === City: ${city.name}, ${stateCode} ===`);
 
   try {
-    const homes = await fetchListingsFromApi(city.id, stateCode, { limit: 500 });
+    // Use high limit to get ALL available homes from each city (API supports up to ~5000)
+    const homes = await fetchListingsFromApi(city.id, stateCode, { limit: 5000 });
     console.log(`[Redfin] API returned ${homes.length} homes for ${city.name}`);
 
     let saved = 0;
@@ -293,14 +294,19 @@ export async function runAllCities() {
         await markCityProcessed(cityKey);
         processedCitiesSet.add(cityKey);
 
+        // Check batch limit after EACH city - if 500+ addresses saved, pause for AMV
+        if (shouldPauseScraping()) {
+          console.log(`[Redfin] Batch limit reached after city ${city.name}, ${stateCode} - pausing for AMV phase`);
+          await updateProgress({ currentStateIndex: stateIdx, currentState: stateCode });
+          break;
+        }
+
         // Small delay between cities
         await new Promise(r => setTimeout(r, 1000));
       }
 
-      // Check batch limit ONLY after completing ALL cities in the state
+      // If batch limit was reached inside city loop, break out of state loop too
       if (shouldPauseScraping()) {
-        console.log(`[Redfin] Batch limit reached after completing state ${stateCode} - pausing for AMV phase`);
-        await updateProgress({ currentStateIndex: stateIdx + 1, currentState: null }); // Move to next state
         break;
       }
 
