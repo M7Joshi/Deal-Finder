@@ -254,6 +254,14 @@ async function runCity(stateCode, city) {
 export async function runAllCities() {
   console.log(`[Redfin] Starting API-based scraping for ${STATES_TO_PROCESS.length} states`);
 
+  // CHECK: If one-time cycle is already complete, do not restart
+  const existingProgress = await getProgress();
+  if (existingProgress.cycleComplete) {
+    console.log('[Redfin] 🛑 ONE-TIME CYCLE ALREADY COMPLETE - Redfin scraping disabled.');
+    console.log('[Redfin] To re-enable, run: db.scraperprogresses.updateOne({scraper:"redfin"},{$unset:{cycleComplete:1}})');
+    return;
+  }
+
   // SAFEGUARD: Check pending AMV before scraping - if already have 500+, skip scraping
   // This prevents piling up addresses after crashes/restarts
   const BATCH_THRESHOLD = 500;
@@ -365,8 +373,15 @@ export async function runAllCities() {
     // Check if completed all states
     const progress2 = await getProgress();
     if ((progress2.currentStateIndex || 0) >= STATES_TO_PROCESS.length - 1 && !control.abort && !shouldPauseScraping()) {
-      console.log('[Redfin] Completed all states! Resetting progress.');
-      await resetProgress();
+      console.log('[Redfin] ✅ Completed ONE FULL CYCLE through all states!');
+      console.log('[Redfin] 🛑 STOPPING - Redfin will not restart. Focus on Privy multi-cycle monitoring.');
+      // Mark as completed by setting cycleCount to 1 (one-time run mode)
+      await ScraperProgress.updateOne(
+        { scraper: 'redfin' },
+        { $set: { cycleComplete: true, cycleCount: 1, completedAt: new Date() } },
+        { upsert: true }
+      );
+      // Do NOT reset progress - this prevents restart
     }
   } finally {
     await closeSharedBrowser();
