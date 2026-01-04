@@ -660,17 +660,18 @@ async function requestBofaAccess(source) {
   }
 
   // If Redfin is requesting, check if Privy has pending addresses first
+  // Check all privy sources (privy, privy-Tear, privy-flip)
   if (source === 'redfin') {
     try {
       const ScrapedDeal = (await import('../models/ScrapedDeal.js')).default;
       const pendingPrivy = await ScrapedDeal.countDocuments({
-        source: 'privy',
+        source: { $regex: /^privy/ }, // Matches privy, privy-Tear, privy-flip
         $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
       });
 
       // If Privy has 500+ pending, deny Redfin and let Privy go first
       if (pendingPrivy >= BOFA_TRIGGER_BATCH) {
-        log.info(`BOFA-QUEUE: Redfin denied - Privy has ${pendingPrivy} pending (priority)`);
+        log.info(`BOFA-QUEUE: Redfin denied - Privy sources have ${pendingPrivy} pending (priority)`);
         return false;
       }
     } catch (e) {
@@ -695,9 +696,13 @@ function releaseBofaAccess(source) {
 
 // Run BofA AMV for addresses from a specific source
 // Uses ALL 17 browsers (shared queue model)
+// For 'privy' source, processes all privy sources (privy, privy-Tear, privy-flip)
 async function runBofaForSource(source) {
   const concurrency = BOFA_TOTAL_CONCURRENCY; // Always use all 17
   const { lookupSingleAddressInternal } = await import('../routes/bofa-internal.js');
+
+  // For privy, use regex to match all privy sources
+  const sourceQuery = source === 'privy' ? { $regex: /^privy/ } : source;
 
   log.info(`BofA-${source}: Starting with ${concurrency} browsers (SHARED QUEUE)`);
 
@@ -707,7 +712,7 @@ async function runBofaForSource(source) {
   while (!control.abort) {
     // Find next batch of addresses needing AMV from this source
     const dealsNeedingAMV = await ScrapedDeal.find({
-      source: source,
+      source: sourceQuery,
       $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
     })
       .sort({ scrapedAt: -1 })
@@ -771,9 +776,9 @@ async function runPrivyWithBofA() {
     log.info(`PRIVY: Starting (hits ${BOFA_TRIGGER_BATCH} -> requests shared BofA with ${BOFA_TOTAL_CONCURRENCY} browsers)`);
 
     while (!control.abort) {
-      // Check pending AMV for Privy
+      // Check pending AMV for all Privy sources (privy, privy-Tear, privy-flip)
       const pendingPrivyAMV = await ScrapedDeal.countDocuments({
-        source: 'privy',
+        source: { $regex: /^privy/ },
         $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
       }).catch(() => 0);
 
@@ -818,9 +823,9 @@ async function runPrivyWithBofA() {
 
       // If no new addresses, scraper finished its cycle
       if (newAddresses === 0) {
-        // Process any remaining pending
+        // Process any remaining pending (all privy sources)
         const remaining = await ScrapedDeal.countDocuments({
-          source: 'privy',
+          source: { $regex: /^privy/ },
           $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
         }).catch(() => 0);
 

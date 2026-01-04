@@ -10,6 +10,14 @@ import ScraperProgress from '../../models/ScraperProgress.js';
 
 const SCRAPER_NAME = 'privy';
 
+// Filter cycle configurations
+// Each cycle uses different project_type and spread_type
+export const FILTER_CYCLES = [
+  { index: 0, source: 'privy',       project_type: 'buy_hold', spread_type: 'umv' },
+  { index: 1, source: 'privy-Tear',  project_type: 'scrape',   spread_type: 'arv' },
+  { index: 2, source: 'privy-flip',  project_type: 'flip',     spread_type: 'arv' },
+];
+
 // Default progress state
 const DEFAULT_PROGRESS = {
   lastState: null,        // Last completed state (e.g., 'AL')
@@ -20,6 +28,7 @@ const DEFAULT_PROGRESS = {
   totalCitiesProcessed: 0,
   totalStatesCompleted: 0,
   cycleCount: 0,          // How many full cycles through all states
+  filterCycleIndex: 0,    // Which filter config (0=privy, 1=privy-Tear, 2=privy-flip)
 };
 
 /**
@@ -53,13 +62,16 @@ export async function loadProgress() {
         totalCitiesProcessed: doc.totalScraped || 0,
         totalStatesCompleted: doc.currentStateIndex || 0,
         cycleCount: doc.cycleCount || 0,
+        filterCycleIndex: doc.filterCycleIndex || 0,
       };
+      const currentFilter = FILTER_CYCLES[progress.filterCycleIndex] || FILTER_CYCLES[0];
       console.log('[PrivyProgress] Loaded progress from MongoDB:', {
         currentState: progress.currentState,
         lastCityIndex: progress.lastCityIndex,
         completedStates: progress.completedStates?.length || 0,
         totalCitiesProcessed: progress.totalCitiesProcessed,
         cycleCount: progress.cycleCount,
+        filterCycle: currentFilter.source,
       });
       return progress;
     }
@@ -92,6 +104,7 @@ export async function saveProgress(progress) {
         processedCities: progress.completedStates, // Store completed states here
         totalScraped: progress.totalCitiesProcessed,
         cycleCount: progress.cycleCount,
+        filterCycleIndex: progress.filterCycleIndex || 0,
         lastState: progress.lastState,
         updatedAt: new Date(),
       },
@@ -137,17 +150,32 @@ export async function markStateComplete(progress, state) {
 }
 
 /**
- * Start a new cycle (all states completed, starting over)
+ * Start a new filter cycle (all states completed for current filter, move to next filter)
+ * When all 3 filter cycles complete, increment cycleCount and start over
  */
 export async function startNewCycle(progress) {
-  progress.cycleCount += 1;
+  // Move to next filter cycle
+  const nextFilterIndex = (progress.filterCycleIndex || 0) + 1;
+
+  if (nextFilterIndex >= FILTER_CYCLES.length) {
+    // All filter cycles done, start full new cycle from first filter
+    progress.cycleCount += 1;
+    progress.filterCycleIndex = 0;
+    console.log(`[PrivyProgress] All filter cycles complete! Starting full cycle #${progress.cycleCount} with filter: ${FILTER_CYCLES[0].source}`);
+  } else {
+    // Move to next filter cycle
+    progress.filterCycleIndex = nextFilterIndex;
+    const nextFilter = FILTER_CYCLES[nextFilterIndex];
+    console.log(`[PrivyProgress] Starting next filter cycle: ${nextFilter.source} (${nextFilter.project_type} + ${nextFilter.spread_type})`);
+  }
+
+  // Reset state progress for new filter cycle
   progress.completedStates = [];
   progress.lastState = null;
   progress.currentState = null;
   progress.lastCityIndex = -1;
   progress.lastUpdated = new Date().toISOString();
 
-  console.log(`[PrivyProgress] Starting new cycle #${progress.cycleCount}`);
   await saveProgress(progress);
   return progress;
 }
@@ -237,15 +265,26 @@ export async function getNextStateToProcess(urlsData, progress) {
 }
 
 /**
+ * Get current filter configuration based on progress
+ */
+export function getCurrentFilterConfig(progress) {
+  const idx = progress.filterCycleIndex || 0;
+  return FILTER_CYCLES[idx] || FILTER_CYCLES[0];
+}
+
+/**
  * Get progress summary for logging
  */
 export function getProgressSummary(progress) {
+  const currentFilter = getCurrentFilterConfig(progress);
   return {
     currentState: progress.currentState,
     lastCityIndex: progress.lastCityIndex,
     completedStates: progress.completedStates?.length || 0,
     totalCitiesProcessed: progress.totalCitiesProcessed,
     cycleCount: progress.cycleCount,
+    filterCycle: currentFilter.source,
+    filterCycleIndex: progress.filterCycleIndex || 0,
     lastUpdated: progress.lastUpdated,
   };
 }
@@ -273,6 +312,8 @@ export default {
   startNewCycle,
   getNextStateToProcess,
   getProgressSummary,
+  getCurrentFilterConfig,
   resetProgress,
   extractCityFromUrl,
+  FILTER_CYCLES,
 };

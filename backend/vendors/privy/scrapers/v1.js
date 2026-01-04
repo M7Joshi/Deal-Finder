@@ -34,6 +34,8 @@ import {
   markStateComplete,
   getNextStateToProcess,
   getProgressSummary,
+  getCurrentFilterConfig,
+  FILTER_CYCLES,
 } from '../progressTracker.js';
 
 // Import batch limit checker and abort control from runAutomation
@@ -181,7 +183,12 @@ function buildPrivyStateUrl(stateCode, cacheBust = true) {
 // Build Privy URL for a city - SAME EXACT parameters as working live-scrape
 // This URL includes ALL filters so we can navigate directly without using filter modal
 // CRITICAL: id=&name=&saved_search= MUST be first to clear any saved search like "Below Market"
-function buildPrivyUrl(city, stateCode, cacheBust = true) {
+// filterConfig: { project_type, spread_type } - from FILTER_CYCLES in progressTracker.js
+function buildPrivyUrl(city, stateCode, cacheBust = true, filterConfig = null) {
+  // Default filter config (same as original)
+  const project_type = filterConfig?.project_type || 'buy_hold';
+  const spread_type = filterConfig?.spread_type || 'umv';
+
   const base = 'https://app.privy.pro/dashboard';
   const params = new URLSearchParams({
     // CRITICAL: Clear saved search first to prevent "Below Market" from being applied
@@ -192,8 +199,8 @@ function buildPrivyUrl(city, stateCode, cacheBust = true) {
     search_text: `${city}, ${stateCode}`,
     location_type: 'city',
     include_surrounding: 'true',
-    project_type: 'buy_hold',
-    spread_type: 'umv',
+    project_type: project_type,
+    spread_type: spread_type,
     spread: '50',
     isLTRsearch: 'false',
     preferred_only: 'false',
@@ -1035,10 +1042,11 @@ const scrapePropertiesV1 = async (page) => {
 
   // SAFEGUARD: Check pending AMV before scraping - if already have 500+, skip scraping
   // This prevents piling up addresses after crashes/restarts
+  // Check ALL privy sources (privy, privy-Tear, privy-flip) for pending AMV
   const BATCH_THRESHOLD = 500;
   try {
     const pendingAMV = await ScrapedDeal.countDocuments({
-      source: 'privy',
+      source: { $regex: /^privy/ }, // Matches privy, privy-Tear, privy-flip
       $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
     });
     if (pendingAMV >= BATCH_THRESHOLD) {
@@ -1052,6 +1060,10 @@ const scrapePropertiesV1 = async (page) => {
 
   // Load progress to resume from where we left off (async - uses MongoDB)
   const progress = await loadProgress();
+
+  // Get current filter configuration (privy, privy-Tear, or privy-flip)
+  const filterConfig = getCurrentFilterConfig(progress);
+  logPrivy.info(`Current filter cycle: ${filterConfig.source} (${filterConfig.project_type} + ${filterConfig.spread_type})`);
   logPrivy.info('Privy scraper starting with progress', getProgressSummary(progress));
 
   // Blocked states - excluded from scraping (match Redfin's BLOCKED_STATES)
@@ -1106,8 +1118,8 @@ const scrapePropertiesV1 = async (page) => {
     // Get cities for this state, sorted alphabetically
     const stateCities = (urls[state] || []).slice().sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
 
-    // Build URLs dynamically using buildPrivyUrl (same as working live-scrape)
-    const stateUrls = stateCities.map(city => buildPrivyUrl(city, state));
+    // Build URLs dynamically using buildPrivyUrl with current filter config
+    const stateUrls = stateCities.map(city => buildPrivyUrl(city, state, true, filterConfig));
 
     // Determine starting index (resume from where we left off)
     let startIndex = 0;
@@ -1596,7 +1608,7 @@ await page.evaluate(() => {
                       beds: prop.beds || null,
                       baths: prop.baths || null,
                       sqft: prop.sqft || null,
-                      source: 'privy',
+                      source: filterConfig.source,
                       scrapedAt: new Date(),
                     },
                     $setOnInsert: {
@@ -1617,7 +1629,7 @@ await page.evaluate(() => {
             }
 
             if (immediateSaveCount > 0 || skippedPrice > 0) {
-              logPrivy.info(`⚡ IMMEDIATE SAVE: ${immediateSaveCount} addresses saved to Pending AMV`, {
+              logPrivy.info(`⚡ IMMEDIATE SAVE: ${immediateSaveCount} addresses saved to Pending AMV (${filterConfig.source})`, {
                 city: cityName,
                 state,
                 total: parsed.length,
@@ -1750,7 +1762,7 @@ await page.evaluate(() => {
                       beds: prop.beds || null,
                       baths: prop.baths || null,
                       sqft: prop.sqft || null,
-                      source: 'privy',
+                      source: filterConfig.source,
                       scrapedAt: new Date(),
                     };
 
