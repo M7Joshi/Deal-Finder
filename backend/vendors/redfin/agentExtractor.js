@@ -1,13 +1,121 @@
 // Agent details extractor for Redfin property pages
-// Uses HTTP + JSON parsing (same as Redfin Fetcher) instead of Puppeteer for speed
+// Uses Puppeteer to render JavaScript content for agent phone/email extraction
+// Falls back to HTTP if Puppeteer fails
 
 import axios from 'axios';
+import puppeteer from 'puppeteer';
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+// Shared browser instance for efficiency
+let sharedBrowser = null;
+
+async function getSharedBrowser() {
+  if (!sharedBrowser || !sharedBrowser.isConnected()) {
+    sharedBrowser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    });
+  }
+  return sharedBrowser;
+}
+
 /**
- * Extract agent details from a Redfin property detail page using HTTP + JSON parsing
- * This matches the Redfin Fetcher method for consistency
+ * Extract agent details using Puppeteer (can see JavaScript-rendered content)
+ * This captures the "Listed by Agent • Brokerage • Phone • Email" section
+ */
+async function extractAgentWithPuppeteer(propertyUrl) {
+  let page = null;
+  try {
+    const browser = await getSharedBrowser();
+    page = await browser.newPage();
+    await page.setUserAgent(USER_AGENT);
+    await page.setViewport({ width: 1280, height: 800 });
+
+    // Navigate and wait for content to load
+    await page.goto(propertyUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+
+    // Wait a bit for dynamic content
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Extract agent info from the rendered page
+    const agentInfo = await page.evaluate(() => {
+      const result = { agentName: null, agentPhone: null, agentEmail: null, brokerage: null };
+
+      // Get all text on the page
+      const bodyText = document.body.innerText || '';
+
+      // Look for "Listed by Agent Name" pattern
+      // Format: "Listed by Agent Name • Brokerage • Phone (broker) • email (broker)"
+      const listedByMatch = bodyText.match(/Listed by\s+([A-Za-z\s.]+?)(?:\s*[•·]|$)/i);
+      if (listedByMatch && listedByMatch[1]) {
+        result.agentName = listedByMatch[1].trim();
+      }
+
+      // Look for brokerage after first bullet
+      const brokerageMatch = bodyText.match(/Listed by[^•·]*[•·]\s*([^•·\n]+?)(?:\s*[•·]|Contact:|$)/i);
+      if (brokerageMatch && brokerageMatch[1]) {
+        const candidate = brokerageMatch[1].trim();
+        // Make sure it's not a phone number
+        if (!/^\(?\d{3}\)?[-.\s]?\d{3}/.test(candidate)) {
+          result.brokerage = candidate;
+        }
+      }
+
+      // Look for phone number pattern (xxx) xxx-xxxx or xxx-xxx-xxxx
+      const phoneMatch = bodyText.match(/[•·]\s*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})(?:\s*\((?:broker|agent)\))?/i);
+      if (phoneMatch) {
+        result.agentPhone = `${phoneMatch[1]}-${phoneMatch[2]}-${phoneMatch[3]}`;
+      }
+
+      // Look for email pattern
+      const emailMatch = bodyText.match(/[•·]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?:\s*\((?:broker|agent)\))?/i);
+      if (emailMatch && emailMatch[1]) {
+        const email = emailMatch[1].toLowerCase();
+        if (!email.includes('@redfin.com')) {
+          result.agentEmail = emailMatch[1].trim();
+        }
+      }
+
+      // Alternative: Look near "More real estate resources" heading
+      const moreResourcesSection = bodyText.split(/More real estate resources/i)[0] || '';
+      if (moreResourcesSection) {
+        // Look for phone in the section before "More real estate resources"
+        if (!result.agentPhone) {
+          const sectionPhoneMatch = moreResourcesSection.match(/\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})(?:\s*\((?:broker|agent)\))?/);
+          if (sectionPhoneMatch) {
+            result.agentPhone = `${sectionPhoneMatch[1]}-${sectionPhoneMatch[2]}-${sectionPhoneMatch[3]}`;
+          }
+        }
+
+        // Look for email in the section
+        if (!result.agentEmail) {
+          const sectionEmailMatch = moreResourcesSection.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?:\s*\((?:broker|agent)\))?/);
+          if (sectionEmailMatch && sectionEmailMatch[1]) {
+            const email = sectionEmailMatch[1].toLowerCase();
+            if (!email.includes('@redfin.com')) {
+              result.agentEmail = sectionEmailMatch[1].trim();
+            }
+          }
+        }
+      }
+
+      return result;
+    });
+
+    await page.close();
+    return agentInfo;
+
+  } catch (error) {
+    console.error(`[AgentExtractor] Puppeteer error: ${error.message}`);
+    if (page) await page.close().catch(() => {});
+    return null;
+  }
+}
+
+/**
+ * Extract agent details from a Redfin property detail page
+ * Uses Puppeteer first (to see JS-rendered content), falls back to HTTP
  * @param {string} propertyUrl - Full URL to the Redfin property page
  * @returns {Object} Agent details including name, phone, email, brokerage
  */
@@ -15,7 +123,23 @@ export async function extractAgentDetails(propertyUrl) {
   try {
     console.log(`[AgentExtractor] Extracting agent details from: ${propertyUrl}`);
 
-    // Fetch the page HTML via HTTP (much faster than Puppeteer)
+    // Try Puppeteer first (can see JavaScript-rendered agent info)
+    const puppeteerResult = await extractAgentWithPuppeteer(propertyUrl);
+    if (puppeteerResult && (puppeteerResult.agentPhone || puppeteerResult.agentEmail)) {
+      console.log(`[AgentExtractor] Puppeteer found: ${puppeteerResult.agentName || 'N/A'}, ${puppeteerResult.agentPhone || 'N/A'}, ${puppeteerResult.agentEmail || 'N/A'}`);
+      return {
+        agentName: puppeteerResult.agentName || null,
+        agentPhone: puppeteerResult.agentPhone || null,
+        email: puppeteerResult.agentEmail || null,
+        brokerage: puppeteerResult.brokerage || null,
+        agentLicense: null
+      };
+    }
+
+    // Fall back to HTTP method if Puppeteer didn't find phone/email
+    console.log(`[AgentExtractor] Puppeteer didn't find phone/email, trying HTTP fallback...`);
+
+    // Fetch the page HTML via HTTP (faster but can't see JS content)
     const response = await axios.get(propertyUrl, {
       headers: {
         'User-Agent': USER_AGENT,
@@ -119,6 +243,28 @@ export async function extractAgentDetails(propertyUrl) {
       }
     }
 
+    // Method 1f: Extract broker email pattern "•broker@domain.com (broker)" or email followed by (broker)
+    if (!agentEmail) {
+      const brokerEmailMatch = html.match(/[•·]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?:\s*\(broker\))?/i);
+      if (brokerEmailMatch && brokerEmailMatch[1]) {
+        const email = brokerEmailMatch[1].toLowerCase();
+        if (!email.includes('@redfin.com')) {
+          agentEmail = brokerEmailMatch[1].trim();
+        }
+      }
+    }
+
+    // Method 1g: Look for email with (broker) label
+    if (!agentEmail) {
+      const brokerLabelEmailMatch = html.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\s*\(broker\)/i);
+      if (brokerLabelEmailMatch && brokerLabelEmailMatch[1]) {
+        const email = brokerLabelEmailMatch[1].toLowerCase();
+        if (!email.includes('@redfin.com')) {
+          agentEmail = brokerLabelEmailMatch[1].trim();
+        }
+      }
+    }
+
     // Method 2: Try alternative JSON patterns (agentName in listingAgents array)
     if (!agentName) {
       const altNameMatch = html.match(/agentName\\?":\\?"([^"\\]+)/);
@@ -182,6 +328,22 @@ export async function extractAgentDetails(propertyUrl) {
       const bulletPhoneMatch = html.match(/[•·]\s*(?:[^<]*?)\s*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})/);
       if (bulletPhoneMatch) {
         agentPhone = `${bulletPhoneMatch[1]}-${bulletPhoneMatch[2]}-${bulletPhoneMatch[3]}`;
+      }
+    }
+
+    // Method 4d: Look for broker phone pattern "•304-262-8700 (broker)" or "• 304-262-8700"
+    if (!agentPhone) {
+      const brokerPhoneMatch = html.match(/[•·]\s*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})(?:\s*\(broker\))?/i);
+      if (brokerPhoneMatch) {
+        agentPhone = `${brokerPhoneMatch[1]}-${brokerPhoneMatch[2]}-${brokerPhoneMatch[3]}`;
+      }
+    }
+
+    // Method 4e: Look for any phone number with (broker) label
+    if (!agentPhone) {
+      const brokerLabelMatch = html.match(/\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})\s*\(broker\)/i);
+      if (brokerLabelMatch) {
+        agentPhone = `${brokerLabelMatch[1]}-${brokerLabelMatch[2]}-${brokerLabelMatch[3]}`;
       }
     }
 
@@ -273,10 +435,17 @@ export async function extractAgentDetailsForProperties(properties, options = {})
   return results;
 }
 
-// No longer need browser cleanup since we're using HTTP
+// Close the shared browser when done
 export async function closeSharedBrowser() {
-  // No-op for backward compatibility
-  console.log('[AgentExtractor] closeSharedBrowser called (no browser to close in HTTP mode)');
+  if (sharedBrowser) {
+    try {
+      await sharedBrowser.close();
+      sharedBrowser = null;
+      console.log('[AgentExtractor] Shared browser closed');
+    } catch (e) {
+      console.error('[AgentExtractor] Error closing browser:', e.message);
+    }
+  }
 }
 
 export default { extractAgentDetails, extractAgentDetailsForProperties, closeSharedBrowser };
