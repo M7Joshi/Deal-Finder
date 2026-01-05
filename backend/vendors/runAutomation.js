@@ -1625,6 +1625,11 @@ const selectedStates = stateList; // keep var for logs if needed
             // Run the first one sequentially to avoid OTP storms and guarantee session for others
             if (first) {
               try {
+                // Safety check: ensure limiter exists before using
+                if (!currentGlobalLimiter) {
+                  currentGlobalLimiter = new ConcurrencyLimiter(4);
+                  logPrivy.warn('Reinitialized null currentGlobalLimiter');
+                }
                 await currentGlobalLimiter.run(() => runOneState(first, { mode: 'ensure' }));
               } catch (e) {
                 logPrivy.warn(`Privy first state in batch failed to ensure session (${first})`, { error: e?.message || String(e) });
