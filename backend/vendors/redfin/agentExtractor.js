@@ -45,35 +45,59 @@ async function extractAgentWithPuppeteer(propertyUrl) {
       // Get all text on the page
       const bodyText = document.body.innerText || '';
 
-      // Look for "Listed by Agent Name" pattern
-      // Format: "Listed by Agent Name • Brokerage • Phone (broker) • email (broker)"
+      // Pattern 1: "Listed by Agent Name • Brokerage • Phone • email"
       const listedByMatch = bodyText.match(/Listed by\s+([A-Za-z\s.]+?)(?:\s*[•·]|$)/i);
       if (listedByMatch && listedByMatch[1]) {
         result.agentName = listedByMatch[1].trim();
       }
 
-      // Look for brokerage after first bullet
-      const brokerageMatch = bodyText.match(/Listed by[^•·]*[•·]\s*([^•·\n]+?)(?:\s*[•·]|Contact:|$)/i);
-      if (brokerageMatch && brokerageMatch[1]) {
-        const candidate = brokerageMatch[1].trim();
-        // Make sure it's not a phone number
-        if (!/^\(?\d{3}\)?[-.\s]?\d{3}/.test(candidate)) {
-          result.brokerage = candidate;
+      // Pattern 2: "Listing agent: Jill Colety (603-923-0753)"
+      const listingAgentMatch = bodyText.match(/Listing agent:\s*([A-Za-z\s.]+?)\s*\((\d{3}[-.\s]?\d{3}[-.\s]?\d{4})\)/i);
+      if (listingAgentMatch) {
+        if (!result.agentName) result.agentName = listingAgentMatch[1].trim();
+        if (!result.agentPhone) result.agentPhone = listingAgentMatch[2].replace(/[^\d]/g, '').replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
+      }
+
+      // Pattern 3: "Listing provided courtesy of: Alex & Associates Realty (603-403-1606)"
+      const courtesyMatch = bodyText.match(/Listing provided courtesy of:\s*([^(]+?)\s*\((\d{3}[-.\s]?\d{3}[-.\s]?\d{4})\)/i);
+      if (courtesyMatch) {
+        if (!result.brokerage) result.brokerage = courtesyMatch[1].trim();
+        // Use brokerage phone as fallback if no agent phone
+        if (!result.agentPhone) result.agentPhone = courtesyMatch[2].replace(/[^\d]/g, '').replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
+      }
+
+      // Look for brokerage after first bullet (for "Listed by" format)
+      if (!result.brokerage) {
+        const brokerageMatch = bodyText.match(/Listed by[^•·]*[•·]\s*([^•·\n]+?)(?:\s*[•·]|Contact:|$)/i);
+        if (brokerageMatch && brokerageMatch[1]) {
+          const candidate = brokerageMatch[1].trim();
+          // Make sure it's not a phone number and not property stats like "5.5 ba" or "beds"
+          if (!/^\(?\d{3}\)?[-.\s]?\d{3}/.test(candidate) &&
+              !/^\d+(\.\d+)?\s*(ba|bed|bath|sq\.?\s*ft)/i.test(candidate) &&
+              candidate.length > 3) {
+            result.brokerage = candidate;
+          }
         }
       }
 
-      // Look for phone number pattern (xxx) xxx-xxxx or xxx-xxx-xxxx
-      const phoneMatch = bodyText.match(/[•·]\s*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})(?:\s*\((?:broker|agent)\))?/i);
-      if (phoneMatch) {
-        result.agentPhone = `${phoneMatch[1]}-${phoneMatch[2]}-${phoneMatch[3]}`;
+      // Look for phone number after bullet point (for "Listed by" format)
+      if (!result.agentPhone) {
+        const phoneMatch = bodyText.match(/[•·]\s*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})(?:\s*\((?:broker|agent)\))?/i);
+        if (phoneMatch) {
+          const phone = `${phoneMatch[1]}-${phoneMatch[2]}-${phoneMatch[3]}`;
+          // Filter out Redfin's general number
+          if (!phone.includes('844-759-7732')) {
+            result.agentPhone = phone;
+          }
+        }
       }
 
-      // Look for email pattern
-      const emailMatch = bodyText.match(/[•·]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?:\s*\((?:broker|agent)\))?/i);
-      if (emailMatch && emailMatch[1]) {
-        const email = emailMatch[1].toLowerCase();
+      // Look for email pattern - first try after bullet point
+      const emailAfterBullet = bodyText.match(/[•·]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?:\s*\((?:broker|agent)\))?/i);
+      if (emailAfterBullet && emailAfterBullet[1]) {
+        const email = emailAfterBullet[1].toLowerCase();
         if (!email.includes('@redfin.com')) {
-          result.agentEmail = emailMatch[1].trim();
+          result.agentEmail = emailAfterBullet[1].trim();
         }
       }
 
@@ -88,7 +112,7 @@ async function extractAgentWithPuppeteer(propertyUrl) {
           }
         }
 
-        // Look for email in the section
+        // Look for email in the section before "More real estate resources"
         if (!result.agentEmail) {
           const sectionEmailMatch = moreResourcesSection.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?:\s*\((?:broker|agent)\))?/);
           if (sectionEmailMatch && sectionEmailMatch[1]) {
@@ -96,6 +120,32 @@ async function extractAgentWithPuppeteer(propertyUrl) {
             if (!email.includes('@redfin.com')) {
               result.agentEmail = sectionEmailMatch[1].trim();
             }
+          }
+        }
+      }
+
+      // Look for email in "Listed by" section (any format)
+      if (!result.agentEmail) {
+        const listedBySection = bodyText.match(/Listed by[^]*?(?=More real estate|Property details|$)/i);
+        if (listedBySection && listedBySection[0]) {
+          const emailInSection = listedBySection[0].match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+          if (emailInSection && emailInSection[1]) {
+            const email = emailInSection[1].toLowerCase();
+            if (!email.includes('@redfin.com')) {
+              result.agentEmail = emailInSection[1].trim();
+            }
+          }
+        }
+      }
+
+      // Final fallback: Look for ANY email on the page (excluding redfin.com)
+      if (!result.agentEmail) {
+        const allEmails = bodyText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
+        for (const email of allEmails) {
+          const lower = email.toLowerCase();
+          if (!lower.includes('@redfin.com') && !lower.includes('noreply') && !lower.includes('support')) {
+            result.agentEmail = email.trim();
+            break;
           }
         }
       }
@@ -125,19 +175,10 @@ export async function extractAgentDetails(propertyUrl) {
 
     // Try Puppeteer first (can see JavaScript-rendered agent info)
     const puppeteerResult = await extractAgentWithPuppeteer(propertyUrl);
-    if (puppeteerResult && (puppeteerResult.agentPhone || puppeteerResult.agentEmail)) {
-      console.log(`[AgentExtractor] Puppeteer found: ${puppeteerResult.agentName || 'N/A'}, ${puppeteerResult.agentPhone || 'N/A'}, ${puppeteerResult.agentEmail || 'N/A'}`);
-      return {
-        agentName: puppeteerResult.agentName || null,
-        agentPhone: puppeteerResult.agentPhone || null,
-        email: puppeteerResult.agentEmail || null,
-        brokerage: puppeteerResult.brokerage || null,
-        agentLicense: null
-      };
-    }
 
-    // Fall back to HTTP method if Puppeteer didn't find phone/email
-    console.log(`[AgentExtractor] Puppeteer didn't find phone/email, trying HTTP fallback...`);
+    // Always try HTTP fallback to get agent name from JSON if Puppeteer didn't find it
+    // HTTP JSON parsing is more reliable for agent name
+    console.log(`[AgentExtractor] Puppeteer found: ${puppeteerResult?.agentName || 'N/A'}, ${puppeteerResult?.agentPhone || 'N/A'}, ${puppeteerResult?.agentEmail || 'N/A'}`);
 
     // Fetch the page HTML via HTTP (faster but can't see JS content)
     const response = await axios.get(propertyUrl, {
@@ -273,10 +314,14 @@ export async function extractAgentDetails(propertyUrl) {
       }
     }
 
-    // Method 3: Extract brokerage from JSON
-    const brokerMatch = html.match(/brokerName\\?":\\?"([^"\\]+)/);
+    // Method 3: Extract brokerage from JSON (handles unicode escapes like \u0026)
+    const brokerMatch = html.match(/brokerName\\?":\\?"([^"]+?)(?:\\"|")/);
     if (brokerMatch && brokerMatch[1]) {
-      brokerage = brokerMatch[1].trim();
+      // Decode unicode escapes (e.g., \u0026 -> &) and clean up escaped characters
+      let brokerName = brokerMatch[1].trim();
+      brokerName = brokerName.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+      brokerName = brokerName.replace(/\\(.)/g, '$1'); // Unescape all escaped characters (\& -> &)
+      brokerage = brokerName;
     }
 
     // Method 3b: Try "Listing provided by" pattern
@@ -291,7 +336,9 @@ export async function extractAgentDetails(propertyUrl) {
     if (!brokerage) {
       const bulletBrokerMatch = html.match(/Listed by[^•·<]*[•·]\s*([^<\n]+?)(?:\s*<|Contact:|$)/i);
       if (bulletBrokerMatch && bulletBrokerMatch[1]) {
-        const candidate = bulletBrokerMatch[1].trim();
+        let candidate = bulletBrokerMatch[1].trim();
+        // Decode HTML entities (e.g., &amp; -> &)
+        candidate = candidate.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
         // Make sure it's not a phone number
         if (candidate && !/^\(?\d{3}\)?[-.\s]?\d{3}/.test(candidate)) {
           brokerage = candidate;
@@ -367,13 +414,21 @@ export async function extractAgentDetails(propertyUrl) {
       }
     }
 
-    console.log(`[AgentExtractor] Found: ${agentName || 'N/A'}, ${agentPhone || 'N/A'}, ${agentEmail || 'N/A'}, ${brokerage || 'N/A'}`);
+    // Merge HTTP results with Puppeteer results (Puppeteer may have JS-rendered data)
+    // Priority: HTTP JSON > Puppeteer for agent name (more reliable)
+    // Priority: Puppeteer > HTTP for phone/email (JS-rendered content)
+    const finalAgentName = agentName || puppeteerResult?.agentName || null;
+    const finalAgentPhone = puppeteerResult?.agentPhone || agentPhone || null;
+    const finalAgentEmail = puppeteerResult?.agentEmail || agentEmail || null;
+    const finalBrokerage = brokerage || puppeteerResult?.brokerage || null;
+
+    console.log(`[AgentExtractor] Final: ${finalAgentName || 'N/A'}, ${finalAgentPhone || 'N/A'}, ${finalAgentEmail || 'N/A'}, ${finalBrokerage || 'N/A'}`);
 
     return {
-      agentName: agentName || null,
-      agentPhone: agentPhone || null,
-      email: agentEmail || null,
-      brokerage: brokerage || null,
+      agentName: finalAgentName,
+      agentPhone: finalAgentPhone,
+      email: finalAgentEmail,
+      brokerage: finalBrokerage,
       agentLicense: null
     };
 
