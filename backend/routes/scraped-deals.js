@@ -622,6 +622,7 @@ router.get('/stats', async (req, res) => {
 // GET /api/scraped-deals/deals - Get only addresses that qualify as deals
 // Requirements: AMV >= 2x LP AND AMV > $200,000
 // Filtered by user's allowed states
+// Excludes apartments (addresses with #, Apt, Unit, Suite patterns)
 router.get('/deals', async (req, res) => {
   try {
     const { source, state, limit = 100, skip = 0 } = req.query;
@@ -630,7 +631,10 @@ router.get('/deals', async (req, res) => {
     // isDeal already includes the AMV > $200,000 check
     const filter = {
       ...req.stateFilter,
-      isDeal: true
+      isDeal: true,
+      // Exclude apartments - addresses containing unit/apt patterns
+      // Matches: #3, #3b, Apt 1, Apt. 1, Unit 2, Suite 3, Ste 4, Ste. 5
+      fullAddress: { $not: { $regex: /#\s*\d|apt\.?\s*\d|unit\s*\d|suite\s*\d|ste\.?\s*\d/i } }
     };
     if (source) filter.source = source;
     if (state) filter.state = String(state).toUpperCase();
@@ -693,6 +697,7 @@ router.post('/recalculate', async (_req, res) => {
 
 // GET /api/scraped-deals/deals-with-agents - Get deals with agent information
 // Agent details are now stored directly in ScrapedDeal, with fallback to Property collection
+// Excludes apartments (addresses with #, Apt, Unit, Suite patterns)
 router.get('/deals-with-agents', async (req, res) => {
   try {
     const { source, state, limit = 100, skip = 0 } = req.query;
@@ -700,7 +705,9 @@ router.get('/deals-with-agents', async (req, res) => {
     // Start with user's state filter + isDeal requirement
     const matchFilter = {
       ...req.stateFilter,
-      isDeal: true
+      isDeal: true,
+      // Exclude apartments - addresses containing unit/apt patterns
+      fullAddress: { $not: { $regex: /#\s*\d|apt\.?\s*\d|unit\s*\d|suite\s*\d|ste\.?\s*\d/i } }
     };
     if (source) matchFilter.source = source;
     if (state) matchFilter.state = String(state).toUpperCase();
