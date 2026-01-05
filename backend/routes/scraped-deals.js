@@ -157,8 +157,9 @@ router.get('/pending-amv', async (req, res) => {
     });
 
     // Count pending AMV per source (for the 2 boxes)
+    // Privy includes all variants: privy, privy-Tear, privy-flip
     const pendingPrivy = await ScrapedDeal.countDocuments({
-      source: 'privy',
+      source: { $regex: /^privy/ },
       $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
     });
 
@@ -173,8 +174,9 @@ router.get('/pending-amv', async (req, res) => {
     });
 
     // Count done (with AMV) per source
+    // Privy includes all variants: privy, privy-Tear, privy-flip
     const donePrivy = await ScrapedDeal.countDocuments({
-      source: 'privy',
+      source: { $regex: /^privy/ },
       amv: { $gt: 0 }
     });
 
