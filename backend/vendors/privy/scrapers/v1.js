@@ -385,28 +385,11 @@ async function extractAgentFromPageText(page) {
     return await page.evaluate(() => {
       const result = { name: null, email: null, phone: null, brokerage: null };
 
-      // IMPORTANT: Only look in the detail panel/modal, NOT the whole page
-      // The whole page includes sidebar agent info which is NOT the listing agent
-      // Look for detail panel/modal - but NOT the sidebar (that shows the wrong agent)
-      // Priority: modal > drawer > detail panel (avoid sidebar entirely)
-      const detailPanel = document.querySelector(
-        '.modal, .drawer, .detail-panel, .property-detail, ' +
-        '[class*="modal"], [class*="drawer"], .ReactModal__Content'
-      ) || document.querySelector('[class*="detail"]:not([class*="sidebar"])');
-
-      // Get ALL page text that contains "List Agent" label - this is the reliable source
-      // The detail panel contains explicit labels like "List Agent Full Name:"
-      let pageText = '';
-
-      if (detailPanel) {
-        pageText = detailPanel.innerText || '';
-      }
-
-      // If no detail panel or no "List Agent" in panel, search the whole body for labeled fields
-      // But ONLY extract from labeled "List Agent..." patterns (never generic patterns)
-      if (!pageText.includes('List Agent')) {
-        pageText = document.body.innerText || '';
-      }
+      // Search the entire body text for "List Agent..." labeled patterns
+      // These patterns are ONLY in the detail panel, NOT the sidebar
+      // The sidebar shows agent info WITHOUT "List Agent Full Name:" prefix
+      // So it's safe to search body text - only labeled patterns will match
+      const pageText = document.body.innerText || '';
 
       // ========== PRIVY-SPECIFIC LABELED FIELDS ==========
       // These are the ONLY reliable patterns - they explicitly say "List Agent"
