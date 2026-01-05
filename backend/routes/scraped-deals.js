@@ -168,21 +168,22 @@ router.get('/pending-amv', async (req, res) => {
       $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
     });
 
-    // Count deals with AMV (total)
+    // Count deals with AMV (total) - includes both positive AMV and -1 (no BofA data)
+    // AMV > 0 = has value, AMV = -1 = BofA has no data for this address
     const withAMV = await ScrapedDeal.countDocuments({
-      amv: { $gt: 0 }
+      $or: [{ amv: { $gt: 0 } }, { amv: -1 }]
     });
 
-    // Count done (with AMV) per source
+    // Count done (with AMV) per source - includes both positive and -1
     // Privy includes all variants: privy, privy-Tear, privy-flip
     const donePrivy = await ScrapedDeal.countDocuments({
       source: { $regex: /^privy/ },
-      amv: { $gt: 0 }
+      $or: [{ amv: { $gt: 0 } }, { amv: -1 }]
     });
 
     const doneRedfin = await ScrapedDeal.countDocuments({
       source: 'redfin',
-      amv: { $gt: 0 }
+      $or: [{ amv: { $gt: 0 } }, { amv: -1 }]
     });
 
     // Get ALL pending deals (for display) - include agent details
