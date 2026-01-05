@@ -1258,15 +1258,22 @@ const cleanAddress = (address?: string | null): string => {
                       <Button size="small" variant="outlined" onClick={(ev) => { ev.stopPropagation(); openEdit(r); }} sx={{ mr: isMobile ? 0.5 : 1, fontSize: isMobile ? 11 : 14, px: isMobile ? 1 : 2 }}>Edit</Button>
                       {!isMobile && (
                         <Chip
-                          label={r.source === 'privy' ? 'Privy' : r.source === 'redfin' ? 'Redfin' : 'Other'}
+                          label={
+                            (r as any).source?.startsWith('privy')
+                              ? ((r as any).source === 'privy-flip' ? 'Privy-Flip'
+                                : (r as any).source === 'privy-Tear' ? 'Privy-Tear'
+                                : 'Privy')
+                              : (r as any).source === 'redfin' ? 'Redfin'
+                              : (r as any).source || 'Other'
+                          }
                           size="small"
                           sx={{
                             ml: 1,
                             fontWeight: 600,
                             fontSize: 11,
-                            backgroundColor: r.source === 'privy' ? '#f5f3ff' : r.source === 'redfin' ? '#fef2f2' : '#f3f4f6',
-                            color: r.source === 'privy' ? '#7c3aed' : r.source === 'redfin' ? '#dc2626' : '#6b7280',
-                            border: `1px solid ${r.source === 'privy' ? '#7c3aed' : r.source === 'redfin' ? '#dc2626' : '#9ca3af'}`,
+                            backgroundColor: (r as any).source?.startsWith('privy') ? '#f5f3ff' : (r as any).source === 'redfin' ? '#fef2f2' : '#f3f4f6',
+                            color: (r as any).source?.startsWith('privy') ? '#7c3aed' : (r as any).source === 'redfin' ? '#dc2626' : '#6b7280',
+                            border: `1px solid ${(r as any).source?.startsWith('privy') ? '#7c3aed' : (r as any).source === 'redfin' ? '#dc2626' : '#9ca3af'}`,
                           }}
                         />
                       )}
