@@ -513,13 +513,40 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
   try {
     // 1. Close any existing panel
     await page.keyboard.press('Escape').catch(() => {});
-    await sleep(300);
+    await sleep(400);
 
-    // 2. Click the card directly
-    await cardHandle.click({ delay: 50 });
-    await sleep(2000); // Wait for panel to open
+    // 2. Scroll card into view first
+    await page.evaluate(el => {
+      el.scrollIntoView({ behavior: 'instant', block: 'center' });
+    }, cardHandle).catch(() => {});
+    await sleep(200);
 
-    // 3. Dismiss any popups (Cancel, Close, etc.)
+    // 3. Click the card - try multiple methods
+    try {
+      await cardHandle.click({ delay: 100 });
+    } catch {
+      await page.evaluate(el => el.click(), cardHandle).catch(() => {});
+    }
+
+    // 4. Wait for panel to open - check for "Agents and Offices" or "List Agent"
+    let panelOpened = false;
+    for (let i = 0; i < 8; i++) {
+      await sleep(400);
+      const hasPanel = await page.evaluate(() => {
+        const text = document.body.innerText || '';
+        return text.includes('Agents and Offices') || text.includes('List Agent Full Name');
+      }).catch(() => false);
+      if (hasPanel) {
+        panelOpened = true;
+        break;
+      }
+    }
+
+    if (!panelOpened) {
+      logPrivy.debug('⚠️ Panel did not open after click', { address: targetAddress?.substring(0, 30) });
+    }
+
+    // 5. Dismiss any popups (Cancel, Close, etc.)
     await page.evaluate(() => {
       const btns = document.querySelectorAll('button, [role="button"]');
       for (const btn of btns) {
@@ -532,8 +559,16 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
     }).catch(() => {});
     await sleep(300);
 
-    // 4. Scroll down to find "Agents and Offices" section
+    // 6. Scroll within panel to find "Agents and Offices" section
     await page.evaluate(() => {
+      // Try scrolling detail panel
+      const panels = document.querySelectorAll('.drawer-content, .property-details, .detail-panel, [class*="detail"]');
+      for (const panel of panels) {
+        if (panel.scrollHeight > panel.clientHeight) {
+          panel.scrollTop = panel.scrollHeight;
+          return;
+        }
+      }
       window.scrollTo(0, document.body.scrollHeight / 2);
     }).catch(() => {});
     await sleep(500);
