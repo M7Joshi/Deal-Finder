@@ -465,16 +465,22 @@ async function extractAgentFromPageText(page) {
   }
 }
 
-async function extractAgentWithFallback(page, cardHandle) {
+async function extractAgentWithFallback(page, cardHandle, targetAddress = null) {
   // ALWAYS click the card to open detail panel/page first
   // Don't use on-card agent - it shows sidebar agent (wrong for all properties)
   // We need "List Agent Full Name:" from the property detail page/panel
+
+  // FIRST: Close any existing panel/drawer to ensure clean state
+  try {
+    await page.keyboard.press('Escape');
+    await sleep(500);
+  } catch {}
 
   // Store current URL to detect navigation
   const startUrl = page.url();
 
   // Open details panel/modal by clicking the card
-  try { await cardHandle.click({ delay: 50 }); } catch {}
+  try { await cardHandle.click({ delay: 100 }); } catch {}
 
   // Wait for either panel to appear or page navigation
   await sleep(2500);
@@ -558,6 +564,28 @@ async function extractAgentWithFallback(page, cardHandle) {
     await sleep(500);
   } catch {}
 
+  // Verify we're looking at the right property's detail panel
+  // by checking if the target address appears in the panel
+  if (targetAddress) {
+    const panelHasAddress = await page.evaluate((addr) => {
+      const bodyText = document.body.innerText || '';
+      // Check if address (or part of it) appears in the page
+      const addrPart = addr.split(',')[0].trim(); // Just street address
+      return bodyText.includes(addrPart);
+    }, targetAddress).catch(() => false);
+
+    if (!panelHasAddress) {
+      logPrivy.debug('Panel may not be for target address', { targetAddress: targetAddress.substring(0, 40) });
+      // Try clicking again
+      try {
+        await page.keyboard.press('Escape');
+        await sleep(300);
+        await cardHandle.click({ delay: 100 });
+        await sleep(2000);
+      } catch {}
+    }
+  }
+
   // ONLY use Privy-specific labeled fields from the detail panel/page
   // Looks for "List Agent Full Name:", "List Agent Email:", "List Agent Preferred Phone:", etc.
   // DO NOT use generic fallbacks - they capture sidebar agent info (wrong agent)
@@ -565,7 +593,7 @@ async function extractAgentWithFallback(page, cardHandle) {
 
   // Debug: Log if we found agent info and check if "List Agent" text exists on page
   if (fromText.name || fromText.email || fromText.phone) {
-    logPrivy.info('✅ Agent info extracted', { name: fromText.name, email: fromText.email, phone: fromText.phone, brokerage: fromText.brokerage });
+    logPrivy.info('✅ Agent info extracted', { name: fromText.name, email: fromText.email, phone: fromText.phone, brokerage: fromText.brokerage, address: targetAddress?.substring(0, 30) });
   } else {
     // Check if the page has "List Agent" text at all
     const hasListAgentText = await page.evaluate(() => {
@@ -1689,7 +1717,7 @@ await page.evaluate(() => {
                 }, prop.fullAddress);
 
                 if (handle) {
-                  const agent = await extractAgentWithFallback(page, handle);
+                  const agent = await extractAgentWithFallback(page, handle, prop.fullAddress);
                   if (agent?.name || agent?.email || agent?.phone || agent?.brokerage) {
                     details.agent_name  = agent.name  || null;
                     details.agent_email = agent.email || null;
