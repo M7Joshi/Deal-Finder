@@ -1643,8 +1643,8 @@ await page.evaluate(() => {
               return null;
             };
 
-            // 2) Collect cards currently mounted - FAST MODE (no inline agent extraction)
-            // Agent extraction is done AFTER saving, only for new properties
+            // 2) Collect cards with INLINE agent extraction
+            // Must extract agent WHILE card is visible (DOM virtualization removes old cards)
             await page.waitForSelector(propertyListContainerSelector);
             let properties = await collectAllCardsWithScrolling(page, {
               listContainerSelector: propertyListContainerSelector,
@@ -1657,7 +1657,7 @@ await page.evaluate(() => {
               maxLoops: 200,
               pause: 180,
               pageNudges: 4,
-              // extractAgentFn: extractAgentForCard, // DISABLED - too slow (clicks each card)
+              extractAgentFn: extractAgentForCard, // Extract agent while card is visible
             });
 
             // Optional second pass if we're significantly under the loadedCount
@@ -1673,7 +1673,7 @@ await page.evaluate(() => {
                 maxLoops: 200,
                 pause: 300,
                 pageNudges: 8,
-                // extractAgentFn: extractAgentForCard, // DISABLED - too slow
+                extractAgentFn: extractAgentForCard,
               });
               // Merge unique without dups by address
               const seen = new Set(properties.map(p => p.fullAddress.toLowerCase()));
@@ -1709,7 +1709,7 @@ await page.evaluate(() => {
                   maxLoops: 30,
                   pause: 120,
                   pageNudges: 2,
-                  // extractAgentFn: extractAgentForCard, // DISABLED - too slow
+                  extractAgentFn: extractAgentForCard,
                 });
                 const seen2 = new Set(properties.map(p => p.fullAddress.toLowerCase()));
                 for (const p of micro) {
@@ -1833,90 +1833,9 @@ await page.evaluate(() => {
             }
             // ===== END IMMEDIATE SAVE =====
 
-            // ===== POST-SAVE AGENT EXTRACTION =====
-            // Extract agent info for ALL properties AFTER addresses are saved
-            // Addresses are saved first (fast), then agent extraction happens for each property
-            let agentExtractionCount = 0;
-            let agentExtractionSuccess = 0;
-
-            if (immediateSaveCount > 0) {
-              logPrivy.info(`🔍 Starting agent extraction for ALL ${parsed.length} properties...`);
-
-              // Scroll back to top to start from first card
-              await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
-              await sleep(1000);
-
-              // Extract agent for ALL properties
-              const propsNeedingAgent = parsed;
-
-              for (const prop of propsNeedingAgent) {
-                // Check for abort signal
-                if (control.abort) {
-                  logPrivy.warn('🛑 Stop requested - aborting agent extraction');
-                  break;
-                }
-
-                try {
-                  agentExtractionCount++;
-
-                  // Log progress every 10 properties
-                  if (agentExtractionCount % 10 === 0 || agentExtractionCount === 1) {
-                    logPrivy.info(`🔍 Agent extraction progress: ${agentExtractionCount}/${propsNeedingAgent.length}`, {
-                      success: agentExtractionSuccess,
-                      city: cityName
-                    });
-                  }
-
-                  // Find the card for this address
-                  const handle = await findCardHandleByAddress(page, {
-                    listContainerSelector: propertyListContainerSelector,
-                    itemSelector: propertyContentSelector,
-                    line1Selector: addressLine1Selector,
-                    line2Selector: addressLine2Selector
-                  }, prop.fullAddress);
-
-                  if (handle) {
-                    const agentInfo = await extractAgentWithFallback(page, handle, prop.fullAddress);
-
-                    if (agentInfo && (agentInfo.name || agentInfo.email || agentInfo.phone)) {
-                      // Update the property object
-                      prop.agentName = agentInfo.name || null;
-                      prop.agentEmail = agentInfo.email || null;
-                      prop.agentPhone = agentInfo.phone || null;
-                      prop.brokerage = agentInfo.brokerage || null;
-
-                      // Update ScrapedDeal in database
-                      const fullAddress_ci = prop.fullAddress.trim().toLowerCase();
-                      await ScrapedDeal.updateOne(
-                        { fullAddress_ci },
-                        {
-                          $set: {
-                            agentName: agentInfo.name || null,
-                            agentEmail: agentInfo.email || null,
-                            agentPhone: agentInfo.phone || null,
-                            brokerage: agentInfo.brokerage || null,
-                          }
-                        }
-                      );
-
-                      agentExtractionSuccess++;
-                      logPrivy.debug(`✅ Agent extracted: ${agentInfo.name || 'no name'} for ${prop.fullAddress.substring(0, 30)}...`);
-                    }
-                  }
-                } catch (e) {
-                  // Non-fatal - continue with other properties
-                  logPrivy.debug(`Agent extraction failed for ${prop.fullAddress?.substring(0, 30)}...`, { error: e?.message });
-                }
-              }
-
-              if (agentExtractionCount > 0) {
-                logPrivy.info(`🔍 Agent extraction complete: ${agentExtractionSuccess}/${agentExtractionCount} successful`, {
-                  city: cityName,
-                  successRate: `${Math.round(agentExtractionSuccess / agentExtractionCount * 100)}%`
-                });
-              }
-            }
-            // ===== END POST-SAVE AGENT EXTRACTION =====
+            // NOTE: Post-save agent extraction was removed because DOM virtualization
+            // removes cards after scrolling. Agent extraction must happen INLINE
+            // during scrolling (extractAgentFn in collectAllCardsWithScrolling).
 
             const normalized = [];
             for (const prop of parsed) {
