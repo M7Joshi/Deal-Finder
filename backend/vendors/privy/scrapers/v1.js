@@ -385,11 +385,36 @@ async function extractAgentFromPageText(page) {
     return await page.evaluate(() => {
       const result = { name: null, email: null, phone: null, brokerage: null };
 
-      // Search the entire body text for "List Agent..." labeled patterns
-      // These patterns are ONLY in the detail panel, NOT the sidebar
-      // The sidebar shows agent info WITHOUT "List Agent Full Name:" prefix
-      // So it's safe to search body text - only labeled patterns will match
-      const pageText = document.body.innerText || '';
+      // Try to find the detail panel/drawer specifically, not the whole page
+      // Privy shows property details in a drawer/panel when you click a card
+      const panelSelectors = [
+        '.property-detail-drawer',
+        '.property-details',
+        '.detail-panel',
+        '.drawer-content',
+        '.modal-content',
+        '[class*="PropertyDetail"]',
+        '[class*="detail-drawer"]',
+        '[class*="property-detail"]',
+        '.right-panel',
+        '[data-testid*="detail"]'
+      ];
+
+      let pageText = '';
+
+      // First try to find a specific detail panel
+      for (const sel of panelSelectors) {
+        const panel = document.querySelector(sel);
+        if (panel && panel.innerText && panel.innerText.includes('List Agent')) {
+          pageText = panel.innerText;
+          break;
+        }
+      }
+
+      // Fall back to body if no panel found with "List Agent" text
+      if (!pageText) {
+        pageText = document.body.innerText || '';
+      }
 
       // ========== PRIVY-SPECIFIC LABELED FIELDS ==========
       // These are the ONLY reliable patterns - they explicitly say "List Agent"
