@@ -967,6 +967,9 @@ async function collectAllCardsWithScrolling(page, {
             if (/HRS?\s*AGO|DAYS?\s*AGO|ABOUT THIS HOME|WALKTHROUGH|bedrooms?|baths?|sq\s*ft|residence|offers|layout/i.test(addr)) return false;
             // Must be reasonable length (not too short, not absurdly long)
             if (addr.length < 10 || addr.length > 200) return false;
+            // REJECT APARTMENTS/CONDOS: Skip addresses with unit numbers
+            // Matches: #A3, #101, Apt 5, Unit 12, Suite 200, etc.
+            if (/#[a-z0-9]+|apt\.?\s*\d|unit\s*\d|suite\s*\d|ste\.?\s*\d|\s\d+[a-z](?:\s|,|$)/i.test(addr)) return false;
             return true;
           });
       },
