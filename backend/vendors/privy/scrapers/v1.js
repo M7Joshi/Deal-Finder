@@ -528,33 +528,44 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
       await page.evaluate(el => el.click(), cardHandle).catch(() => {});
     }
 
-    // 4. Wait for panel to show THIS property's address (not just any panel)
+    // 4. Wait for panel to show THIS property's address
     let panelOpened = false;
     const targetStreet = targetAddress?.split(',')[0]?.trim()?.toLowerCase() || '';
-    for (let i = 0; i < 12; i++) {
-      await sleep(400);
+
+    // Wait and check if panel shows correct address
+    for (let i = 0; i < 10; i++) {
+      await sleep(500);
       const panelCheck = await page.evaluate((targetStr) => {
         const text = document.body.innerText || '';
         const hasPanel = text.includes('Agents and Offices') || text.includes('List Agent Full Name');
         const hasTargetAddr = targetStr ? text.toLowerCase().includes(targetStr) : true;
-        return { hasPanel, hasTargetAddr };
-      }, targetStreet).catch(() => ({ hasPanel: false, hasTargetAddr: false }));
+        return { hasPanel, hasTargetAddr, textSample: text.substring(0, 200) };
+      }, targetStreet).catch(() => ({ hasPanel: false, hasTargetAddr: false, textSample: '' }));
 
       if (panelCheck.hasPanel && panelCheck.hasTargetAddr) {
         panelOpened = true;
         break;
       }
 
-      // If panel is open but wrong property, close and re-click
-      if (panelCheck.hasPanel && !panelCheck.hasTargetAddr && i === 5) {
+      // If panel is open but WRONG property, we need to force refresh
+      if (panelCheck.hasPanel && !panelCheck.hasTargetAddr) {
+        logPrivy.debug('Panel open but wrong property, closing and retrying', { target: targetStreet, attempt: i });
+        // Close panel
         await page.keyboard.press('Escape').catch(() => {});
-        await sleep(300);
-        try { await cardHandle.click({ delay: 100 }); } catch {}
+        await sleep(400);
+        // Re-click the card
+        try {
+          await cardHandle.scrollIntoViewIfNeeded().catch(() => {});
+          await sleep(200);
+          await cardHandle.click({ delay: 150 });
+        } catch {}
       }
     }
 
     if (!panelOpened) {
-      logPrivy.debug('⚠️ Panel did not open with target address', { address: targetAddress?.substring(0, 30) });
+      logPrivy.debug('⚠️ Panel did not open with target address', { address: targetAddress?.substring(0, 30), targetStreet });
+      // Skip extraction if we can't verify correct panel
+      return result;
     }
 
     // 5. Dismiss any popups (Cancel, Close, etc.)
