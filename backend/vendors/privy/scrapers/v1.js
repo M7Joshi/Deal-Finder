@@ -1297,10 +1297,14 @@ async function collectAllCardsWithScrolling(page, {
     // Read currently mounted cards (address fetching - unchanged)
     const batch = await readBatch();
 
-    // For NEW cards, extract agent info while they're still in the DOM
+    // DISABLED: Inline agent extraction during scrolling causes panel caching issues
+    // All properties get the same agent because Privy's panel doesn't refresh when clicking cards rapidly
+    // Agent extraction is now done POST-SCROLL, one property at a time with proper waits
     const newCards = batch.filter(card => !byKey.has(card.fullAddress.toLowerCase()));
 
-    if (extractAgentFn && newCards.length > 0) {
+    // NOTE: extractAgentFn is passed but NOT used during scrolling
+    // Agent extraction will be done after all addresses are collected
+    if (false && extractAgentFn && newCards.length > 0) {
       // Get ALL visible card DOM handles RIGHT NOW (before they scroll away)
       const cardHandles = await page.$$(itemSelector);
 
