@@ -385,33 +385,49 @@ async function extractAgentFromPageText(page) {
     return await page.evaluate(() => {
       const result = { name: null, email: null, phone: null, brokerage: null };
 
-      // Try to find the detail panel/drawer specifically, not the whole page
-      // Privy shows property details in a drawer/panel when you click a card
-      const panelSelectors = [
-        '.property-detail-drawer',
-        '.property-details',
-        '.detail-panel',
-        '.drawer-content',
-        '.modal-content',
-        '[class*="PropertyDetail"]',
-        '[class*="detail-drawer"]',
-        '[class*="property-detail"]',
-        '.right-panel',
-        '[data-testid*="detail"]'
-      ];
-
+      // PRIORITY 1: Find the "Agents and Offices" section specifically
+      // This is where Privy shows the listing agent info
       let pageText = '';
 
-      // First try to find a specific detail panel
-      for (const sel of panelSelectors) {
-        const panel = document.querySelector(sel);
-        if (panel && panel.innerText && panel.innerText.includes('List Agent')) {
-          pageText = panel.innerText;
-          break;
+      // Look for "Agents and Offices" section header and get its content
+      const allElements = document.querySelectorAll('h1, h2, h3, h4, h5, h6, div, section, [class*="header"], [class*="title"]');
+      for (const el of allElements) {
+        const text = (el.textContent || '').trim();
+        if (text.toLowerCase().includes('agents and offices') || text.toLowerCase() === 'agents & offices') {
+          // Found the section header - get the parent or next sibling content
+          let sectionContent = el.parentElement?.innerText || el.nextElementSibling?.innerText || '';
+          if (sectionContent && sectionContent.includes('List Agent')) {
+            pageText = sectionContent;
+            break;
+          }
         }
       }
 
-      // Fall back to body if no panel found with "List Agent" text
+      // PRIORITY 2: Try to find a specific detail panel with "List Agent" text
+      if (!pageText) {
+        const panelSelectors = [
+          '.property-detail-drawer',
+          '.property-details',
+          '.detail-panel',
+          '.drawer-content',
+          '.modal-content',
+          '[class*="PropertyDetail"]',
+          '[class*="detail-drawer"]',
+          '[class*="property-detail"]',
+          '.right-panel',
+          '[data-testid*="detail"]'
+        ];
+
+        for (const sel of panelSelectors) {
+          const panel = document.querySelector(sel);
+          if (panel && panel.innerText && panel.innerText.includes('List Agent')) {
+            pageText = panel.innerText;
+            break;
+          }
+        }
+      }
+
+      // PRIORITY 3: Fall back to body if no specific section found
       if (!pageText) {
         pageText = document.body.innerText || '';
       }
@@ -493,10 +509,37 @@ async function extractAgentFromPageText(page) {
 async function extractAgentWithFallback(page, cardHandle, targetAddress = null) {
   // ALWAYS click the card to open detail panel/page first
   // Don't use on-card agent - it shows sidebar agent (wrong for all properties)
-  // We need "List Agent Full Name:" from the property detail page/panel
+  // We need "List Agent Full Name:" from the "Agents and Offices" section
 
-  // FIRST: Close any existing panel/drawer to ensure clean state
+  // Helper to dismiss any popup/modal (agent poster, ads, etc.)
+  const dismissPopups = async () => {
+    try {
+      await page.evaluate(() => {
+        // Look for Cancel, Close, X, Dismiss buttons
+        const dismissBtns = document.querySelectorAll('button, a, span, div[role="button"], [class*="close"], [class*="dismiss"]');
+        for (const btn of dismissBtns) {
+          const text = (btn.textContent || '').toLowerCase().trim();
+          const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+          if (text === 'cancel' || text === 'close' || text === 'x' || text === '×' ||
+              text === 'dismiss' || text === 'no thanks' || text === 'not now' ||
+              ariaLabel.includes('close') || ariaLabel.includes('dismiss')) {
+            btn.click();
+            return true;
+          }
+        }
+        // Also try clicking overlay/backdrop to close modals
+        const overlays = document.querySelectorAll('.overlay, .backdrop, .modal-backdrop, [class*="overlay"]');
+        for (const overlay of overlays) {
+          overlay.click();
+        }
+        return false;
+      });
+    } catch {}
+  };
+
+  // FIRST: Close any existing panel/drawer and dismiss popups
   try {
+    await dismissPopups();
     await page.keyboard.press('Escape');
     await sleep(500);
   } catch {}
@@ -510,6 +553,10 @@ async function extractAgentWithFallback(page, cardHandle, targetAddress = null) 
   // Wait for either panel to appear or page navigation
   await sleep(2500);
 
+  // Dismiss any popup that might have appeared (agent poster, etc.)
+  await dismissPopups();
+  await sleep(300);
+
   // Check if we navigated to a property detail page
   const newUrl = page.url();
   const navigatedToDetailPage = newUrl !== startUrl && newUrl.includes('/properties/');
@@ -520,6 +567,7 @@ async function extractAgentWithFallback(page, cardHandle, targetAddress = null) 
     try {
       await page.waitForSelector('body', { timeout: 5000 });
       await sleep(1500);
+      await dismissPopups(); // Dismiss any popups on detail page
     } catch {}
   } else {
     // Wait for potential detail panel/drawer to appear - Privy uses various selectors
@@ -581,6 +629,22 @@ async function extractAgentWithFallback(page, cardHandle, targetAddress = null) 
         if (text.includes('agent') || text.includes('contact') || text.includes('listing') ||
             text.includes('detail') || text.includes('info') || text.includes('about')) {
           tab.click();
+          return true;
+        }
+      }
+      return false;
+    });
+    await sleep(500);
+  } catch {}
+
+  // Try to scroll to "Agents and Offices" section if it exists
+  try {
+    await page.evaluate(() => {
+      const allElements = document.querySelectorAll('h1, h2, h3, h4, h5, h6, div, section');
+      for (const el of allElements) {
+        const text = (el.textContent || '').trim().toLowerCase();
+        if (text.includes('agents and offices') || text === 'agents & offices') {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
           return true;
         }
       }
