@@ -540,43 +540,50 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
 
     // 5. Extract agent info from "Agents and Offices" section
     const agentData = await page.evaluate(() => {
-      const result = { name: null, email: null, phone: null, brokerage: null };
+      const result = { name: null, email: null, phone: null, brokerage: null, debug: {} };
 
       // Get all text from page
       const pageText = document.body.innerText || '';
 
-      // Only proceed if "Agents and Offices" section exists
-      if (!pageText.includes('Agents and Offices') && !pageText.includes('List Agent')) {
-        return result;
-      }
+      // Check what sections exist on page
+      result.debug.hasAgentsSection = pageText.includes('Agents and Offices');
+      result.debug.hasListAgent = pageText.includes('List Agent');
 
+      // Find the actual "Agents and Offices" section content
+      const agentSectionMatch = pageText.match(/Agents and Offices[\s\S]*?(?=Property Details|Description|$)/i);
+      const sectionText = agentSectionMatch ? agentSectionMatch[0] : pageText;
+      result.debug.sectionLength = sectionText.length;
+
+      // Only extract from the Agents and Offices section, not whole page
       // Extract using "List Agent" patterns (these are specific to listing agent, not sidebar)
-      const nameMatch = pageText.match(/List\s+Agent\s+Full\s+Name\s*[:\s]\s*([^\n]+)/i);
+      const nameMatch = sectionText.match(/List\s+Agent\s+Full\s+Name\s*[:\s]\s*([^\n]+)/i);
       if (nameMatch) {
         let name = nameMatch[1].trim();
         name = name.split(/(?:List Agent|Direct Phone|Email|Office)/i)[0].trim();
         if (name.length > 2) result.name = name;
+        result.debug.nameSource = 'fullName';
       }
 
       // Try first + last name if full name not found
       if (!result.name) {
-        const firstMatch = pageText.match(/List\s+Agent\s+First\s+Name\s*[:\s]\s*([A-Za-z]+)/i);
-        const lastMatch = pageText.match(/List\s+Agent\s+Last\s+Name\s*[:\s]\s*([A-Za-z]+)/i);
+        const firstMatch = sectionText.match(/List\s+Agent\s+First\s+Name\s*[:\s]\s*([A-Za-z]+)/i);
+        const lastMatch = sectionText.match(/List\s+Agent\s+Last\s+Name\s*[:\s]\s*([A-Za-z]+)/i);
         if (firstMatch && lastMatch) {
           result.name = `${firstMatch[1].trim()} ${lastMatch[1].trim()}`;
+          result.debug.nameSource = 'firstName+lastName';
         }
       }
 
       // Email
-      const emailMatch = pageText.match(/List\s+Agent\s+Email\s*[:\s]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+      const emailMatch = sectionText.match(/List\s+Agent\s+Email\s*[:\s]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
       if (emailMatch) result.email = emailMatch[1].trim();
 
       // Phone
-      const phoneMatch = pageText.match(/List\s+Agent\s+(?:Direct\s+|Preferred\s+)?Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
+      const phoneMatch = sectionText.match(/List\s+Agent\s+(?:Direct\s+|Preferred\s+)?Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
       if (phoneMatch) result.phone = phoneMatch[1].trim();
 
       // Brokerage / Office
-      const officeMatch = pageText.match(/List\s+Office\s+Name\s*[:\s]\s*([^\n]+)/i);
+      const officeMatch = sectionText.match(/List\s+Office\s+Name\s*[:\s]\s*([^\n]+)/i);
       if (officeMatch) {
         let office = officeMatch[1].trim();
         office = office.split(/(?:List Agent|List Office Phone|Direct Phone|Email)/i)[0].trim();
@@ -593,12 +600,18 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
       result.brokerage = agentData.brokerage;
     }
 
-    // 6. Log success
+    // 6. Log result with debug info
     if (result.name || result.email) {
       logPrivy.info('✅ Agent extracted from Agents and Offices', {
         name: result.name,
         email: result.email,
-        address: targetAddress?.substring(0, 35)
+        address: targetAddress?.substring(0, 35),
+        debug: agentData?.debug
+      });
+    } else {
+      logPrivy.warn('⚠️ No agent found in Agents and Offices section', {
+        address: targetAddress?.substring(0, 35),
+        debug: agentData?.debug
       });
     }
 
