@@ -947,6 +947,9 @@ async function hydrateAndLoadAll(page, {
 /**
  * Iteratively scrolls the list and collects cards until we reach the target count
  * or no new cards appear. Works with virtualized lists.
+ *
+ * If extractAgentFn is provided, it will be called for each NEW card found
+ * while the card is still visible in the DOM (before virtualization recycles it).
  */
 async function collectAllCardsWithScrolling(page, {
   listContainerSelector,
@@ -959,6 +962,7 @@ async function collectAllCardsWithScrolling(page, {
   maxLoops = 500,      // was 160 — give virtualization more room
   pause = 220,         // slightly longer for network / hydration
   pageNudges = 6,      // a few more nudges to trip observers
+  extractAgentFn = null, // async (page, address) => { name, email, phone, brokerage }
 } = {}) {
   const byKey = new Map();
 
@@ -1039,6 +1043,27 @@ async function collectAllCardsWithScrolling(page, {
   for (let loop = 0; loop < maxLoops; loop++) {
     // Read currently mounted cards
     const batch = await readBatch();
+
+    // For NEW cards, extract agent info while they're still in the DOM
+    const newCards = batch.filter(card => !byKey.has(card.fullAddress.toLowerCase()));
+
+    if (extractAgentFn && newCards.length > 0) {
+      // Extract agent for each new card while it's visible
+      for (const card of newCards) {
+        try {
+          const agent = await extractAgentFn(page, card.fullAddress);
+          if (agent) {
+            card.agentName = agent.name || null;
+            card.agentEmail = agent.email || null;
+            card.agentPhone = agent.phone || null;
+            card.brokerage = agent.brokerage || null;
+          }
+        } catch (e) {
+          // Non-fatal - continue with other cards
+        }
+      }
+    }
+
     for (const card of batch) {
       const key = card.fullAddress.toLowerCase();
       if (!byKey.has(key)) byKey.set(key, card);
@@ -1539,7 +1564,22 @@ await page.evaluate(() => {
             const LC = L.with({ count: loadedCount ?? 'unknown' });
             LC.info('Scraping properties from URL', { city: cityName });
 
-            // 2) Collect cards currently mounted
+            // Agent extraction function - called while card is visible in DOM
+            const extractAgentForCard = async (pg, fullAddress) => {
+              const handle = await findCardHandleByAddress(pg, {
+                listContainerSelector: propertyListContainerSelector,
+                itemSelector: propertyContentSelector,
+                line1Selector: addressLine1Selector,
+                line2Selector: addressLine2Selector
+              }, fullAddress);
+
+              if (handle) {
+                return await extractAgentWithFallback(pg, handle, fullAddress);
+              }
+              return null;
+            };
+
+            // 2) Collect cards currently mounted - with agent extraction
             await page.waitForSelector(propertyListContainerSelector);
             let properties = await collectAllCardsWithScrolling(page, {
               listContainerSelector: propertyListContainerSelector,
@@ -1552,6 +1592,7 @@ await page.evaluate(() => {
               maxLoops: 200,
               pause: 180,
               pageNudges: 4,
+              extractAgentFn: extractAgentForCard,
             });
 
             // Optional second pass if we're significantly under the loadedCount
@@ -1567,6 +1608,7 @@ await page.evaluate(() => {
                 maxLoops: 200,
                 pause: 300,
                 pageNudges: 8,
+                extractAgentFn: extractAgentForCard,
               });
               // Merge unique without dups by address
               const seen = new Set(properties.map(p => p.fullAddress.toLowerCase()));
@@ -1602,6 +1644,7 @@ await page.evaluate(() => {
                   maxLoops: 30,
                   pause: 120,
                   pageNudges: 2,
+                  extractAgentFn: extractAgentForCard,
                 });
                 const seen2 = new Set(properties.map(p => p.fullAddress.toLowerCase()));
                 for (const p of micro) {
@@ -1730,28 +1773,13 @@ await page.evaluate(() => {
               const priceNum = toNumber(prop.price);
               const details = { ...parseQuickStatsToDetails(prop.quickStats || []) };
 
-              // ALWAYS click card to open detail panel for "List Agent..." info
-              // This is the ONLY reliable source - card agent info is wrong (sidebar agent)
-              // Detail panel shows: "List Agent Full Name:", "List Agent Email:", "List Agent Preferred Phone:", etc.
-              try {
-                const handle = await findCardHandleByAddress(page, {
-                  listContainerSelector: propertyListContainerSelector,
-                  itemSelector: propertyContentSelector,
-                  line1Selector: addressLine1Selector,
-                  line2Selector: addressLine2Selector
-                }, prop.fullAddress);
-
-                if (handle) {
-                  const agent = await extractAgentWithFallback(page, handle, prop.fullAddress);
-                  if (agent?.name || agent?.email || agent?.phone || agent?.brokerage) {
-                    details.agent_name  = agent.name  || null;
-                    details.agent_email = agent.email || null;
-                    details.agent_phone = agent.phone || null;
-                    details.brokerage   = agent.brokerage || null;
-                  }
-                }
-              } catch (e) {
-                logPrivy.warn('Agent extraction from detail panel failed (non-fatal)', { error: e?.message, fullAddress: prop?.fullAddress || null });
+              // Agent info was already extracted during scrolling (when card was visible)
+              // Use the agent data from prop instead of clicking cards again
+              if (prop.agentName || prop.agentEmail || prop.agentPhone || prop.brokerage) {
+                details.agent_name  = prop.agentName  || null;
+                details.agent_email = prop.agentEmail || null;
+                details.agent_phone = prop.agentPhone || null;
+                details.brokerage   = prop.brokerage  || null;
               }
 
               normalized.push({
