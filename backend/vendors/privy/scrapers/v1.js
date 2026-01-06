@@ -584,10 +584,15 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
       result.debug.hasAgentsSection = pageText.includes('Agents and Offices');
       result.debug.hasListAgent = pageText.includes('List Agent');
 
+      // Check if we can find "Listing Agent" (without "List") - Privy might use different terms
+      result.debug.hasListingAgent = pageText.includes('Listing Agent');
+
       // Find the actual "Agents and Offices" section content
       const agentSectionMatch = pageText.match(/Agents and Offices[\s\S]*?(?=Property Details|Description|$)/i);
       const sectionText = agentSectionMatch ? agentSectionMatch[0] : pageText;
       result.debug.sectionLength = sectionText.length;
+      // Add snippet of section for debugging
+      result.debug.sectionSnippet = sectionText.substring(0, 300).replace(/\n/g, ' ').trim();
 
       // Only extract from the Agents and Offices section, not whole page
       // Extract using "List Agent" patterns (these are specific to listing agent, not sidebar)
