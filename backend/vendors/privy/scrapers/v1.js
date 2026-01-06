@@ -528,22 +528,33 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
       await page.evaluate(el => el.click(), cardHandle).catch(() => {});
     }
 
-    // 4. Wait for panel to open - check for "Agents and Offices" or "List Agent"
+    // 4. Wait for panel to show THIS property's address (not just any panel)
     let panelOpened = false;
-    for (let i = 0; i < 8; i++) {
+    const targetStreet = targetAddress?.split(',')[0]?.trim()?.toLowerCase() || '';
+    for (let i = 0; i < 12; i++) {
       await sleep(400);
-      const hasPanel = await page.evaluate(() => {
+      const panelCheck = await page.evaluate((targetStr) => {
         const text = document.body.innerText || '';
-        return text.includes('Agents and Offices') || text.includes('List Agent Full Name');
-      }).catch(() => false);
-      if (hasPanel) {
+        const hasPanel = text.includes('Agents and Offices') || text.includes('List Agent Full Name');
+        const hasTargetAddr = targetStr ? text.toLowerCase().includes(targetStr) : true;
+        return { hasPanel, hasTargetAddr };
+      }, targetStreet).catch(() => ({ hasPanel: false, hasTargetAddr: false }));
+
+      if (panelCheck.hasPanel && panelCheck.hasTargetAddr) {
         panelOpened = true;
         break;
+      }
+
+      // If panel is open but wrong property, close and re-click
+      if (panelCheck.hasPanel && !panelCheck.hasTargetAddr && i === 5) {
+        await page.keyboard.press('Escape').catch(() => {});
+        await sleep(300);
+        try { await cardHandle.click({ delay: 100 }); } catch {}
       }
     }
 
     if (!panelOpened) {
-      logPrivy.debug('⚠️ Panel did not open after click', { address: targetAddress?.substring(0, 30) });
+      logPrivy.debug('⚠️ Panel did not open with target address', { address: targetAddress?.substring(0, 30) });
     }
 
     // 5. Dismiss any popups (Cancel, Close, etc.)
