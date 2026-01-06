@@ -574,11 +574,18 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
     await sleep(500);
 
     // 5. Extract agent info from "Agents and Offices" section
-    const agentData = await page.evaluate(() => {
+    const agentData = await page.evaluate((targetAddr) => {
       const result = { name: null, email: null, phone: null, brokerage: null, debug: {} };
 
       // Get all text from page
       const pageText = document.body.innerText || '';
+
+      // Verify we're looking at the correct property
+      if (targetAddr) {
+        const addrPart = targetAddr.split(',')[0].trim().toLowerCase();
+        result.debug.targetAddrPart = addrPart;
+        result.debug.panelHasAddr = pageText.toLowerCase().includes(addrPart);
+      }
 
       // Check what sections exist on page
       result.debug.hasAgentsSection = pageText.includes('Agents and Offices');
@@ -631,7 +638,7 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
       }
 
       return result;
-    });
+    }, targetAddress);
 
     if (agentData) {
       result.name = agentData.name;
