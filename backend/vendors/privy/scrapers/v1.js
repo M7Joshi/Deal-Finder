@@ -506,6 +506,113 @@ async function extractAgentFromPageText(page) {
   }
 }
 
+// Direct agent extraction - clicks the card handle directly and reads "Agents and Offices"
+async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = null) {
+  const result = { name: null, email: null, phone: null, brokerage: null };
+
+  try {
+    // 1. Close any existing panel
+    await page.keyboard.press('Escape').catch(() => {});
+    await sleep(300);
+
+    // 2. Click the card directly
+    await cardHandle.click({ delay: 50 });
+    await sleep(2000); // Wait for panel to open
+
+    // 3. Dismiss any popups (Cancel, Close, etc.)
+    await page.evaluate(() => {
+      const btns = document.querySelectorAll('button, [role="button"]');
+      for (const btn of btns) {
+        const text = (btn.textContent || '').toLowerCase().trim();
+        if (text === 'cancel' || text === 'close' || text === 'x' || text === '×') {
+          btn.click();
+          return;
+        }
+      }
+    }).catch(() => {});
+    await sleep(300);
+
+    // 4. Scroll down to find "Agents and Offices" section
+    await page.evaluate(() => {
+      window.scrollTo(0, document.body.scrollHeight / 2);
+    }).catch(() => {});
+    await sleep(500);
+
+    // 5. Extract agent info from "Agents and Offices" section
+    const agentData = await page.evaluate(() => {
+      const result = { name: null, email: null, phone: null, brokerage: null };
+
+      // Get all text from page
+      const pageText = document.body.innerText || '';
+
+      // Only proceed if "Agents and Offices" section exists
+      if (!pageText.includes('Agents and Offices') && !pageText.includes('List Agent')) {
+        return result;
+      }
+
+      // Extract using "List Agent" patterns (these are specific to listing agent, not sidebar)
+      const nameMatch = pageText.match(/List\s+Agent\s+Full\s+Name\s*[:\s]\s*([^\n]+)/i);
+      if (nameMatch) {
+        let name = nameMatch[1].trim();
+        name = name.split(/(?:List Agent|Direct Phone|Email|Office)/i)[0].trim();
+        if (name.length > 2) result.name = name;
+      }
+
+      // Try first + last name if full name not found
+      if (!result.name) {
+        const firstMatch = pageText.match(/List\s+Agent\s+First\s+Name\s*[:\s]\s*([A-Za-z]+)/i);
+        const lastMatch = pageText.match(/List\s+Agent\s+Last\s+Name\s*[:\s]\s*([A-Za-z]+)/i);
+        if (firstMatch && lastMatch) {
+          result.name = `${firstMatch[1].trim()} ${lastMatch[1].trim()}`;
+        }
+      }
+
+      // Email
+      const emailMatch = pageText.match(/List\s+Agent\s+Email\s*[:\s]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+      if (emailMatch) result.email = emailMatch[1].trim();
+
+      // Phone
+      const phoneMatch = pageText.match(/List\s+Agent\s+(?:Direct\s+|Preferred\s+)?Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
+      if (phoneMatch) result.phone = phoneMatch[1].trim();
+
+      // Brokerage / Office
+      const officeMatch = pageText.match(/List\s+Office\s+Name\s*[:\s]\s*([^\n]+)/i);
+      if (officeMatch) {
+        let office = officeMatch[1].trim();
+        office = office.split(/(?:List Agent|List Office Phone|Direct Phone|Email)/i)[0].trim();
+        if (office.length > 2) result.brokerage = office;
+      }
+
+      return result;
+    });
+
+    if (agentData) {
+      result.name = agentData.name;
+      result.email = agentData.email;
+      result.phone = agentData.phone;
+      result.brokerage = agentData.brokerage;
+    }
+
+    // 6. Log success
+    if (result.name || result.email) {
+      logPrivy.info('✅ Agent extracted from Agents and Offices', {
+        name: result.name,
+        email: result.email,
+        address: targetAddress?.substring(0, 35)
+      });
+    }
+
+    // 7. Close panel
+    await page.keyboard.press('Escape').catch(() => {});
+    await sleep(200);
+
+  } catch (e) {
+    logPrivy.debug('Agent extraction error', { error: e?.message, address: targetAddress?.substring(0, 30) });
+  }
+
+  return result;
+}
+
 async function extractAgentWithFallback(page, cardHandle, targetAddress = null) {
   // ALWAYS click the card to open detail panel/page first
   // Don't use on-card agent - it shows sidebar agent (wrong for all properties)
@@ -1105,22 +1212,59 @@ async function collectAllCardsWithScrolling(page, {
   let lastHeight = 0;
 
   for (let loop = 0; loop < maxLoops; loop++) {
-    // Read currently mounted cards
+    // Read currently mounted cards (address fetching - unchanged)
     const batch = await readBatch();
 
     // For NEW cards, extract agent info while they're still in the DOM
     const newCards = batch.filter(card => !byKey.has(card.fullAddress.toLowerCase()));
 
     if (extractAgentFn && newCards.length > 0) {
-      // Extract agent for each new card while it's visible
-      for (const card of newCards) {
+      // Get ALL visible card DOM handles RIGHT NOW (before they scroll away)
+      const cardHandles = await page.$$(itemSelector);
+
+      // Extract agent for each new card by clicking it directly
+      for (let i = 0; i < newCards.length; i++) {
+        const card = newCards[i];
         try {
-          const agent = await extractAgentFn(page, card.fullAddress);
-          if (agent) {
-            card.agentName = agent.name || null;
-            card.agentEmail = agent.email || null;
-            card.agentPhone = agent.phone || null;
-            card.brokerage = agent.brokerage || null;
+          // Find the card handle that matches this address
+          let matchedHandle = null;
+          for (const handle of cardHandles) {
+            try {
+              const handleAddr = await handle.$eval(
+                `${line1Selector}, ${line2Selector}`,
+                (el, s1, s2) => {
+                  const root = el.closest('[class*="property"]') || el.parentElement?.parentElement;
+                  const l1 = root?.querySelector(s1)?.textContent?.trim() || '';
+                  const l2 = root?.querySelector(s2)?.textContent?.trim() || '';
+                  return `${l1}, ${l2}`.toLowerCase();
+                },
+                line1Selector, line2Selector
+              ).catch(() => '');
+
+              // Simple check - if address text is in this handle
+              const cardAddr = card.fullAddress.toLowerCase();
+              if (handleAddr && (handleAddr.includes(cardAddr.split(',')[0].toLowerCase()) ||
+                  cardAddr.includes(handleAddr.split(',')[0]))) {
+                matchedHandle = handle;
+                break;
+              }
+            } catch {}
+          }
+
+          // If no match found, try to find by index (cards are in order)
+          if (!matchedHandle && cardHandles[i]) {
+            matchedHandle = cardHandles[i];
+          }
+
+          if (matchedHandle) {
+            // Click THIS card directly and extract agent
+            const agent = await extractAgentWithFallbackDirect(page, matchedHandle, card.fullAddress);
+            if (agent) {
+              card.agentName = agent.name || null;
+              card.agentEmail = agent.email || null;
+              card.agentPhone = agent.phone || null;
+              card.brokerage = agent.brokerage || null;
+            }
           }
         } catch (e) {
           // Non-fatal - continue with other cards
