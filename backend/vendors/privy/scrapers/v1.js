@@ -466,20 +466,36 @@ async function extractAgentFromPageText(page) {
 }
 
 async function extractAgentWithFallback(page, cardHandle) {
-  // ALWAYS click the card to open detail panel first
+  // ALWAYS click the card to open detail panel/page first
   // Don't use on-card agent - it shows sidebar agent (wrong for all properties)
-  // We need "List Agent Full Name:" from the property detail page
+  // We need "List Agent Full Name:" from the property detail page/panel
+
+  // Store current URL to detect navigation
+  const startUrl = page.url();
 
   // Open details panel/modal by clicking the card
   try { await cardHandle.click({ delay: 50 }); } catch {}
 
-  // Wait for detail panel to load (Privy SPA can be slow)
-  await sleep(2000);
+  // Wait for either panel to appear or page navigation
+  await sleep(2500);
 
-  // Wait for potential detail panel/drawer to appear - Privy uses various selectors
-  try {
-    await page.waitForSelector('.property-details, .detail-view, .property-detail, .right-panel, [class*="PropertyDetail"], [class*="property-detail"]', { timeout: 3000 });
-  } catch {}
+  // Check if we navigated to a property detail page
+  const newUrl = page.url();
+  const navigatedToDetailPage = newUrl !== startUrl && newUrl.includes('/properties/');
+
+  if (navigatedToDetailPage) {
+    logPrivy.debug('Navigated to property detail page', { url: newUrl });
+    // Wait for detail page to fully load
+    try {
+      await page.waitForSelector('body', { timeout: 5000 });
+      await sleep(1500);
+    } catch {}
+  } else {
+    // Wait for potential detail panel/drawer to appear - Privy uses various selectors
+    try {
+      await page.waitForSelector('.property-details, .detail-view, .property-detail, .right-panel, [class*="PropertyDetail"], [class*="property-detail"], .drawer, .modal', { timeout: 3000 });
+    } catch {}
+  }
 
   // Try to find and click "More Details" or expand buttons to reveal agent info
   try {
@@ -489,12 +505,13 @@ async function extractAgentWithFallback(page, cardHandle) {
       for (const btn of expandBtns) {
         const text = (btn.textContent || '').toLowerCase();
         if (text.includes('more detail') || text.includes('show more') || text.includes('expand') ||
-            text.includes('view detail') || text.includes('see more') || text.includes('listing info')) {
+            text.includes('view detail') || text.includes('see more') || text.includes('listing info') ||
+            text.includes('listing detail') || text.includes('property info')) {
           btn.click();
         }
       }
       // Also click any collapsed sections
-      const collapsedSections = document.querySelectorAll('[aria-expanded="false"], .collapsed, .accordion-header');
+      const collapsedSections = document.querySelectorAll('[aria-expanded="false"], .collapsed, .accordion-header, .collapsible');
       for (const section of collapsedSections) {
         section.click();
       }
@@ -502,11 +519,11 @@ async function extractAgentWithFallback(page, cardHandle) {
     await sleep(1000);
   } catch {}
 
-  // Scroll within the detail panel to reveal agent info (often at bottom)
+  // Scroll to reveal agent info (often at bottom of page/panel)
   try {
     await page.evaluate(() => {
       // Find the detail panel container and scroll it
-      const detailContainers = document.querySelectorAll('.property-details, .detail-view, .right-panel, .property-detail, [class*="detail"], .scrollable');
+      const detailContainers = document.querySelectorAll('.property-details, .detail-view, .right-panel, .property-detail, [class*="detail"], .scrollable, .drawer-content, .modal-content');
       for (const container of detailContainers) {
         if (container.scrollHeight > container.clientHeight) {
           container.scrollTop = container.scrollHeight;
@@ -516,15 +533,22 @@ async function extractAgentWithFallback(page, cardHandle) {
       window.scrollTo(0, document.body.scrollHeight);
     });
     await sleep(800);
+
+    // Scroll back up a bit to see middle content
+    await page.evaluate(() => {
+      window.scrollTo(0, document.body.scrollHeight / 2);
+    });
+    await sleep(400);
   } catch {}
 
   // Look for and click tabs that might contain agent info
   try {
     await page.evaluate(() => {
-      const tabs = document.querySelectorAll('[role="tab"], .tab, .nav-tab, button');
+      const tabs = document.querySelectorAll('[role="tab"], .tab, .nav-tab, button, .tab-button');
       for (const tab of tabs) {
         const text = (tab.textContent || '').toLowerCase();
-        if (text.includes('agent') || text.includes('contact') || text.includes('listing') || text.includes('detail')) {
+        if (text.includes('agent') || text.includes('contact') || text.includes('listing') ||
+            text.includes('detail') || text.includes('info') || text.includes('about')) {
           tab.click();
           return true;
         }
@@ -534,7 +558,7 @@ async function extractAgentWithFallback(page, cardHandle) {
     await sleep(500);
   } catch {}
 
-  // ONLY use Privy-specific labeled fields from the detail panel
+  // ONLY use Privy-specific labeled fields from the detail panel/page
   // Looks for "List Agent Full Name:", "List Agent Email:", "List Agent Preferred Phone:", etc.
   // DO NOT use generic fallbacks - they capture sidebar agent info (wrong agent)
   const fromText = await extractAgentFromPageText(page);
@@ -548,15 +572,28 @@ async function extractAgentWithFallback(page, cardHandle) {
       return (document.body.innerText || '').includes('List Agent');
     }).catch(() => false);
     if (!hasListAgentText) {
-      logPrivy.debug('Detail panel may not have opened - no "List Agent" text found');
+      logPrivy.debug('Detail panel may not have opened - no "List Agent" text found on page');
+    } else {
+      logPrivy.debug('"List Agent" text found but patterns did not match');
     }
   }
 
-  // Close the detail panel by pressing Escape or clicking outside
-  try {
-    await page.keyboard.press('Escape');
-    await sleep(300);
-  } catch {}
+  // Close the detail panel or go back to list
+  if (navigatedToDetailPage) {
+    // Navigate back to the list page
+    try {
+      await page.goBack({ waitUntil: 'domcontentloaded', timeout: 10000 });
+      await sleep(1000);
+    } catch (e) {
+      logPrivy.warn('Failed to go back from detail page', { error: e?.message });
+    }
+  } else {
+    // Close modal/panel by pressing Escape
+    try {
+      await page.keyboard.press('Escape');
+      await sleep(300);
+    } catch {}
+  }
 
   // Return whatever we found from the labeled fields - no fallbacks
   // The extractAgentFromPageText already handles office name/phone as fallback
@@ -892,41 +929,9 @@ async function collectAllCardsWithScrolling(page, {
         const bySelText = (root, sel) => root.querySelector(sel)?.textContent?.trim() || '';
         const isVisible = (el) => !!(el && (el.offsetParent !== null || getComputedStyle(el).display !== 'none'));
 
-        // Agent selectors to try on each card
-        const agentNameSels = ['.agent-name', '[data-testid="agent-name"]', '.listing-agent .name', '.contact-name', '.realtor-name'];
-        const getAgentName = (el) => {
-          for (const sel of agentNameSels) {
-            const found = el.querySelector(sel);
-            if (found?.textContent?.trim()) return found.textContent.trim();
-          }
-          return null;
-        };
-
-        // Get mailto/tel links from card (filter out system/user emails)
-        const getAgentContact = (el) => {
-          let email = null, phone = null;
-          const mailtoLink = el.querySelector('a[href^="mailto:"]');
-          if (mailtoLink) {
-            const href = mailtoLink.getAttribute('href') || '';
-            const candidateEmail = href.replace('mailto:', '').split('?')[0].trim();
-            const lower = candidateEmail.toLowerCase();
-            // Skip system/platform emails and mioym emails
-            if (!lower.includes('privy') &&
-                !lower.includes('noreply') &&
-                !lower.includes('mioym') &&
-                !lower.includes('support') &&
-                !lower.includes('info@') &&
-                !lower.includes('admin')) {
-              email = candidateEmail;
-            }
-          }
-          const telLink = el.querySelector('a[href^="tel:"]');
-          if (telLink) {
-            const href = telLink.getAttribute('href') || '';
-            phone = href.replace('tel:', '').trim();
-          }
-          return { email, phone };
-        };
+        // NOTE: Agent extraction removed from card level - card shows sidebar agent (wrong)
+        // Real listing agent info is extracted from detail panel using "List Agent..." labels
+        // See extractAgentWithFallback() function
 
         return items
           .filter(isVisible)
@@ -937,18 +942,19 @@ async function collectAllCardsWithScrolling(page, {
             const price = bySelText(el, sp);
             const quickStats = Array.from(el.querySelectorAll(statSel)).map(li => li.textContent.trim());
 
-            // Extract agent info while card is visible
-            const agentName = getAgentName(el);
-            const { email: agentEmail, phone: agentPhone } = getAgentContact(el);
+            // DO NOT extract agent from card - it shows the logged-in user's agent (sidebar)
+            // Instead, we extract from detail panel using "List Agent..." labels
+            // See extractAgentWithFallback() which clicks the card to open detail panel
 
             return {
               fullAddress: address,
               address,
               price,
               quickStats,
-              agentName,
-              agentEmail,
-              agentPhone
+              // Agent fields intentionally null - will be populated from detail panel
+              agentName: null,
+              agentEmail: null,
+              agentPhone: null
             };
           })
           .filter(x => x.fullAddress && typeof x.fullAddress === 'string')
