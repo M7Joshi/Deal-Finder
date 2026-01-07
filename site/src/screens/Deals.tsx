@@ -344,6 +344,8 @@ export default function Deals() {
   const [filterState, setFilterState] = useState<string>('all');
   // Limit for deals table display - default to All
   const [displayLimit, setDisplayLimit] = useState<number>(99999);
+  // AMV sort order - 'desc' (high to low) or 'asc' (low to high)
+  const [amvSortOrder, setAmvSortOrder] = useState<'desc' | 'asc'>('desc');
 
 
   // Summary totals for cards
@@ -722,7 +724,7 @@ const cleanAddress = (address?: string | null): string => {
     }
   };
 
-  // Filter rows by selected state and apply limit
+  // Filter rows by selected state, sort by AMV, and apply limit
   const displayedRows = useMemo(() => {
     let filtered = rows;
     if (filterState !== 'all') {
@@ -731,9 +733,15 @@ const cleanAddress = (address?: string | null): string => {
         return rowState === filterState.toUpperCase();
       });
     }
+    // Sort by AMV
+    const sorted = [...filtered].sort((a, b) => {
+      const amvA = typeof a.amv === 'number' ? a.amv : 0;
+      const amvB = typeof b.amv === 'number' ? b.amv : 0;
+      return amvSortOrder === 'desc' ? amvB - amvA : amvA - amvB;
+    });
     // Apply display limit
-    return filtered.slice(0, displayLimit);
-  }, [rows, filterState, displayLimit]);
+    return sorted.slice(0, displayLimit);
+  }, [rows, filterState, displayLimit, amvSortOrder]);
 
   // Total count before limit (for showing "X of Y")
   const totalFilteredCount = useMemo(() => {
@@ -1098,6 +1106,31 @@ const cleanAddress = (address?: string | null): string => {
               <MenuItem value={200}>200 addresses</MenuItem>
               <MenuItem value={500}>500 addresses</MenuItem>
               <MenuItem value={99999}>All</MenuItem>
+            </Select>
+          </FormControl>
+          <FormControl
+            size="small"
+            sx={{
+              minWidth: 160,
+              '& .MuiOutlinedInput-root': {
+                color: '#000',
+                '& fieldset': { borderColor: '#000' },
+                '&:hover fieldset': { borderColor: '#000' },
+                '&.Mui-focused fieldset': { borderColor: '#000' },
+              },
+              '& .MuiInputLabel-root': { color: '#000' },
+              '& .MuiSelect-icon': { color: '#000' },
+            }}
+          >
+            <InputLabel>Sort by AMV</InputLabel>
+            <Select
+              value={amvSortOrder}
+              label="Sort by AMV"
+              onChange={(e) => setAmvSortOrder(e.target.value as 'desc' | 'asc')}
+              MenuProps={{ PaperProps: { sx: { color: '#000', border: '1px solid #000' } } }}
+            >
+              <MenuItem value="desc">High to Low</MenuItem>
+              <MenuItem value="asc">Low to High</MenuItem>
             </Select>
           </FormControl>
           <div style={{ fontSize: 14, color: '#6b7280', padding: '8px 0' }}>
