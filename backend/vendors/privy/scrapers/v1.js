@@ -517,24 +517,63 @@ function normalizeAddressForCompare(addr) {
     .trim();
 }
 
-// Check if two addresses match (fuzzy match - first part of street address)
+// Extract street name from address (remove numbers, city, state, zip)
+function extractStreetName(addr) {
+  const normalized = normalizeAddressForCompare(addr);
+  // Remove leading numbers and unit numbers
+  const withoutNumbers = normalized.replace(/^\d+\s*/, '').replace(/\s*#?\d+\s*$/, '');
+  // Remove city/state/zip at end
+  const streetPart = withoutNumbers.split(/\s+(ny|nj|ca|tx|fl|pa|oh|il|ga|nc|mi|wa|az|ma|tn|in|mo|md|wi|co|mn|sc|al|la|ky|or|ok|ct|ut|ia|nv|ar|ms|ks|nm|ne|wv|id|hi|nh|me|mt|ri|de|sd|nd|ak|vt|wy|dc)\s*\d{0,5}\s*$/i)[0];
+  // Get first 2 words of street name
+  const parts = streetPart.trim().split(' ').filter(p => p.length > 1);
+  return parts.slice(0, 2).join(' ');
+}
+
+// Check if two addresses match (fuzzy match - street name based)
 function addressesMatch(addr1, addr2) {
   const n1 = normalizeAddressForCompare(addr1);
   const n2 = normalizeAddressForCompare(addr2);
   if (!n1 || !n2) return false;
 
-  // Extract just the street number and first word of street name
+  // Method 1: Extract street names and compare
+  const street1 = extractStreetName(addr1);
+  const street2 = extractStreetName(addr2);
+
+  // If street names match, addresses are likely the same property
+  if (street1 && street2 && street1.length > 3 && street2.length > 3) {
+    if (street1 === street2 || street1.includes(street2) || street2.includes(street1)) {
+      return true;
+    }
+  }
+
+  // Method 2: Check if primary street number appears in both
+  const getStreetNumber = (addr) => {
+    const match = addr.match(/^(\d+)/);
+    return match ? match[1] : null;
+  };
+
+  const num1 = getStreetNumber(n1);
+  const num2 = getStreetNumber(n2);
+
+  // If street numbers match and street names are similar
+  if (num1 && num2 && num1 === num2 && street1 && street2) {
+    // Check if street names share common words
+    const words1 = street1.split(' ');
+    const words2 = street2.split(' ');
+    const commonWords = words1.filter(w => words2.includes(w) && w.length > 2);
+    if (commonWords.length > 0) return true;
+  }
+
+  // Method 3: Fallback - check if one contains significant parts of the other
   const getStreetKey = (addr) => {
     const parts = addr.split(' ').filter(p => p.length > 0);
     if (parts.length < 2) return addr;
-    // Return first 2-3 significant parts (number + street name start)
     return parts.slice(0, 3).join(' ');
   };
 
   const key1 = getStreetKey(n1);
   const key2 = getStreetKey(n2);
 
-  // Check if one contains the other's key
   return n1.includes(key2) || n2.includes(key1) || key1 === key2;
 }
 
@@ -544,26 +583,40 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
   const result = { name: null, email: null, phone: null, brokerage: null };
 
   try {
-    // 0. FIRST: Close any existing panel to ensure fresh state
+    // 0. FIRST: Aggressively close any existing panel
+    // Press Escape multiple times
     await page.keyboard.press('Escape').catch(() => {});
-    await sleep(300);
+    await sleep(200);
+    await page.keyboard.press('Escape').catch(() => {});
+    await sleep(200);
 
-    // Try clicking close button if escape didn't work
+    // Try clicking close button
     await page.evaluate(() => {
-      const closeBtn = document.querySelector('.close-btn, .close, [aria-label="Close"], .modal-close, button.close, [class*="close"]');
-      if (closeBtn) closeBtn.click();
+      const closeBtns = document.querySelectorAll('.close-btn, .close, [aria-label="Close"], .modal-close, button.close, [class*="close"], [class*="Close"]');
+      closeBtns.forEach(btn => btn.click());
     }).catch(() => {});
     await sleep(300);
 
-    // 1. Click the card to open detail panel
+    // Click somewhere neutral to deselect (the map area)
+    await page.evaluate(() => {
+      const mapArea = document.querySelector('.map-container, [class*="map"], .leaflet-container, #map');
+      if (mapArea) mapArea.click();
+    }).catch(() => {});
+    await sleep(300);
+
+    // 1. Click the card to open detail panel - click twice for reliability
     try {
-      await cardHandle.click({ delay: 100 });
+      await cardHandle.click({ delay: 50 });
+      await sleep(150);
+      await cardHandle.click({ delay: 50 });
     } catch {
-      await page.evaluate(el => el.click(), cardHandle).catch(() => {});
+      await page.evaluate(el => { el.click(); }, cardHandle).catch(() => {});
+      await sleep(150);
+      await page.evaluate(el => { el.click(); }, cardHandle).catch(() => {});
     }
 
-    // 2. Wait 2000ms for panel to load (increased from 1500ms)
-    await sleep(2000);
+    // 2. Wait 2500ms for panel to load (increased for reliability)
+    await sleep(2500);
 
     // 3. Scroll to BOTTOM to reveal agent info (same as manual fetcher)
     await page.evaluate(() => {
