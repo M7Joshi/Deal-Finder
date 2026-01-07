@@ -598,7 +598,12 @@ router.get('/stats', async (req, res) => {
       { $limit: 10 }
     ]);
     const withAmv = await ScrapedDeal.countDocuments({ ...stateFilter, amv: { $ne: null, $gt: 0 } });
-    const dealsCount = await ScrapedDeal.countDocuments({ ...stateFilter, isDeal: true });
+    // Exclude apartments from deals count (same filter as /deals endpoint)
+    const dealsCount = await ScrapedDeal.countDocuments({
+      ...stateFilter,
+      isDeal: true,
+      fullAddress: { $not: { $regex: /#\s*\d|apt\.?\s*\d|unit\s*\d|suite\s*\d|ste\.?\s*\d/i } }
+    });
 
     // Include user's allowed states in response
     const userStates = req.isAdmin ? 'all' : (req.user?.states || []);
