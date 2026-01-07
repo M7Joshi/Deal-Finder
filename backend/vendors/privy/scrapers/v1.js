@@ -507,7 +507,39 @@ async function extractAgentFromPageText(page) {
   }
 }
 
+// Helper to normalize address for comparison (remove extra spaces, lowercase, etc.)
+function normalizeAddressForCompare(addr) {
+  if (!addr) return '';
+  return addr
+    .toLowerCase()
+    .replace(/[,.\-#]/g, ' ')  // Replace punctuation with spaces
+    .replace(/\s+/g, ' ')       // Collapse multiple spaces
+    .trim();
+}
+
+// Check if two addresses match (fuzzy match - first part of street address)
+function addressesMatch(addr1, addr2) {
+  const n1 = normalizeAddressForCompare(addr1);
+  const n2 = normalizeAddressForCompare(addr2);
+  if (!n1 || !n2) return false;
+
+  // Extract just the street number and first word of street name
+  const getStreetKey = (addr) => {
+    const parts = addr.split(' ').filter(p => p.length > 0);
+    if (parts.length < 2) return addr;
+    // Return first 2-3 significant parts (number + street name start)
+    return parts.slice(0, 3).join(' ');
+  };
+
+  const key1 = getStreetKey(n1);
+  const key2 = getStreetKey(n2);
+
+  // Check if one contains the other's key
+  return n1.includes(key2) || n2.includes(key1) || key1 === key2;
+}
+
 // Direct agent extraction - SIMPLIFIED to match manual fetcher (live-scrape.js)
+// Now with ADDRESS VERIFICATION to prevent extracting wrong agent from cached panel
 async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = null) {
   const result = { name: null, email: null, phone: null, brokerage: null };
 
@@ -531,6 +563,43 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
       window.scrollTo(0, document.body.scrollHeight);
     }).catch(() => {});
     await sleep(500);
+
+    // 3.5. ADDRESS VERIFICATION - Extract address from detail panel and compare
+    // This prevents extracting wrong agent when panel doesn't update correctly
+    if (targetAddress) {
+      const panelAddress = await page.evaluate(() => {
+        // Try to find address in detail panel - look for common patterns
+        // Pattern 1: h1/h2 with address
+        const headings = document.querySelectorAll('h1, h2, h3, .property-address, [class*="address"], .detail-header');
+        for (const h of headings) {
+          const text = h.textContent?.trim();
+          // Check if it looks like an address (starts with number)
+          if (text && /^\d+\s+\w/.test(text) && text.length < 100) {
+            return text;
+          }
+        }
+        // Pattern 2: Look for address pattern in first 500 chars of page
+        const pageText = document.body.innerText?.substring(0, 500) || '';
+        const addrMatch = pageText.match(/(\d+\s+[A-Za-z][A-Za-z\s]+(?:St|Ave|Rd|Dr|Blvd|Ln|Way|Ct|Pl|Cir|Ter)[a-z]*)/i);
+        if (addrMatch) return addrMatch[1];
+        return null;
+      }).catch(() => null);
+
+      if (panelAddress) {
+        const matches = addressesMatch(panelAddress, targetAddress);
+        if (!matches) {
+          logPrivy.warn('⚠️ Address mismatch - skipping agent extraction', {
+            expected: targetAddress?.substring(0, 40),
+            found: panelAddress?.substring(0, 40)
+          });
+          // Close panel and return empty - don't extract wrong agent
+          await page.keyboard.press('Escape').catch(() => {});
+          await sleep(200);
+          return result;
+        }
+        logPrivy.debug('✓ Address verified', { address: panelAddress?.substring(0, 40) });
+      }
+    }
 
     // 4. Extract agent info from page text
     // IMPORTANT: Only extract from "Agents and Offices" section or "Listing Courtesy of" text
