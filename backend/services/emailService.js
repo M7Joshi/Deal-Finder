@@ -87,8 +87,8 @@ async function loadTemplate(templateName, asText = false) {
   }
   // Minimal fallback
   return asText
-    ? `OFFER TO PURCHASE\nDate: {{date}}\nAgent Name: {{agent_name}}\nAddress: {{property_address}}\nOffer Price: {{offer_price}}\nEMD: {{emd}}\nTerms: {{terms}}\nSent by {{reply_to}} via Mioym Deal Finder.`
-    : `<h2>OFFER TO PURCHASE</h2>\n<p><b>Date:</b> {{date}}</p>\n<p><b>Agent Name:</b> {{agent_name}}</p>\n<p><b>Subject Address:</b> {{property_address}}</p>\n<p><b>Offer Price:</b> {{offer_price}}</p>\n<p><b>EMD:</b> {{emd}}</p>\n<p><b>Terms:</b> {{terms}}</p>\n<p>This offer was sent by {{reply_to}} via Mioym Deal Finder.</p>`;
+    ? `OFFER TO PURCHASE\n\nDear Listing Agent,\n\nDate: {{date}}\nSubject Property: {{property_address}}\nOffer Price: {{offer_price}}\nEMD: {{emd}}\nTerms: {{terms}}\n\nPlease contact me at {{reply_to}} to discuss this offer.\n\nThank you.`
+    : `<h2>OFFER TO PURCHASE</h2>\n<p>Dear Listing Agent,</p>\n<p><b>Date:</b> {{date}}</p>\n<p><b>Subject Property:</b> {{property_address}}</p>\n<p><b>Offer Price:</b> {{offer_price}}</p>\n<p><b>EMD:</b> {{emd}}</p>\n<p><b>Terms:</b> {{terms}}</p>\n<p>Please contact me at {{reply_to}} to discuss this offer.</p>\n<p>Thank you.</p>`;
 }
 
 function normalizeAgentFields(property = {}) {
@@ -117,7 +117,6 @@ export async function composeOfferPayload({ to, from, replyTo, subject, template
 
   const defaults = {
     date: new Date().toISOString().slice(0, 10),
-    agent_name: agentName || 'Sir/Madam',
     property_address: property?.fullAddress || '',
     offer_price: pretty,
     emd: '$5,000',
