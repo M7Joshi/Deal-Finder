@@ -581,74 +581,108 @@ function addressesMatch(addr1, addr2) {
 // Now with ADDRESS VERIFICATION to prevent extracting wrong agent from cached panel
 async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = null) {
   const result = { name: null, email: null, phone: null, brokerage: null };
+  const shortAddr = targetAddress?.substring(0, 35) || 'unknown';
 
   try {
+    logPrivy.info(`🔍 [DEBUG] Starting agent extraction for: ${shortAddr}`);
+
     // 0. FIRST: Aggressively close any existing panel
-    // Press Escape multiple times
+    logPrivy.info(`🔍 [DEBUG] Step 0: Closing existing panel...`);
     await page.keyboard.press('Escape').catch(() => {});
     await sleep(200);
     await page.keyboard.press('Escape').catch(() => {});
     await sleep(200);
 
     // Try clicking close button
-    await page.evaluate(() => {
+    const closedCount = await page.evaluate(() => {
       const closeBtns = document.querySelectorAll('.close-btn, .close, [aria-label="Close"], .modal-close, button.close, [class*="close"], [class*="Close"]');
       closeBtns.forEach(btn => btn.click());
-    }).catch(() => {});
+      return closeBtns.length;
+    }).catch(() => 0);
+    logPrivy.info(`🔍 [DEBUG] Clicked ${closedCount} close buttons`);
     await sleep(300);
 
     // Click somewhere neutral to deselect (the map area)
-    await page.evaluate(() => {
+    const clickedMap = await page.evaluate(() => {
       const mapArea = document.querySelector('.map-container, [class*="map"], .leaflet-container, #map');
-      if (mapArea) mapArea.click();
-    }).catch(() => {});
+      if (mapArea) { mapArea.click(); return true; }
+      return false;
+    }).catch(() => false);
+    logPrivy.info(`🔍 [DEBUG] Clicked map area: ${clickedMap}`);
     await sleep(300);
 
     // 1. Click the card to open detail panel - click twice for reliability
+    logPrivy.info(`🔍 [DEBUG] Step 1: Clicking card...`);
+    let clickSuccess = false;
     try {
       await cardHandle.click({ delay: 50 });
       await sleep(150);
       await cardHandle.click({ delay: 50 });
-    } catch {
-      await page.evaluate(el => { el.click(); }, cardHandle).catch(() => {});
-      await sleep(150);
-      await page.evaluate(el => { el.click(); }, cardHandle).catch(() => {});
+      clickSuccess = true;
+    } catch (clickErr) {
+      logPrivy.warn(`🔍 [DEBUG] Direct click failed: ${clickErr?.message}, trying evaluate...`);
+      try {
+        await page.evaluate(el => { el.click(); }, cardHandle);
+        await sleep(150);
+        await page.evaluate(el => { el.click(); }, cardHandle);
+        clickSuccess = true;
+      } catch (evalErr) {
+        logPrivy.error(`🔍 [DEBUG] Evaluate click also failed: ${evalErr?.message}`);
+      }
     }
+    logPrivy.info(`🔍 [DEBUG] Card click success: ${clickSuccess}`);
 
     // 2. Wait 2500ms for panel to load (increased for reliability)
+    logPrivy.info(`🔍 [DEBUG] Step 2: Waiting 2500ms for panel...`);
     await sleep(2500);
 
     // 3. Scroll to BOTTOM to reveal agent info (same as manual fetcher)
-    await page.evaluate(() => {
+    logPrivy.info(`🔍 [DEBUG] Step 3: Scrolling to bottom...`);
+    const scrollResult = await page.evaluate(() => {
       const detailPanel = document.querySelector('.detail-panel, .property-detail, .modal-body, [class*="detail"], .drawer-content');
       if (detailPanel) {
         detailPanel.scrollTop = detailPanel.scrollHeight;
+        return { found: true, selector: detailPanel.className };
       }
       window.scrollTo(0, document.body.scrollHeight);
-    }).catch(() => {});
+      return { found: false };
+    }).catch(() => ({ found: false, error: true }));
+    logPrivy.info(`🔍 [DEBUG] Scroll result: ${JSON.stringify(scrollResult)}`);
     await sleep(500);
 
     // 3.5. ADDRESS VERIFICATION - Extract address from detail panel and compare
-    // This prevents extracting wrong agent when panel doesn't update correctly
+    logPrivy.info(`🔍 [DEBUG] Step 3.5: Verifying address...`);
     if (targetAddress) {
-      const panelAddress = await page.evaluate(() => {
+      const panelInfo = await page.evaluate(() => {
         // Try to find address in detail panel - look for common patterns
         // Pattern 1: h1/h2 with address
         const headings = document.querySelectorAll('h1, h2, h3, .property-address, [class*="address"], .detail-header');
+        const headingTexts = [];
         for (const h of headings) {
           const text = h.textContent?.trim();
+          if (text && text.length < 150) {
+            headingTexts.push(text.substring(0, 50));
+          }
           // Check if it looks like an address (starts with number)
           if (text && /^\d+\s+\w/.test(text) && text.length < 100) {
-            return text;
+            return { address: text, source: 'heading', allHeadings: headingTexts };
           }
         }
         // Pattern 2: Look for address pattern in first 500 chars of page
         const pageText = document.body.innerText?.substring(0, 500) || '';
         const addrMatch = pageText.match(/(\d+\s+[A-Za-z][A-Za-z\s]+(?:St|Ave|Rd|Dr|Blvd|Ln|Way|Ct|Pl|Cir|Ter)[a-z]*)/i);
-        if (addrMatch) return addrMatch[1];
-        return null;
-      }).catch(() => null);
+        if (addrMatch) return { address: addrMatch[1], source: 'pageText', allHeadings: headingTexts };
 
+        // Debug: Check if "Agents and Offices" section exists
+        const hasAgentSection = pageText.includes('Agents and Offices') || document.body.innerText.includes('Agents and Offices');
+        const hasCourtesy = pageText.includes('Listing Courtesy') || document.body.innerText.includes('Listing Courtesy');
+
+        return { address: null, source: 'none', allHeadings: headingTexts, hasAgentSection, hasCourtesy, pageTextPreview: pageText.substring(0, 200) };
+      }).catch((err) => ({ address: null, error: err?.message }));
+
+      logPrivy.info(`🔍 [DEBUG] Panel info: ${JSON.stringify(panelInfo)}`);
+
+      const panelAddress = panelInfo?.address;
       if (panelAddress) {
         const matches = addressesMatch(panelAddress, targetAddress);
         if (!matches) {
@@ -661,7 +695,9 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
           await sleep(300);
           return result;
         }
-        logPrivy.debug('✓ Address verified', { address: panelAddress?.substring(0, 40) });
+        logPrivy.info(`✅ [DEBUG] Address verified: ${panelAddress?.substring(0, 40)}`);
+      } else {
+        logPrivy.warn(`⚠️ [DEBUG] Could not find address in panel - panel may not have opened`);
       }
     }
 
