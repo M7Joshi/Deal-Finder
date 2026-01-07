@@ -427,9 +427,10 @@ async function extractAgentFromPageText(page) {
         }
       }
 
-      // PRIORITY 3: Fall back to body if no specific section found
+      // PRIORITY 3: If no "Agents and Offices" section found, return empty result
+      // DO NOT fall back to body - it captures sidebar agent (wrong agent)
       if (!pageText) {
-        pageText = document.body.innerText || '';
+        return result; // Return empty - no agent info available
       }
 
       // ========== PRIVY-SPECIFIC LABELED FIELDS ==========
