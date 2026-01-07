@@ -215,7 +215,9 @@ async function runCity(stateCode, city) {
         sqft,
         raw: home,
         agentName,
-        agentEmail
+        agentEmail,
+        agentPhone,
+        brokerage
       });
 
       await upsertProperty({

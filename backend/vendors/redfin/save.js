@@ -13,7 +13,7 @@ import ScrapedDeal from '../../models/ScrapedDeal.js';
 // Import batch limit checker
 import { incrementAddressCount, shouldPauseScraping } from '../runAutomation.js';
 
-export async function upsertRaw({ address, city, state, zip, price, beds, baths, sqft, raw, agentName, agentEmail }) {
+export async function upsertRaw({ address, city, state, zip, price, beds, baths, sqft, raw, agentName, agentEmail, agentPhone, brokerage }) {
   {
     const fullAddress = address || '';
     const fullAddress_ci = fullAddress.trim().toLowerCase();
@@ -33,6 +33,8 @@ export async function upsertRaw({ address, city, state, zip, price, beds, baths,
       details: { beds, baths, sqft, _raw: raw || {} },
       agent_name: agentName ?? null,
       agent_email: agentEmail ?? null,
+      agent_phone: agentPhone ?? null,
+      brokerage: brokerage ?? null,
       status: 'scraped',
     };
 
@@ -67,6 +69,8 @@ export async function upsertRaw({ address, city, state, zip, price, beds, baths,
             // Save agent details from Redfin
             agentName: agentName || null,
             agentEmail: agentEmail || null,
+            agentPhone: agentPhone || null,
+            brokerage: brokerage || null,
             source: 'redfin',
             scrapedAt: new Date(),
           },
