@@ -297,6 +297,18 @@ export async function extractAgentDetails(propertyUrl) {
       }
     }
 
+    // Method 1g: Extract any email after bullet (without broker label)
+    // Format: "• email@domain.com" - used when no (broker) label present
+    if (!agentEmail) {
+      const bulletEmailMatch = html.match(/[•·]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+      if (bulletEmailMatch && bulletEmailMatch[1]) {
+        const email = bulletEmailMatch[1].toLowerCase();
+        if (!email.includes('@redfin.com') && !email.includes('noreply') && !email.includes('support')) {
+          agentEmail = bulletEmailMatch[1].trim();
+        }
+      }
+    }
+
     // Method 2: Try alternative JSON patterns (agentName in listingAgents array)
     if (!agentName) {
       const altNameMatch = html.match(/agentName\\?":\\?"([^"\\]+)/);
