@@ -84,7 +84,8 @@ export function parseDetailHtml(html) {
     }
   }
 
-  // Extract email from mailto links
+  // ===== AGENT EMAIL (Priority 1) =====
+  // Method 1: mailto links
   $('a[href^="mailto:"]').each((_, el) => {
     if (out.agentEmail) return;
     const href = $(el).attr('href') || '';
@@ -97,10 +98,28 @@ export function parseDetailHtml(html) {
     }
   });
 
-  // Try to find brokerage
-  const brokerageMatch = bodyText.match(/(?:Listing\s+provided\s+courtesy\s+of|Listed\s+by|Brokerage)[:.]?\s*([^(]+?)(?:\s*\(|$)/i);
-  if (brokerageMatch) {
-    out.brokerage = brokerageMatch[1].trim();
+  // Method 2: "Contact: email@domain.com" pattern
+  if (!out.agentEmail) {
+    const contactEmailMatch = bodyText.match(/Contact:\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|net|org|edu|gov|io|co|info))/i);
+    if (contactEmailMatch && !contactEmailMatch[1].toLowerCase().includes('redfin.com')) {
+      out.agentEmail = contactEmailMatch[1].trim();
+    }
+  }
+
+  // ===== BROKER PHONE (Fallback) =====
+  if (!out.agentPhone) {
+    const brokerPhoneMatch = bodyText.match(/[•·]\s*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})\s*\(broker\)/i);
+    if (brokerPhoneMatch) {
+      out.agentPhone = `${brokerPhoneMatch[1]}-${brokerPhoneMatch[2]}-${brokerPhoneMatch[3]}`;
+    }
+  }
+
+  // ===== BROKER EMAIL (Fallback) =====
+  if (!out.agentEmail) {
+    const brokerEmailMatch = bodyText.match(/[•·]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\s*\(broker\)/i);
+    if (brokerEmailMatch && !brokerEmailMatch[1].toLowerCase().includes('redfin.com')) {
+      out.agentEmail = brokerEmailMatch[1].trim();
+    }
   }
 
   return out;

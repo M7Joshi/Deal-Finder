@@ -239,9 +239,10 @@ export async function extractAgentDetails(propertyUrl) {
       }
     }
 
-    // Method 1d: Extract email from "Contact: email@domain.com, phone" pattern (plain text)
+    // Method 1d: Extract email from "Contact: email@domain.com" pattern (plain text)
+    // Uses explicit TLD list to avoid capturing extra characters
     if (!agentEmail) {
-      const contactTextMatch = html.match(/Contact:(?:\s|<!--.*?-->)*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+      const contactTextMatch = html.match(/Contact:(?:\s|<!--.*?-->)*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|net|org|edu|gov|io|co|info))/i);
       if (contactTextMatch && contactTextMatch[1]) {
         const email = contactTextMatch[1].toLowerCase();
         if (!email.includes('@redfin.com')) {
@@ -252,7 +253,7 @@ export async function extractAgentDetails(propertyUrl) {
 
     // Method 1d2: Extract email from "Contact: (phone), email" pattern (email after phone)
     if (!agentEmail) {
-      const contactAfterPhoneMatch = html.match(/Contact:[^<]*?\d{3}[-.\s)]+\d{3}[-.\s]+\d{4}[,\s]+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+      const contactAfterPhoneMatch = html.match(/Contact:[^<]*?\d{3}[-.\s)]+\d{3}[-.\s]+\d{4}[,\s]+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|net|org|edu|gov|io|co|info))/i);
       if (contactAfterPhoneMatch && contactAfterPhoneMatch[1]) {
         const email = contactAfterPhoneMatch[1].toLowerCase();
         if (!email.includes('@redfin.com')) {
@@ -263,7 +264,7 @@ export async function extractAgentDetails(propertyUrl) {
 
     // Method 1d3: Extract email anywhere on the Contact line
     if (!agentEmail) {
-      const contactLineMatch = html.match(/Contact:[^<]{0,100}?([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+      const contactLineMatch = html.match(/Contact:[^<]{0,100}?([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|net|org|edu|gov|io|co|info))/i);
       if (contactLineMatch && contactLineMatch[1]) {
         const email = contactLineMatch[1].toLowerCase();
         if (!email.includes('@redfin.com')) {
@@ -284,24 +285,14 @@ export async function extractAgentDetails(propertyUrl) {
       }
     }
 
-    // Method 1f: Extract broker email pattern "•broker@domain.com (broker)" or email followed by (broker)
+    // Method 1f: Extract broker email pattern "• email@domain.com (broker)"
+    // This is a FALLBACK - only used if no agent email found
     if (!agentEmail) {
-      const brokerEmailMatch = html.match(/[•·]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?:\s*\(broker\))?/i);
+      const brokerEmailMatch = html.match(/[•·]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\s*\(broker\)/i);
       if (brokerEmailMatch && brokerEmailMatch[1]) {
         const email = brokerEmailMatch[1].toLowerCase();
         if (!email.includes('@redfin.com')) {
           agentEmail = brokerEmailMatch[1].trim();
-        }
-      }
-    }
-
-    // Method 1g: Look for email with (broker) label
-    if (!agentEmail) {
-      const brokerLabelEmailMatch = html.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\s*\(broker\)/i);
-      if (brokerLabelEmailMatch && brokerLabelEmailMatch[1]) {
-        const email = brokerLabelEmailMatch[1].toLowerCase();
-        if (!email.includes('@redfin.com')) {
-          agentEmail = brokerLabelEmailMatch[1].trim();
         }
       }
     }
@@ -370,27 +361,12 @@ export async function extractAgentDetails(propertyUrl) {
       }
     }
 
-    // Method 4c: Look for phone number after bullet point near agent info
+    // Method 4c: Look for broker phone pattern "• xxx-xxx-xxxx (broker)"
+    // This is a FALLBACK - only used if no agent phone found, requires (broker) label
     if (!agentPhone) {
-      const bulletPhoneMatch = html.match(/[•·]\s*(?:[^<]*?)\s*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})/);
-      if (bulletPhoneMatch) {
-        agentPhone = `${bulletPhoneMatch[1]}-${bulletPhoneMatch[2]}-${bulletPhoneMatch[3]}`;
-      }
-    }
-
-    // Method 4d: Look for broker phone pattern "•304-262-8700 (broker)" or "• 304-262-8700"
-    if (!agentPhone) {
-      const brokerPhoneMatch = html.match(/[•·]\s*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})(?:\s*\(broker\))?/i);
+      const brokerPhoneMatch = html.match(/[•·]\s*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})\s*\(broker\)/i);
       if (brokerPhoneMatch) {
         agentPhone = `${brokerPhoneMatch[1]}-${brokerPhoneMatch[2]}-${brokerPhoneMatch[3]}`;
-      }
-    }
-
-    // Method 4e: Look for any phone number with (broker) label
-    if (!agentPhone) {
-      const brokerLabelMatch = html.match(/\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})\s*\(broker\)/i);
-      if (brokerLabelMatch) {
-        agentPhone = `${brokerLabelMatch[1]}-${brokerLabelMatch[2]}-${brokerLabelMatch[3]}`;
       }
     }
 
