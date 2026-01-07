@@ -643,20 +643,46 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
         }
       }
 
-      // Email
+      // Email - try List Agent Email first, then List Office Email
       const emailMatch = sectionText.match(/List\s+Agent\s+Email\s*[:\s]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
-      if (emailMatch) result.email = emailMatch[1].trim();
+      if (emailMatch) {
+        result.email = emailMatch[1].trim();
+        result.debug.emailSource = 'agentEmail';
+      }
+      if (!result.email) {
+        const officeEmailMatch = sectionText.match(/List\s+Office\s+Email\s*[:\s]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+        if (officeEmailMatch) {
+          result.email = officeEmailMatch[1].trim();
+          result.debug.emailSource = 'officeEmail';
+        }
+      }
 
-      // Phone
+      // Phone - try List Agent Phone first, then List Office Phone
       const phoneMatch = sectionText.match(/List\s+Agent\s+(?:Direct\s+|Preferred\s+)?Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
-      if (phoneMatch) result.phone = phoneMatch[1].trim();
+      if (phoneMatch) {
+        result.phone = phoneMatch[1].trim();
+        result.debug.phoneSource = 'agentPhone';
+      }
+      if (!result.phone) {
+        const officePhoneMatch = sectionText.match(/List\s+Office\s+Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
+        if (officePhoneMatch) {
+          result.phone = officePhoneMatch[1].trim();
+          result.debug.phoneSource = 'officePhone';
+        }
+      }
 
-      // Brokerage / Office
+      // Brokerage / Office Name
       const officeMatch = sectionText.match(/List\s+Office\s+Name\s*[:\s]\s*([^\n]+)/i);
       if (officeMatch) {
         let office = officeMatch[1].trim();
         office = office.split(/(?:List Agent|List Office Phone|Direct Phone|Email)/i)[0].trim();
         if (office.length > 2) result.brokerage = office;
+      }
+
+      // Fallback: Use Office Name as agent name if no agent name found
+      if (!result.name && result.brokerage) {
+        result.name = result.brokerage;
+        result.debug.nameSource = 'officeName';
       }
 
       return result;
