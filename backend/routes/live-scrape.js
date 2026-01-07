@@ -2431,19 +2431,8 @@ async function privyHandler(req, res) {
             });
             await new Promise(r => setTimeout(r, 500));
 
-            // Look for and click "Contact Agent" or similar buttons to reveal email
-            await page.evaluate(() => {
-              const contactBtns = document.querySelectorAll('button, a');
-              for (const btn of contactBtns) {
-                const text = btn.textContent?.toLowerCase() || '';
-                if (text.includes('contact') || text.includes('agent') || text.includes('email') || text.includes('show')) {
-                  btn.click();
-                  return true;
-                }
-              }
-              return false;
-            });
-            await new Promise(r => setTimeout(r, 500));
+            // NOTE: DO NOT click "Contact Agent" button - that shows sidebar agent (your agent), not listing agent
+            // We only extract from "Agents and Offices" section which has the LISTING agent info
 
             // Extract agent info from the detail view - ENHANCED with fallback patterns
             // Primary: Privy's labeled fields like "List Agent Direct Phone:", "List Agent Email:", etc.
