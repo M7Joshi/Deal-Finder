@@ -97,8 +97,9 @@ export async function upsertProperty({ prop_id, address, city, state, zip, price
     const cand = price ?? raw?.listingPrice ?? raw?.listPrice ?? raw?.asking_price ?? raw?.lp;
     const priceNum = num(cand);
 
-    // choose an upsert key: prop_id if present, else normalized address
-    const filter = prop_id ? { prop_id } : { fullAddress_ci };
+    // Always use fullAddress_ci as primary filter to avoid duplicate key errors
+    // (fullAddress_ci has a unique index, so we must match on it)
+    const filter = { fullAddress_ci };
 
     // Build $set without clobbering existing numeric fields with null
     const setDoc = {
