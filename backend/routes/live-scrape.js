@@ -2440,18 +2440,28 @@ async function privyHandler(req, res) {
             const agentInfo = await page.evaluate(() => {
               let agentName = null, agentEmail = null, agentPhone = null, brokerage = null;
               let debugInfo = { foundElements: [] };
-              const pageText = document.body.innerText || '';
+              const fullPageText = document.body.innerText || '';
+
+              // IMPORTANT: Only use text from "Agents and Offices" section onwards to avoid sidebar agent
+              // The sidebar shows user's agent (e.g., "Kendra Rich - EXP REALTY") which is NOT the listing agent
+              const agentSectionStart = fullPageText.indexOf('Agents and Offices');
+              const courtesyStart = fullPageText.indexOf('Listing Courtesy of');
+              const agentSectionText = agentSectionStart > -1 ? fullPageText.substring(agentSectionStart) : '';
+              const courtesyText = courtesyStart > -1 ? fullPageText.substring(courtesyStart, courtesyStart + 200) : '';
+
+              debugInfo.hasAgentSection = agentSectionStart > -1;
+              debugInfo.hasCourtesy = courtesyStart > -1;
 
               // ========== PHONE EXTRACTION ==========
-              // Pattern 1: "List Agent Direct Phone: 678-951-7041"
-              const phoneLabeled = pageText.match(/List\s+Agent\s+(?:Direct\s+|Preferred\s+)?Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
+              // Pattern 1: "List Agent Direct Phone: 678-951-7041" from agent section
+              const phoneLabeled = agentSectionText.match(/List\s+Agent\s+(?:Direct\s+|Preferred\s+)?Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
               if (phoneLabeled) {
                 agentPhone = phoneLabeled[1].trim();
                 debugInfo.foundElements.push({ sel: 'List Agent Phone', text: agentPhone });
               }
-              // Pattern 2: Fallback to office phone
+              // Pattern 2: Fallback to office phone from agent section
               if (!agentPhone) {
-                const officePhoneLabeled = pageText.match(/List\s+Office\s+Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
+                const officePhoneLabeled = agentSectionText.match(/List\s+Office\s+Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
                 if (officePhoneLabeled) {
                   agentPhone = officePhoneLabeled[1].trim();
                   debugInfo.foundElements.push({ sel: 'List Office Phone', text: agentPhone });
@@ -2479,84 +2489,64 @@ async function privyHandler(req, res) {
               }
 
               // ========== EMAIL EXTRACTION ==========
-              // Pattern 1: "List Agent Email: amyksellsga@gmail.com"
-              const emailLabeled = pageText.match(/List\s+Agent\s+Email\s*[:\s]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+              // Pattern 1: "List Agent Email: amyksellsga@gmail.com" from agent section
+              const emailLabeled = agentSectionText.match(/List\s+Agent\s+Email\s*[:\s]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
               if (emailLabeled) {
                 agentEmail = emailLabeled[1].trim();
                 debugInfo.foundElements.push({ sel: 'List Agent Email', text: agentEmail });
               }
-              // Pattern 2: mailto: links on page (fallback)
-              if (!agentEmail) {
-                const mailtoLinks = document.querySelectorAll('a[href^="mailto:"]');
-                for (const link of mailtoLinks) {
-                  const href = link.getAttribute('href') || '';
-                  const email = href.replace('mailto:', '').split('?')[0].trim().toLowerCase();
-                  // Skip system/platform emails
-                  if (email && !email.includes('privy') && !email.includes('noreply') &&
-                      !email.includes('support') && !email.includes('info@') &&
-                      !email.includes('admin') && !email.includes('mioym')) {
-                    agentEmail = email;
-                    debugInfo.foundElements.push({ sel: 'mailto: link', text: agentEmail });
-                    break;
-                  }
-                }
-              }
-              // Pattern 3: Any email in text near "Agent" or "Contact"
-              if (!agentEmail) {
-                const emailNearAgent = pageText.match(/(?:Agent|Contact|Email)[:\s]*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
-                if (emailNearAgent) {
-                  const email = emailNearAgent[1].toLowerCase();
-                  if (!email.includes('privy') && !email.includes('noreply')) {
-                    agentEmail = emailNearAgent[1].trim();
-                    debugInfo.foundElements.push({ sel: 'Email pattern', text: agentEmail });
+              // Pattern 2: Any email in agent section text
+              if (!agentEmail && agentSectionText) {
+                const emailInSection = agentSectionText.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+                if (emailInSection) {
+                  const email = emailInSection[1].toLowerCase();
+                  if (!email.includes('privy') && !email.includes('noreply') && !email.includes('mioym')) {
+                    agentEmail = emailInSection[1].trim();
+                    debugInfo.foundElements.push({ sel: 'Email in agent section', text: agentEmail });
                   }
                 }
               }
 
               // ========== NAME EXTRACTION ==========
-              // Pattern 1: "List Agent Full Name: Jesse Burns"
-              const fullNameMatch = pageText.match(/List\s+Agent\s+Full\s+Name\s*[:\s]\s*([^\n]+)/i);
-              if (fullNameMatch) {
-                let extractedName = fullNameMatch[1].trim();
-                extractedName = extractedName.split(/(?:List Agent|Direct Phone|Email|Office)/i)[0].trim();
-                if (extractedName.length > 3) {
-                  agentName = extractedName;
-                  debugInfo.foundElements.push({ sel: 'List Agent Full Name', text: agentName });
+              // Pattern 1: "Listing Courtesy of BROKERAGE — AGENT NAME" (most reliable for Privy)
+              if (courtesyText) {
+                const courtesyMatch = courtesyText.match(/Listing\s+Courtesy\s+of\s+[^—\n]+\s*[—-]\s*([A-Za-z][A-Za-z\s\.]+)/i);
+                if (courtesyMatch) {
+                  let extractedName = courtesyMatch[1].trim();
+                  // Clean up: remove trailing text like "MLS", "FAVORITE", etc.
+                  extractedName = extractedName.split(/\n|MLS|FAVORITE|SHARE/i)[0].trim();
+                  if (extractedName.length > 3 && extractedName.length < 50) {
+                    agentName = extractedName;
+                    debugInfo.foundElements.push({ sel: 'Listing Courtesy of', text: agentName });
+                  }
                 }
               }
-              // Pattern 2: "List Agent First Name: Amy" + "List Agent Last Name: Smith"
+              // Pattern 2: "List Agent Full Name:" from agent section
               if (!agentName) {
-                const firstMatch = pageText.match(/List\s+Agent\s+First\s+Name\s*[:\s]\s*([A-Za-z]+)/i);
-                const lastMatch = pageText.match(/List\s+Agent\s+Last\s+Name\s*[:\s]\s*([A-Za-z]+)/i);
+                const fullNameMatch = agentSectionText.match(/List\s+Agent\s+Full\s+Name\s*[:\s]\s*([^\n]+)/i);
+                if (fullNameMatch) {
+                  let extractedName = fullNameMatch[1].trim();
+                  extractedName = extractedName.split(/(?:List Agent|Direct Phone|Email|Office)/i)[0].trim();
+                  if (extractedName.length > 3) {
+                    agentName = extractedName;
+                    debugInfo.foundElements.push({ sel: 'List Agent Full Name', text: agentName });
+                  }
+                }
+              }
+              // Pattern 3: "List Agent First Name:" + "Last Name:" from agent section
+              if (!agentName) {
+                const firstMatch = agentSectionText.match(/List\s+Agent\s+First\s+Name\s*[:\s]\s*([A-Za-z]+)/i);
+                const lastMatch = agentSectionText.match(/List\s+Agent\s+Last\s+Name\s*[:\s]\s*([A-Za-z]+)/i);
                 if (firstMatch && lastMatch) {
                   agentName = `${firstMatch[1].trim()} ${lastMatch[1].trim()}`;
                   debugInfo.foundElements.push({ sel: 'List Agent First+Last Name', text: agentName });
                 }
               }
-              // Pattern 3: "Listing Agent: Name" or "Listed by: Name"
-              if (!agentName) {
-                const listedBy = pageText.match(/(?:Listing Agent|Listed by|Agent)[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)/);
-                if (listedBy) {
-                  agentName = listedBy[1].trim();
-                  debugInfo.foundElements.push({ sel: 'Listed by pattern', text: agentName });
-                }
-              }
-              // Pattern 4: Look for agent name in specific elements
-              if (!agentName) {
-                const agentEls = document.querySelectorAll('.agent-name, [class*="agent-name"], [data-testid="agent-name"]');
-                for (const el of agentEls) {
-                  const text = el.textContent?.trim();
-                  if (text && text.length > 3 && text.length < 50 && /^[A-Z]/.test(text)) {
-                    agentName = text;
-                    debugInfo.foundElements.push({ sel: 'agent-name element', text: agentName });
-                    break;
-                  }
-                }
-              }
 
               // ========== BROKERAGE EXTRACTION ==========
-              // Pattern 1: "List Office Name: Keller Williams Realty Community Partners"
-              const officeNameMatch = pageText.match(/List\s+Office\s+Name\s*[:\s]\s*([^\n]+)/i);
+              // Use agentSectionText to avoid sidebar agent/brokerage
+              // Pattern 1: "List Office Name: Congress Realty" from agent section
+              const officeNameMatch = agentSectionText.match(/List\s+Office\s+Name\s*[:\s]\s*([^\n]+)/i);
               if (officeNameMatch) {
                 let officeName = officeNameMatch[1].trim();
                 officeName = officeName.split(/(?:List Agent|List Office Phone|Direct Phone|Email)/i)[0].trim();
@@ -2565,9 +2555,20 @@ async function privyHandler(req, res) {
                   debugInfo.foundElements.push({ sel: 'List Office Name', text: brokerage });
                 }
               }
-              // Pattern 2: "Brokerage: Name" or "Office: Name"
+              // Pattern 2: Extract from "Listing Courtesy of BROKERAGE —"
+              if (!brokerage && courtesyText) {
+                const courtesyBrokerMatch = courtesyText.match(/Listing\s+Courtesy\s+of\s+([^—\-\n]+)/i);
+                if (courtesyBrokerMatch) {
+                  let brokerName = courtesyBrokerMatch[1].trim();
+                  if (brokerName.length > 2 && brokerName.length < 80) {
+                    brokerage = brokerName;
+                    debugInfo.foundElements.push({ sel: 'Listing Courtesy brokerage', text: brokerage });
+                  }
+                }
+              }
+              // Pattern 3: "Brokerage: Name" or "Office: Name" from agent section
               if (!brokerage) {
-                const brokerageMatch = pageText.match(/(?:Brokerage|Office|Firm)[:\s]+([A-Z][^\n]{3,50})/);
+                const brokerageMatch = agentSectionText.match(/(?:Brokerage|Office|Firm)[:\s]+([A-Z][^\n]{3,50})/);
                 if (brokerageMatch) {
                   brokerage = brokerageMatch[1].trim().split(/(?:Phone|Email|List)/i)[0].trim();
                   debugInfo.foundElements.push({ sel: 'Brokerage pattern', text: brokerage });
