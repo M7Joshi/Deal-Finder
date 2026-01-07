@@ -443,9 +443,11 @@ export default function PendingAMV() {
                     <td style={{ padding: 14, textAlign: 'right', color: '#6b7280' }}>{deal.state || '—'}</td>
                     <td style={{ padding: 14, textAlign: 'right', color: '#059669', fontWeight: 600 }}>{fmt(deal.listingPrice)}</td>
                     <td style={{ padding: 14, minWidth: 180 }}>
-                      {deal.agentName ? (
+                      {(deal.agentName || deal.agentPhone || deal.agentEmail) ? (
                         <div>
-                          <div style={{ fontWeight: 600, color: '#111', fontSize: 13 }}>{deal.agentName}</div>
+                          {deal.agentName && (
+                            <div style={{ fontWeight: 600, color: '#111', fontSize: 13 }}>{deal.agentName}</div>
+                          )}
                           {deal.agentPhone && (
                             <div style={{ color: '#3b82f6', fontSize: 12 }}>{deal.agentPhone}</div>
                           )}
