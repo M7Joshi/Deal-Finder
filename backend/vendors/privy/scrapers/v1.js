@@ -607,7 +607,21 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
     }).catch(() => {});
     await sleep(500);
 
-    // 5. Extract agent info from page text (same approach as live-scrape.js)
+    // 7. Click "Contact Agent" button to reveal email/phone (same as manual fetcher)
+    await page.evaluate(() => {
+      const contactBtns = document.querySelectorAll('button, a');
+      for (const btn of contactBtns) {
+        const text = btn.textContent?.toLowerCase() || '';
+        if (text.includes('contact') || text.includes('agent') || text.includes('email') || text.includes('show')) {
+          btn.click();
+          return true;
+        }
+      }
+      return false;
+    }).catch(() => {});
+    await sleep(500);
+
+    // 8. Extract agent info from page text (same approach as live-scrape.js)
     // ENHANCED: Multiple fallback patterns for better extraction
     const agentData = await page.evaluate(() => {
       let agentName = null, agentEmail = null, agentPhone = null, brokerage = null;
