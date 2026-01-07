@@ -65,8 +65,8 @@ export async function resetProgress() {
   console.log('[Redfin] Progress reset - will start fresh');
 }
 
-// Whether to use deep scraping for agent details
-const USE_AGENT_ENRICHMENT = String(process.env.REDFIN_ENRICH_AGENTS || '0') === '1';
+// Whether to use deep scraping for agent details (default ON to get phone/email)
+const USE_AGENT_ENRICHMENT = String(process.env.REDFIN_ENRICH_AGENTS || '1') === '1';
 
 // State -> Cities mapping with Redfin city IDs - EXPANDED to match Privy's city list (654 cities!)
 const STATE_CITIES = {
@@ -194,7 +194,7 @@ async function runCity(stateCode, city) {
           const enriched = await extractAgentDetails(url);
           if (enriched) {
             agentName = enriched.agentName || agentName;
-            agentPhone = enriched.phone || agentPhone;
+            agentPhone = enriched.agentPhone || agentPhone;  // Fixed: was 'phone', should be 'agentPhone'
             agentEmail = enriched.email || agentEmail;
             brokerage = enriched.brokerage || brokerage;
           }
