@@ -536,16 +536,23 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
     const targetCity = addressParts[1]?.trim()?.toLowerCase() || '';
 
     // Wait and check if panel shows correct address (BOTH street AND city must match)
-    for (let i = 0; i < 10; i++) {
-      await sleep(500);
+    // RELAXED: Check for ANY detail panel indicator, not just "Agents and Offices"
+    for (let i = 0; i < 12; i++) {
+      await sleep(600);
       const panelCheck = await page.evaluate((targetStr, targetCityStr) => {
         const text = document.body.innerText || '';
         const textLower = text.toLowerCase();
-        const hasPanel = text.includes('Agents and Offices') || text.includes('List Agent Full Name');
+        // RELAXED panel detection - look for multiple indicators
+        const hasPanel = text.includes('Agents and Offices') ||
+                         text.includes('List Agent') ||
+                         text.includes('Listing Agent') ||
+                         text.includes('Property Details') ||
+                         text.includes('About This Home') ||
+                         document.querySelector('.drawer-content, .property-detail, [class*="detail-panel"], [class*="property-drawer"]');
         const hasStreet = targetStr ? textLower.includes(targetStr) : true;
         const hasCity = targetCityStr ? textLower.includes(targetCityStr) : true;
         const hasTargetAddr = hasStreet && hasCity;
-        return { hasPanel, hasTargetAddr, hasStreet, hasCity, textSample: text.substring(0, 200) };
+        return { hasPanel: !!hasPanel, hasTargetAddr, hasStreet, hasCity, textSample: text.substring(0, 200) };
       }, targetStreet, targetCity).catch(() => ({ hasPanel: false, hasTargetAddr: false, textSample: '' }));
 
       if (panelCheck.hasPanel && panelCheck.hasTargetAddr) {
@@ -568,10 +575,9 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
       }
     }
 
+    // Even if panel didn't open with exact indicators, try extraction anyway
     if (!panelOpened) {
-      logPrivy.debug('⚠️ Panel did not open with target address', { address: targetAddress?.substring(0, 30), targetStreet });
-      // Skip extraction if we can't verify correct panel
-      return result;
+      logPrivy.debug('⚠️ Panel indicators not found, trying extraction anyway', { address: targetAddress?.substring(0, 30), targetStreet });
     }
 
     // 5. Dismiss any popups (Cancel, Close, etc.)
@@ -602,31 +608,77 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
     await sleep(500);
 
     // 5. Extract agent info from page text (same approach as live-scrape.js)
+    // ENHANCED: Multiple fallback patterns for better extraction
     const agentData = await page.evaluate(() => {
       let agentName = null, agentEmail = null, agentPhone = null, brokerage = null;
       const pageText = document.body.innerText || '';
 
-      // 1. PHONE: "List Agent Direct Phone: 678-951-7041"
-      const phoneLabeled = pageText.match(/List\s+Agent\s+(?:Direct\s+)?Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
+      // ========== PHONE EXTRACTION ==========
+      // Pattern 1: "List Agent Direct Phone: 678-951-7041"
+      const phoneLabeled = pageText.match(/List\s+Agent\s+(?:Direct\s+|Preferred\s+)?Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
       if (phoneLabeled) {
         agentPhone = phoneLabeled[1].trim();
       }
-      // Fallback to office phone only if no agent phone
+      // Pattern 2: Fallback to office phone
       if (!agentPhone) {
         const officePhoneLabeled = pageText.match(/List\s+Office\s+Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
         if (officePhoneLabeled) {
           agentPhone = officePhoneLabeled[1].trim();
         }
       }
+      // Pattern 3: tel: links on page (fallback)
+      if (!agentPhone) {
+        const telLink = document.querySelector('a[href^="tel:"]');
+        if (telLink) {
+          const href = telLink.getAttribute('href') || '';
+          const phone = href.replace('tel:', '').replace(/[^\d]/g, '');
+          if (phone.length >= 10) {
+            agentPhone = phone.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
+          }
+        }
+      }
+      // Pattern 4: Any phone number pattern in text
+      if (!agentPhone) {
+        const phonePattern = pageText.match(/(?:Phone|Contact|Call)[:\s]*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})/i);
+        if (phonePattern) {
+          agentPhone = `${phonePattern[1]}-${phonePattern[2]}-${phonePattern[3]}`;
+        }
+      }
 
-      // 2. EMAIL: "List Agent Email: amyksellsga@gmail.com"
+      // ========== EMAIL EXTRACTION ==========
+      // Pattern 1: "List Agent Email: amyksellsga@gmail.com"
       const emailLabeled = pageText.match(/List\s+Agent\s+Email\s*[:\s]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
       if (emailLabeled) {
         agentEmail = emailLabeled[1].trim();
       }
+      // Pattern 2: mailto: links on page (fallback)
+      if (!agentEmail) {
+        const mailtoLinks = document.querySelectorAll('a[href^="mailto:"]');
+        for (const link of mailtoLinks) {
+          const href = link.getAttribute('href') || '';
+          const email = href.replace('mailto:', '').split('?')[0].trim().toLowerCase();
+          // Skip system/platform emails
+          if (email && !email.includes('privy') && !email.includes('noreply') &&
+              !email.includes('support') && !email.includes('info@') &&
+              !email.includes('admin') && !email.includes('mioym')) {
+            agentEmail = email;
+            break;
+          }
+        }
+      }
+      // Pattern 3: Any email in text near "Agent" or "Contact"
+      if (!agentEmail) {
+        const emailNearAgent = pageText.match(/(?:Agent|Contact|Email)[:\s]*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+        if (emailNearAgent) {
+          const email = emailNearAgent[1].toLowerCase();
+          if (!email.includes('privy') && !email.includes('noreply')) {
+            agentEmail = emailNearAgent[1].trim();
+          }
+        }
+      }
 
-      // 3. NAME: Try multiple Privy formats
-      // "List Agent Full Name: Jesse Burns"
+      // ========== NAME EXTRACTION ==========
+      // Pattern 1: "List Agent Full Name: Jesse Burns"
       const fullNameMatch = pageText.match(/List\s+Agent\s+Full\s+Name\s*[:\s]\s*([^\n]+)/i);
       if (fullNameMatch) {
         let extractedName = fullNameMatch[1].trim();
@@ -635,8 +687,7 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
           agentName = extractedName;
         }
       }
-
-      // "List Agent First Name: Amy" + "List Agent Last Name: Smith"
+      // Pattern 2: "List Agent First Name: Amy" + "List Agent Last Name: Smith"
       if (!agentName) {
         const firstMatch = pageText.match(/List\s+Agent\s+First\s+Name\s*[:\s]\s*([A-Za-z]+)/i);
         const lastMatch = pageText.match(/List\s+Agent\s+Last\s+Name\s*[:\s]\s*([A-Za-z]+)/i);
@@ -644,14 +695,40 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
           agentName = `${firstMatch[1].trim()} ${lastMatch[1].trim()}`;
         }
       }
+      // Pattern 3: "Listing Agent: Name" or "Listed by: Name"
+      if (!agentName) {
+        const listedBy = pageText.match(/(?:Listing Agent|Listed by|Agent)[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)/);
+        if (listedBy) {
+          agentName = listedBy[1].trim();
+        }
+      }
+      // Pattern 4: Look for agent name in specific elements
+      if (!agentName) {
+        const agentEls = document.querySelectorAll('.agent-name, [class*="agent-name"], [data-testid="agent-name"]');
+        for (const el of agentEls) {
+          const text = el.textContent?.trim();
+          if (text && text.length > 3 && text.length < 50 && /^[A-Z]/.test(text)) {
+            agentName = text;
+            break;
+          }
+        }
+      }
 
-      // 4. BROKERAGE: "List Office Name: Keller Williams Realty Community Partners"
+      // ========== BROKERAGE EXTRACTION ==========
+      // Pattern 1: "List Office Name: Keller Williams Realty Community Partners"
       const officeNameMatch = pageText.match(/List\s+Office\s+Name\s*[:\s]\s*([^\n]+)/i);
       if (officeNameMatch) {
         let officeName = officeNameMatch[1].trim();
         officeName = officeName.split(/(?:List Agent|List Office Phone|Direct Phone|Email)/i)[0].trim();
         if (officeName.length > 2) {
           brokerage = officeName;
+        }
+      }
+      // Pattern 2: "Brokerage: Name" or "Office: Name"
+      if (!brokerage) {
+        const brokerageMatch = pageText.match(/(?:Brokerage|Office|Firm)[:\s]+([A-Z][^\n]{3,50})/);
+        if (brokerageMatch) {
+          brokerage = brokerageMatch[1].trim().split(/(?:Phone|Email|List)/i)[0].trim();
         }
       }
 

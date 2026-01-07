@@ -40,7 +40,7 @@ async function extractAgentWithPuppeteer(propertyUrl) {
 
     // Extract agent info from the rendered page
     const agentInfo = await page.evaluate(() => {
-      const result = { agentName: null, agentPhone: null, agentEmail: null, brokerage: null };
+      const result = { agentName: null, agentPhone: null, agentEmail: null, brokerage: null, brokerPhone: null, brokerEmail: null };
 
       // Get all text on the page
       const bodyText = document.body.innerText || '';
@@ -62,8 +62,8 @@ async function extractAgentWithPuppeteer(propertyUrl) {
       const courtesyMatch = bodyText.match(/Listing provided courtesy of:\s*([^(]+?)\s*\((\d{3}[-.\s]?\d{3}[-.\s]?\d{4})\)/i);
       if (courtesyMatch) {
         if (!result.brokerage) result.brokerage = courtesyMatch[1].trim();
-        // Use brokerage phone as fallback if no agent phone
-        if (!result.agentPhone) result.agentPhone = courtesyMatch[2].replace(/[^\d]/g, '').replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
+        // This is broker phone (from "Listing provided courtesy of")
+        if (!result.brokerPhone) result.brokerPhone = courtesyMatch[2].replace(/[^\d]/g, '').replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
       }
 
       // Look for brokerage after first bullet (for "Listed by" format)
@@ -81,22 +81,51 @@ async function extractAgentWithPuppeteer(propertyUrl) {
       }
 
       // Look for phone number after bullet point (for "Listed by" format)
+      // First check for broker phone pattern "• xxx-xxx-xxxx (broker)"
+      const brokerPhoneMatch = bodyText.match(/[•·]\s*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})\s*\(broker\)/i);
+      if (brokerPhoneMatch) {
+        const phone = `${brokerPhoneMatch[1]}-${brokerPhoneMatch[2]}-${brokerPhoneMatch[3]}`;
+        if (!phone.includes('844-759-7732') && !result.brokerPhone) {
+          result.brokerPhone = phone;
+        }
+      }
+
+      // Then look for agent phone (without broker label or with agent label)
       if (!result.agentPhone) {
-        const phoneMatch = bodyText.match(/[•·]\s*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})(?:\s*\((?:broker|agent)\))?/i);
-        if (phoneMatch) {
-          const phone = `${phoneMatch[1]}-${phoneMatch[2]}-${phoneMatch[3]}`;
-          // Filter out Redfin's general number
+        // Try agent-specific pattern first
+        const agentPhoneMatch = bodyText.match(/[•·]\s*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})\s*\(agent\)/i);
+        if (agentPhoneMatch) {
+          const phone = `${agentPhoneMatch[1]}-${agentPhoneMatch[2]}-${agentPhoneMatch[3]}`;
           if (!phone.includes('844-759-7732')) {
             result.agentPhone = phone;
           }
         }
+        // Then try generic phone (without any label) - only if no broker label
+        if (!result.agentPhone) {
+          const phoneMatch = bodyText.match(/[•·]\s*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})(?!\s*\(broker\))/i);
+          if (phoneMatch) {
+            const phone = `${phoneMatch[1]}-${phoneMatch[2]}-${phoneMatch[3]}`;
+            if (!phone.includes('844-759-7732')) {
+              result.agentPhone = phone;
+            }
+          }
+        }
       }
 
-      // Look for email pattern - first try after bullet point
-      const emailAfterBullet = bodyText.match(/[•·]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?:\s*\((?:broker|agent)\))?/i);
+      // Look for email pattern - first check for broker email "• email (broker)"
+      const brokerEmailMatch = bodyText.match(/[•·]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\s*\(broker\)/i);
+      if (brokerEmailMatch && brokerEmailMatch[1]) {
+        const email = brokerEmailMatch[1].toLowerCase();
+        if (!email.includes('@redfin.com') && !result.brokerEmail) {
+          result.brokerEmail = brokerEmailMatch[1].trim();
+        }
+      }
+
+      // Then look for agent email (without broker label)
+      const emailAfterBullet = bodyText.match(/[•·]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?!\s*\(broker\))/i);
       if (emailAfterBullet && emailAfterBullet[1]) {
         const email = emailAfterBullet[1].toLowerCase();
-        if (!email.includes('@redfin.com')) {
+        if (!email.includes('@redfin.com') && !result.agentEmail) {
           result.agentEmail = emailAfterBullet[1].trim();
         }
       }
@@ -199,6 +228,8 @@ export async function extractAgentDetails(propertyUrl) {
     let agentPhone = null;
     let agentEmail = null;
     let brokerage = null;
+    let brokerPhone = null;
+    let brokerEmail = null;
 
     // Method 1: Extract from embedded JSON data in the page
     // Redfin embeds listing data as JSON in the HTML - handles both escaped (\") and non-escaped (") quotes
@@ -286,13 +317,13 @@ export async function extractAgentDetails(propertyUrl) {
     }
 
     // Method 1f: Extract broker email pattern "• email@domain.com (broker)"
-    // This is a FALLBACK - only used if no agent email found
-    if (!agentEmail) {
+    // Store in brokerEmail field (separate from agentEmail)
+    if (!brokerEmail) {
       const brokerEmailMatch = html.match(/[•·]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\s*\(broker\)/i);
       if (brokerEmailMatch && brokerEmailMatch[1]) {
         const email = brokerEmailMatch[1].toLowerCase();
         if (!email.includes('@redfin.com')) {
-          agentEmail = brokerEmailMatch[1].trim();
+          brokerEmail = brokerEmailMatch[1].trim();
         }
       }
     }
@@ -374,11 +405,11 @@ export async function extractAgentDetails(propertyUrl) {
     }
 
     // Method 4c: Look for broker phone pattern "• xxx-xxx-xxxx (broker)"
-    // This is a FALLBACK - only used if no agent phone found, requires (broker) label
-    if (!agentPhone) {
+    // Store in brokerPhone field (separate from agentPhone)
+    if (!brokerPhone) {
       const brokerPhoneMatch = html.match(/[•·]\s*\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})\s*\(broker\)/i);
       if (brokerPhoneMatch) {
-        agentPhone = `${brokerPhoneMatch[1]}-${brokerPhoneMatch[2]}-${brokerPhoneMatch[3]}`;
+        brokerPhone = `${brokerPhoneMatch[1]}-${brokerPhoneMatch[2]}-${brokerPhoneMatch[3]}`;
       }
     }
 
@@ -406,16 +437,26 @@ export async function extractAgentDetails(propertyUrl) {
     // Priority: HTTP JSON > Puppeteer for agent name (more reliable)
     // Priority: Puppeteer > HTTP for phone/email (JS-rendered content)
     const finalAgentName = agentName || puppeteerResult?.agentName || null;
+    const finalBrokerage = brokerage || puppeteerResult?.brokerage || null;
     const finalAgentPhone = puppeteerResult?.agentPhone || agentPhone || null;
     const finalAgentEmail = puppeteerResult?.agentEmail || agentEmail || null;
-    const finalBrokerage = brokerage || puppeteerResult?.brokerage || null;
+    const finalBrokerPhone = puppeteerResult?.brokerPhone || brokerPhone || null;
+    const finalBrokerEmail = puppeteerResult?.brokerEmail || brokerEmail || null;
 
-    console.log(`[AgentExtractor] Final: ${finalAgentName || 'N/A'}, ${finalAgentPhone || 'N/A'}, ${finalAgentEmail || 'N/A'}, ${finalBrokerage || 'N/A'}`);
+    // Apply fallback logic: agent > broker for each field independently
+    // Name: agent name > broker name
+    const displayName = finalAgentName || finalBrokerage || null;
+    // Phone: agent phone > broker phone
+    const displayPhone = finalAgentPhone || finalBrokerPhone || null;
+    // Email: agent email > broker email
+    const displayEmail = finalAgentEmail || finalBrokerEmail || null;
+
+    console.log(`[AgentExtractor] Final: ${displayName || 'N/A'}, ${displayPhone || 'N/A'}, ${displayEmail || 'N/A'}, ${finalBrokerage || 'N/A'}`);
 
     return {
-      agentName: finalAgentName,
-      agentPhone: finalAgentPhone,
-      email: finalAgentEmail,
+      agentName: displayName,
+      agentPhone: displayPhone,
+      email: displayEmail,
       brokerage: finalBrokerage,
       agentLicense: null
     };

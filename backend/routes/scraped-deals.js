@@ -192,7 +192,7 @@ router.get('/pending-amv', async (req, res) => {
       $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
     })
       .sort({ scrapedAt: -1 })
-      .select('fullAddress state listingPrice scrapedAt source agentName agentPhone agentEmail')
+      .select('fullAddress state listingPrice scrapedAt source agentName agentPhone agentEmail brokerage')
       .lean();
 
     // Group pending by state
