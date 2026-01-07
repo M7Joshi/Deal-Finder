@@ -611,26 +611,51 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
     logPrivy.info(`🔍 [DEBUG] Clicked map area: ${clickedMap}`);
     await sleep(300);
 
-    // 1. Click the card to open detail panel - click twice for reliability
-    logPrivy.info(`🔍 [DEBUG] Step 1: Clicking card...`);
-    let clickSuccess = false;
-    try {
-      await cardHandle.click({ delay: 50 });
-      await sleep(150);
-      await cardHandle.click({ delay: 50 });
-      clickSuccess = true;
-    } catch (clickErr) {
-      logPrivy.warn(`🔍 [DEBUG] Direct click failed: ${clickErr?.message}, trying evaluate...`);
+    // 1. RE-FIND card by address text (virtualization removes old handles)
+    logPrivy.info(`🔍 [DEBUG] Step 1: Finding and clicking card by address...`);
+    const streetNumber = targetAddress?.match(/^(\d+)/)?.[1] || '';
+    const streetStart = targetAddress?.split(',')[0]?.replace(/^\d+\s*/, '').trim().substring(0, 10).toLowerCase() || '';
+
+    const clickResult = await page.evaluate((streetNum, streetSt, addrLine1Sel, addrLine2Sel) => {
+      // Find all property cards by looking for address elements
+      const line1Els = document.querySelectorAll(addrLine1Sel);
+      for (const el of line1Els) {
+        const text = el.textContent?.trim() || '';
+        // Check if street number and start of street name match
+        if (streetNum && text.includes(streetNum) && streetSt && text.toLowerCase().includes(streetSt)) {
+          // Found matching address - click the parent card
+          const card = el.closest('[class*="property"]') || el.closest('[class*="card"]') || el.closest('a') || el.parentElement?.parentElement;
+          if (card) {
+            card.click();
+            return { found: true, method: 'address-line1', text: text.substring(0, 40) };
+          }
+        }
+      }
+      // Fallback: search in full card text
+      const cards = document.querySelectorAll('[class*="PropertyListItem"], [class*="property-card"], [class*="listing-card"]');
+      for (const card of cards) {
+        const text = card.textContent?.toLowerCase() || '';
+        if (streetNum && text.includes(streetNum) && streetSt && text.includes(streetSt)) {
+          card.click();
+          return { found: true, method: 'card-text' };
+        }
+      }
+      return { found: false };
+    }, streetNumber, streetStart, addressLine1Selector, addressLine2Selector).catch(err => ({ found: false, error: err?.message }));
+
+    logPrivy.info(`🔍 [DEBUG] Click result: ${JSON.stringify(clickResult)}`);
+
+    // If DOM search failed, try original handle as last resort
+    if (!clickResult.found) {
+      logPrivy.warn(`🔍 [DEBUG] DOM search failed, trying original handle...`);
       try {
-        await page.evaluate(el => { el.click(); }, cardHandle);
-        await sleep(150);
-        await page.evaluate(el => { el.click(); }, cardHandle);
-        clickSuccess = true;
-      } catch (evalErr) {
-        logPrivy.error(`🔍 [DEBUG] Evaluate click also failed: ${evalErr?.message}`);
+        await cardHandle.click({ delay: 50 });
+      } catch (clickErr) {
+        logPrivy.error(`🔍 [DEBUG] Original handle click failed: ${clickErr?.message}`);
+        // Card is gone - can't extract agent
+        return result;
       }
     }
-    logPrivy.info(`🔍 [DEBUG] Card click success: ${clickSuccess}`);
 
     // 2. Wait 2500ms for panel to load (increased for reliability)
     logPrivy.info(`🔍 [DEBUG] Step 2: Waiting 2500ms for panel...`);
