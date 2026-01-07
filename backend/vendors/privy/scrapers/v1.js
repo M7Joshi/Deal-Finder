@@ -544,6 +544,17 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
   const result = { name: null, email: null, phone: null, brokerage: null };
 
   try {
+    // 0. FIRST: Close any existing panel to ensure fresh state
+    await page.keyboard.press('Escape').catch(() => {});
+    await sleep(300);
+
+    // Try clicking close button if escape didn't work
+    await page.evaluate(() => {
+      const closeBtn = document.querySelector('.close-btn, .close, [aria-label="Close"], .modal-close, button.close, [class*="close"]');
+      if (closeBtn) closeBtn.click();
+    }).catch(() => {});
+    await sleep(300);
+
     // 1. Click the card to open detail panel
     try {
       await cardHandle.click({ delay: 100 });
@@ -551,8 +562,8 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
       await page.evaluate(el => el.click(), cardHandle).catch(() => {});
     }
 
-    // 2. Wait 1500ms for panel to load (same as manual fetcher)
-    await sleep(1500);
+    // 2. Wait 2000ms for panel to load (increased from 1500ms)
+    await sleep(2000);
 
     // 3. Scroll to BOTTOM to reveal agent info (same as manual fetcher)
     await page.evaluate(() => {
@@ -594,7 +605,7 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
           });
           // Close panel and return empty - don't extract wrong agent
           await page.keyboard.press('Escape').catch(() => {});
-          await sleep(200);
+          await sleep(300);
           return result;
         }
         logPrivy.debug('✓ Address verified', { address: panelAddress?.substring(0, 40) });
