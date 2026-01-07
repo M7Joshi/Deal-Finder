@@ -36,6 +36,18 @@ interface PendingByState {
 const currency = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const fmt = (n?: number | null) => (typeof n === 'number' && n > 0 ? currency.format(n) : '—');
 
+// Sanitize agent name - truncate if too long or contains garbage data
+const sanitizeAgentName = (name?: string | null): string => {
+  if (!name) return '';
+  const s = String(name).trim();
+  // If it looks like JSON/HTML garbage, return empty
+  if (s.includes('{') || s.includes('<') || s.includes('\\u') || s.length > 100) {
+    return '';
+  }
+  // Truncate to reasonable length
+  return s.length > 50 ? s.slice(0, 47) + '...' : s;
+};
+
 const sourceColors: Record<string, { bg: string; text: string }> = {
   privy: { bg: '#f5f3ff', text: '#7c3aed' },
   redfin: { bg: '#fef2f2', text: '#dc2626' },
@@ -442,11 +454,11 @@ export default function PendingAMV() {
                     </td>
                     <td style={{ padding: 14, textAlign: 'right', color: '#6b7280' }}>{deal.state || '—'}</td>
                     <td style={{ padding: 14, textAlign: 'right', color: '#059669', fontWeight: 600 }}>{fmt(deal.listingPrice)}</td>
-                    <td style={{ padding: 14, minWidth: 180 }}>
-                      {(deal.agentName || deal.agentPhone || deal.agentEmail) ? (
+                    <td style={{ padding: 14, minWidth: 180, maxWidth: 250 }}>
+                      {(sanitizeAgentName(deal.agentName) || deal.agentPhone || deal.agentEmail) ? (
                         <div>
-                          {deal.agentName && (
-                            <div style={{ fontWeight: 600, color: '#111', fontSize: 13 }}>{deal.agentName}</div>
+                          {sanitizeAgentName(deal.agentName) && (
+                            <div style={{ fontWeight: 600, color: '#111', fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sanitizeAgentName(deal.agentName)}</div>
                           )}
                           {deal.agentPhone && (
                             <div style={{ color: '#3b82f6', fontSize: 12 }}>{deal.agentPhone}</div>

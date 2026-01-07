@@ -22,6 +22,18 @@ const formatPhone = (s: string) => {
   return `(${p1}) ${p2}-${p3}`;
 };
 
+// Sanitize agent name - truncate if too long or contains garbage data
+const sanitizeAgentName = (name?: string | null): string => {
+  if (!name) return '—';
+  const s = String(name).trim();
+  // If it looks like JSON/HTML garbage, return placeholder
+  if (s.includes('{') || s.includes('<') || s.includes('\\u') || s.length > 100) {
+    return '—';
+  }
+  // Truncate to reasonable length
+  return s.length > 50 ? s.slice(0, 47) + '...' : s;
+};
+
 // Toggle verbose console logs for debugging data shape
 const DEBUG = true;
 
