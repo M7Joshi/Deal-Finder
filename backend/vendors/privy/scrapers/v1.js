@@ -531,17 +531,22 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
 
     // 4. Wait for panel to show THIS property's address
     let panelOpened = false;
-    const targetStreet = targetAddress?.split(',')[0]?.trim()?.toLowerCase() || '';
+    const addressParts = targetAddress?.split(',') || [];
+    const targetStreet = addressParts[0]?.trim()?.toLowerCase() || '';
+    const targetCity = addressParts[1]?.trim()?.toLowerCase() || '';
 
-    // Wait and check if panel shows correct address
+    // Wait and check if panel shows correct address (BOTH street AND city must match)
     for (let i = 0; i < 10; i++) {
       await sleep(500);
-      const panelCheck = await page.evaluate((targetStr) => {
+      const panelCheck = await page.evaluate((targetStr, targetCityStr) => {
         const text = document.body.innerText || '';
+        const textLower = text.toLowerCase();
         const hasPanel = text.includes('Agents and Offices') || text.includes('List Agent Full Name');
-        const hasTargetAddr = targetStr ? text.toLowerCase().includes(targetStr) : true;
-        return { hasPanel, hasTargetAddr, textSample: text.substring(0, 200) };
-      }, targetStreet).catch(() => ({ hasPanel: false, hasTargetAddr: false, textSample: '' }));
+        const hasStreet = targetStr ? textLower.includes(targetStr) : true;
+        const hasCity = targetCityStr ? textLower.includes(targetCityStr) : true;
+        const hasTargetAddr = hasStreet && hasCity;
+        return { hasPanel, hasTargetAddr, hasStreet, hasCity, textSample: text.substring(0, 200) };
+      }, targetStreet, targetCity).catch(() => ({ hasPanel: false, hasTargetAddr: false, textSample: '' }));
 
       if (panelCheck.hasPanel && panelCheck.hasTargetAddr) {
         panelOpened = true;
