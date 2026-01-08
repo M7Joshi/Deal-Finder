@@ -59,6 +59,7 @@ import path from 'node:path';
 import mongoose from 'mongoose';
 import Property from '../models/Property.js';
 import ScrapedDeal from '../models/ScrapedDeal.js';
+import { getPrivyPage, lookupAddressAgent } from '../routes/agent-lookup.js';
 import { getPreferredChromeProxy, SERVICE_PROBE_URL } from '../services/proxyManager.js';
 import { getVendorProxyPool, toProxyArg } from '../utils/proxyBuilder.js';
 import { computeAMV as computePropertyAMV } from '../models/Property.js';
@@ -694,6 +695,104 @@ function releaseBofaAccess(source) {
   }
 }
 
+// Track if agent lookup is running (to prevent duplicate runs)
+let privyAgentLookupRunning = false;
+
+/**
+ * Run agent lookup for Privy deals that became deals (isDeal=true) but haven't been looked up yet
+ * This runs during BofA processing when Privy scraper is idle
+ * Tracks status: 'pending' -> 'found' or 'not_found'
+ */
+async function runPrivyAgentLookup() {
+  if (privyAgentLookupRunning) {
+    log.info('AGENT-LOOKUP: Already running, skipping');
+    return;
+  }
+
+  try {
+    // Find Privy deals that are deals but haven't been looked up yet (agentLookupStatus is null or 'pending')
+    const dealsNeedingAgents = await ScrapedDeal.find({
+      source: { $regex: /^privy/ },
+      isDeal: true,
+      $or: [
+        { agentLookupStatus: null },
+        { agentLookupStatus: 'pending' },
+        { agentLookupStatus: { $exists: false } }
+      ]
+    })
+      .sort({ createdAt: -1 })
+      .limit(50) // Process in batches of 50
+      .lean();
+
+    if (dealsNeedingAgents.length === 0) {
+      log.info('AGENT-LOOKUP: No Privy deals need agent lookup');
+      return;
+    }
+
+    privyAgentLookupRunning = true;
+    log.info(`AGENT-LOOKUP: Starting lookup for ${dealsNeedingAgents.length} Privy deals`);
+
+    // Get Privy page (handles login)
+    const page = await getPrivyPage();
+
+    let success = 0, noData = 0, failed = 0;
+
+    for (const deal of dealsNeedingAgents) {
+      if (control.abort) {
+        log.info('AGENT-LOOKUP: Aborted');
+        break;
+      }
+
+      try {
+        log.info(`AGENT-LOOKUP: Looking up ${deal.fullAddress}`);
+        const result = await lookupAddressAgent(page, deal.fullAddress);
+
+        if (result.ok && result.hasData) {
+          // Agent found - update with agent details and set status to 'found'
+          await ScrapedDeal.updateOne(
+            { _id: deal._id },
+            {
+              $set: {
+                agentName: result.agent.name || null,
+                agentPhone: result.agent.phone || null,
+                agentEmail: result.agent.email || null,
+                brokerage: result.agent.brokerage || null,
+                agentLookupStatus: 'found',
+                agentLookupAt: new Date(),
+              }
+            }
+          );
+          log.info(`AGENT-LOOKUP: Found agent for ${deal.fullAddress}:`, result.agent);
+          success++;
+        } else {
+          // No agent found - set status to 'not_found'
+          await ScrapedDeal.updateOne(
+            { _id: deal._id },
+            {
+              $set: {
+                agentLookupStatus: 'not_found',
+                agentLookupAt: new Date(),
+              }
+            }
+          );
+          log.warn(`AGENT-LOOKUP: No agent data for ${deal.fullAddress}`);
+          noData++;
+        }
+      } catch (err) {
+        log.error(`AGENT-LOOKUP: Failed for ${deal.fullAddress}: ${err.message}`);
+        failed++;
+        // Don't update status on error - will retry next time
+      }
+    }
+
+    log.success(`AGENT-LOOKUP: Complete - Success: ${success}, NoData: ${noData}, Failed: ${failed}`);
+  } catch (err) {
+    log.error(`AGENT-LOOKUP: Error: ${err.message}`);
+  } finally {
+    privyAgentLookupRunning = false;
+  }
+}
+
 // Run BofA AMV for addresses from a specific source
 // Uses ALL 17 browsers (shared queue model)
 // For 'privy' source, processes all privy sources (privy, privy-Tear, privy-flip)
@@ -793,7 +892,13 @@ async function runPrivyWithBofA() {
           log.info(`PRIVY: Got BofA lock! Taking ${BREAK_BEFORE_BOFA_MS / 1000}s break then processing ${pendingPrivyAMV} addresses...`);
           await new Promise(r => setTimeout(r, BREAK_BEFORE_BOFA_MS));
 
-          await runBofaForSource('privy');
+          // Run BofA AMV and Agent Lookup in parallel
+          // BofA uses 17 browsers, Agent Lookup uses Privy browser (separate)
+          log.info('PRIVY: Running BofA AMV + Agent Lookup in parallel');
+          await Promise.all([
+            runBofaForSource('privy'),
+            runPrivyAgentLookup() // Fetch agent details for deals while BofA runs
+          ]);
           releaseBofaAccess('privy');
 
           // 3 min break after BofA completes
@@ -835,7 +940,11 @@ async function runPrivyWithBofA() {
           if (gotLock) {
             log.info(`PRIVY: Cycle done, processing ${remaining} remaining addresses...`);
             await new Promise(r => setTimeout(r, BREAK_BEFORE_BOFA_MS));
-            await runBofaForSource('privy');
+            // Run BofA AMV and Agent Lookup in parallel
+            await Promise.all([
+              runBofaForSource('privy'),
+              runPrivyAgentLookup()
+            ]);
             releaseBofaAccess('privy');
           } else {
             log.info(`PRIVY: Cycle done but BofA busy. Will retry next loop.`);

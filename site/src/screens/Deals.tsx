@@ -122,6 +122,10 @@ type Row = {
   agentPhone?: string | null;
   agentEmail?: string | null;
   agentEmailSent?: boolean | null; // if backend provides it
+  // Agent lookup tracking for Privy deals
+  agentLookupStatus?: 'pending' | 'found' | 'not_found' | null;
+  agentLookupAt?: string | null;
+  source?: string | null;
   deal?: boolean;
   prop_id?: string;
   updatedAt?: string;
@@ -1240,6 +1244,8 @@ const cleanAddress = (address?: string | null): string => {
 
               const hasAgentInfo = r.agentName || r.agentPhone || r.agentEmail;
               const isAgentExpanded = expandedAgentId === id;
+              const isPrivySource = (r as any).source?.toLowerCase()?.startsWith('privy');
+              const agentLookupStatus = (r as any).agentLookupStatus;
 
               return (
                 <React.Fragment key={r._id || r.prop_id || (r.fullAddress || r.address)}>
@@ -1281,6 +1287,10 @@ const cleanAddress = (address?: string | null): string => {
                         >
                           {isAgentExpanded ? 'Hide' : 'View'}
                         </Button>
+                      ) : isPrivySource && agentLookupStatus === 'not_found' ? (
+                        <span style={{ color: '#ef4444', fontSize: isMobile ? 11 : 13, fontWeight: 500 }}>No Agent</span>
+                      ) : isPrivySource && (!agentLookupStatus || agentLookupStatus === 'pending') ? (
+                        <span style={{ color: '#f59e0b', fontSize: isMobile ? 11 : 13, fontWeight: 500 }}>Pending</span>
                       ) : (
                         <span style={{ color: '#9ca3af', fontSize: isMobile ? 11 : 13 }}>—</span>
                       )}

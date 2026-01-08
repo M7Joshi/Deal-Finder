@@ -436,8 +436,8 @@ async function extractAgentFromPageText(page) {
       // ========== PRIVY-SPECIFIC LABELED FIELDS ==========
       // These are the ONLY reliable patterns - they explicitly say "List Agent"
 
-      // 1. PHONE: "List Agent Direct Phone: 678-951-7041" or "List Agent Preferred Phone: 480-624-0244"
-      const phoneLabeled = pageText.match(/List\s+Agent\s+(?:Direct\s+|Preferred\s+)?Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
+      // 1. PHONE: "List Agent Direct Phone: 678-951-7041" or "List Agent Preferred Phone: 480-624-0244" or "List Agent Mobile Phone: 518-621-6912"
+      const phoneLabeled = pageText.match(/List\s+Agent\s+(?:Direct\s+|Preferred\s+|Mobile\s+)?Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
       if (phoneLabeled) {
         result.phone = phoneLabeled[1].trim();
       }
@@ -617,16 +617,41 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
     const streetStart = targetAddress?.split(',')[0]?.replace(/^\d+\s*/, '').trim().substring(0, 10).toLowerCase() || '';
 
     const clickResult = await page.evaluate((streetNum, streetSt, addrLine1Sel, addrLine2Sel) => {
+      // Helper to trigger full click sequence (React apps may need this)
+      const triggerFullClick = (el) => {
+        // Dispatch mousedown, mouseup, click sequence
+        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        // Also try double-click
+        el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window }));
+      };
+
+      // Helper to check if address starts with street number (handles "7 Collins" vs "752 7th Ave")
+      const startsWithStreetNum = (text, num) => {
+        if (!text || !num) return false;
+        const trimmed = text.trim();
+        // Must start with the exact street number followed by space or end
+        return trimmed.startsWith(num + ' ') || trimmed === num;
+      };
+
       // Find all property cards by looking for address elements
       const line1Els = document.querySelectorAll(addrLine1Sel);
       for (const el of line1Els) {
         const text = el.textContent?.trim() || '';
-        // Check if street number and start of street name match
-        if (streetNum && text.includes(streetNum) && streetSt && text.toLowerCase().includes(streetSt)) {
+        // Check if address STARTS WITH street number (not just contains it) and has street name
+        if (streetNum && startsWithStreetNum(text, streetNum) && streetSt && text.toLowerCase().includes(streetSt)) {
           // Found matching address - click the parent card
           const card = el.closest('[class*="property"]') || el.closest('[class*="card"]') || el.closest('a') || el.parentElement?.parentElement;
           if (card) {
-            card.click();
+            // First try clicking any link inside the card
+            const link = card.querySelector('a[href]');
+            if (link) {
+              triggerFullClick(link);
+              return { found: true, method: 'link-in-card', text: text.substring(0, 40) };
+            }
+            // Otherwise click the card itself
+            triggerFullClick(card);
             return { found: true, method: 'address-line1', text: text.substring(0, 40) };
           }
         }
@@ -635,8 +660,15 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
       const cards = document.querySelectorAll('[class*="PropertyListItem"], [class*="property-card"], [class*="listing-card"]');
       for (const card of cards) {
         const text = card.textContent?.toLowerCase() || '';
-        if (streetNum && text.includes(streetNum) && streetSt && text.includes(streetSt)) {
-          card.click();
+        // For full card text, check that street number appears at start of a line/word boundary
+        const numPattern = new RegExp('(^|\\s)' + streetNum + '\\s', 'i');
+        if (streetNum && numPattern.test(text) && streetSt && text.includes(streetSt)) {
+          const link = card.querySelector('a[href]');
+          if (link) {
+            triggerFullClick(link);
+            return { found: true, method: 'link-in-fallback' };
+          }
+          triggerFullClick(card);
           return { found: true, method: 'card-text' };
         }
       }
@@ -745,8 +777,8 @@ async function extractAgentWithFallbackDirect(page, cardHandle, targetAddress = 
       const courtesyText = courtesyStart > -1 ? fullPageText.substring(courtesyStart, courtesyStart + 200) : '';
 
       // ========== PHONE EXTRACTION (from Agents and Offices section ONLY) ==========
-      // Pattern 1: "List Agent Direct Phone:" from agent section
-      const phoneLabeled = agentSectionText.match(/List\s+Agent\s+(?:Direct\s+|Preferred\s+)?Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
+      // Pattern 1: "List Agent Direct Phone:" or "List Agent Mobile Phone:" from agent section
+      const phoneLabeled = agentSectionText.match(/List\s+Agent\s+(?:Direct\s+|Preferred\s+|Mobile\s+)?Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
       if (phoneLabeled) {
         agentPhone = phoneLabeled[1].trim();
       }
@@ -1493,10 +1525,14 @@ async function collectAllCardsWithScrolling(page, {
                 line1Selector, line2Selector
               ).catch(() => '');
 
-              // Simple check - if address text is in this handle
-              const cardAddr = card.fullAddress.toLowerCase();
-              if (handleAddr && (handleAddr.includes(cardAddr.split(',')[0].toLowerCase()) ||
-                  cardAddr.includes(handleAddr.split(',')[0]))) {
+              // Strict check - compare the street address portion (before first comma)
+              const cardStreet = card.fullAddress.split(',')[0].toLowerCase().trim();
+              const handleStreet = handleAddr.split(',')[0].toLowerCase().trim();
+              // Match if street addresses are equal or one starts with the other (for variations)
+              if (handleStreet && cardStreet &&
+                  (handleStreet === cardStreet ||
+                   handleStreet.startsWith(cardStreet) ||
+                   cardStreet.startsWith(handleStreet))) {
                 matchedHandle = handle;
                 break;
               }
@@ -2027,6 +2063,9 @@ await page.evaluate(() => {
             LC.info('Scraping properties from URL', { city: cityName });
 
             // Agent extraction function - called while card is visible in DOM
+            // DISABLED: Agent fetching now happens on Deal page via agent-lookup.js
+            // Uncomment below to re-enable agent extraction during Privy automation
+            /*
             const extractAgentForCard = async (pg, fullAddress) => {
               const handle = await findCardHandleByAddress(pg, {
                 listContainerSelector: propertyListContainerSelector,
@@ -2040,6 +2079,8 @@ await page.evaluate(() => {
               }
               return null;
             };
+            */
+            const extractAgentForCard = null; // Disabled - agent lookup happens on Deal page
 
             // 2) Collect cards with INLINE agent extraction
             // Must extract agent WHILE card is visible (DOM virtualization removes old cards)

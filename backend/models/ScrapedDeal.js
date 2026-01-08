@@ -27,6 +27,11 @@ const ScrapedDealSchema = new mongoose.Schema({
   agentEmail: { type: String, default: null },
   brokerage: { type: String, default: null },
 
+  // Agent lookup status for Privy deals
+  // 'pending' = not looked up yet, 'found' = agent found, 'not_found' = looked up but no agent in Privy
+  agentLookupStatus: { type: String, enum: ['pending', 'found', 'not_found', null], default: null },
+  agentLookupAt: { type: Date, default: null }, // When agent lookup was performed
+
   // Auto-email tracking
   agentEmailSent: { type: Boolean, default: false },
   emailSentAt: { type: Date, default: null },

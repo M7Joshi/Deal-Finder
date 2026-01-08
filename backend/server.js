@@ -134,6 +134,7 @@ import scrapedDealsRoutes from './routes/scraped-deals.js';
 import autoFetchRoutes from './routes/auto-fetch.js';
 import wellsfargoRoutes from './routes/wellsfargo.js';
 import enrichRedfinAgentRoutes from './routes/enrich-redfin-agent.js';
+import agentLookupRoutes from './routes/agent-lookup.js';
 
 // Global guards: never crash the process; log and continue
 process.on('warning', (w) => {
@@ -258,6 +259,7 @@ app.use('/api', floodRoute);
 app.use('/api', apiRoutes);
 app.use('/api/agent-offers', agentOffersRoutes);
 app.use('/api/enrich-redfin-agent', enrichRedfinAgentRoutes);
+app.use('/api/agent-lookup', agentLookupRoutes);
 // Dedicated dashboard prefix
 app.use('/api/dashboard', dashboardRoutes);
 

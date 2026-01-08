@@ -18,6 +18,7 @@ import ScrapedDeals from "./screens/ScrapedDeals.tsx";
 // import AgentFetcher from "./screens/AgentFetcher.tsx"; // Commented out - can enable later
 import ManageSubadmins from "./screens/ManageSubadmins.tsx";
 import PendingAMV from "./screens/PendingAMV.tsx";
+import AgentLookup from "./screens/AgentLookup.tsx";
 import Login from "./components/Login/Login.tsx";
 import { verify, clearToken } from "./helpers";
 
@@ -62,6 +63,7 @@ const navItems = [
   { label: "Deals", to: "/deals" },  // Everyone can see this
   { label: "Pending AMV", to: "/pending-amv" },  // Shows addresses waiting for BofA AMV
   { label: "All Addresses", to: "/all-addresses" },  // Everyone can see this
+  { label: "Agent Lookup", to: "/agent-lookup" },  // Single address agent lookup
   { label: "Manage Subadmins", to: "/manage-subadmins", adminOnly: true },
   { label: "Privy Fetcher", to: "/privy-fetcher" },  // Everyone can see this
   { label: "Redfin Fetcher", to: "/redfin-fetcher" },  // Everyone can see this
@@ -285,6 +287,8 @@ export default function App() {
             <Route path="deals" element={<Deals />} />
             {/* Pending AMV - shows addresses waiting for BofA valuation */}
             <Route path="pending-amv" element={<PendingAMV />} />
+            {/* Agent Lookup - single address lookup */}
+            <Route path="agent-lookup" element={<AgentLookup />} />
             {/* Pages accessible to everyone */}
             <Route path="all-addresses" element={<ScrapedDeals />} />
             <Route path="privy-fetcher" element={<PrivyFetcher />} />

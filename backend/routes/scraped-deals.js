@@ -5,9 +5,76 @@ import User from '../models/User.js';
 import { log } from '../utils/logger.js';
 import { requireAuth, scopeByState } from '../middleware/authMiddleware.js';
 import { sendOffer, computeOfferPrice } from '../services/emailService.js';
+import { getPrivyPage, lookupAddressAgent } from './agent-lookup.js';
 
 const router = express.Router();
 const L = log.child('scraped-deals');
+
+// Track if agent lookup is in progress to prevent duplicate runs
+let agentLookupInProgress = false;
+
+/**
+ * Background function to fetch agent details for Privy deals missing agent data
+ * Runs in background so it doesn't block the API response
+ */
+async function fetchMissingAgentsInBackground(deals) {
+  // Filter to only Privy deals missing agent data
+  const privyDealsNeedingAgents = deals.filter(deal => {
+    const isPrivySource = deal.source && deal.source.toLowerCase().startsWith('privy');
+    const missingAgentData = !deal.agentName && !deal.agentPhone && !deal.agentEmail;
+    return isPrivySource && missingAgentData;
+  });
+
+  if (privyDealsNeedingAgents.length === 0) {
+    L.debug('No Privy deals need agent lookup');
+    return;
+  }
+
+  if (agentLookupInProgress) {
+    L.info('Agent lookup already in progress, skipping');
+    return;
+  }
+
+  agentLookupInProgress = true;
+  L.info(`Starting background agent lookup for ${privyDealsNeedingAgents.length} Privy deals`);
+
+  try {
+    // Get Privy page (handles login)
+    const page = await getPrivyPage();
+
+    for (const deal of privyDealsNeedingAgents) {
+      try {
+        L.info(`Looking up agent for: ${deal.fullAddress}`);
+        const result = await lookupAddressAgent(page, deal.fullAddress);
+
+        if (result.ok && result.hasData) {
+          // Update the ScrapedDeal with agent details
+          await ScrapedDeal.updateOne(
+            { _id: deal._id },
+            {
+              $set: {
+                agentName: result.agent.name || null,
+                agentPhone: result.agent.phone || null,
+                agentEmail: result.agent.email || null,
+                brokerage: result.agent.brokerage || null,
+              }
+            }
+          );
+          L.info(`Updated agent for ${deal.fullAddress}:`, result.agent);
+        } else {
+          L.warn(`No agent data found for ${deal.fullAddress}`);
+        }
+      } catch (err) {
+        L.error(`Failed to lookup agent for ${deal.fullAddress}: ${err.message}`);
+      }
+    }
+  } catch (err) {
+    L.error(`Background agent lookup failed: ${err.message}`);
+  } finally {
+    agentLookupInProgress = false;
+    L.info('Background agent lookup completed');
+  }
+}
 
 // Apply auth to all routes - users only see their assigned states
 router.use(requireAuth, scopeByState());
@@ -793,6 +860,10 @@ router.get('/deals-with-agents', async (req, res) => {
               { $ifNull: ['$propAgent.agentEmail', '$propAgent.agent_email'] }
             ]
           },
+          brokerage: 1,
+          // Agent lookup tracking for Privy deals
+          agentLookupStatus: 1,
+          agentLookupAt: 1,
         }
       }
     ];
@@ -802,6 +873,16 @@ router.get('/deals-with-agents', async (req, res) => {
 
     // Include user's allowed states in response
     const userStates = req.isAdmin ? 'all' : (req.user?.states || []);
+
+    // DISABLED: Agent lookup now runs during BofA phase in runAutomation.js
+    // Uncomment below to enable agent lookup when Deal page is loaded
+    /*
+    // Trigger background agent lookup for Privy deals missing agent data
+    // This runs asynchronously and doesn't block the response
+    fetchMissingAgentsInBackground(deals).catch(err => {
+      L.error('Background agent fetch error:', err.message);
+    });
+    */
 
     res.json({
       ok: true,
