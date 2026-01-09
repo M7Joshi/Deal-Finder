@@ -256,13 +256,9 @@ async function runCity(stateCode, city) {
 export async function runAllCities() {
   console.log(`[Redfin] Starting API-based scraping for ${STATES_TO_PROCESS.length} states`);
 
-  // CHECK: If one-time cycle is already complete, do not restart
+  // Log cycle info
   const existingProgress = await getProgress();
-  if (existingProgress.cycleComplete) {
-    console.log('[Redfin] 🛑 ONE-TIME CYCLE ALREADY COMPLETE - Redfin scraping disabled.');
-    console.log('[Redfin] To re-enable, run: db.scraperprogresses.updateOne({scraper:"redfin"},{$unset:{cycleComplete:1}})');
-    return;
-  }
+  console.log(`[Redfin] Current cycle: ${existingProgress.cycleCount || 0}, Last completed: ${existingProgress.lastCycleCompletedAt || 'never'}`);
 
   // SAFEGUARD: Check pending AMV before scraping - if already have 500+, skip scraping
   // This prevents piling up addresses after crashes/restarts
@@ -372,18 +368,29 @@ export async function runAllCities() {
       }
     }
 
-    // Check if completed all states
+    // Check if completed all states - reset and start again
     const progress2 = await getProgress();
     if ((progress2.currentStateIndex || 0) >= STATES_TO_PROCESS.length - 1 && !control.abort && !shouldPauseScraping()) {
-      console.log('[Redfin] ✅ Completed ONE FULL CYCLE through all states!');
-      console.log('[Redfin] 🛑 STOPPING - Redfin will not restart. Focus on Privy multi-cycle monitoring.');
-      // Mark as completed by setting cycleCount to 1 (one-time run mode)
+      console.log('[Redfin] ✅ Completed FULL CYCLE through all states!');
+      console.log('[Redfin] 🔄 Resetting progress to start a new cycle...');
+      // Increment cycle count and reset progress for next cycle
       await ScraperProgress.updateOne(
         { scraper: 'redfin' },
-        { $set: { cycleComplete: true, cycleCount: 1, completedAt: new Date() } },
+        {
+          $inc: { cycleCount: 1 },
+          $set: {
+            currentState: null,
+            currentCityIndex: 0,
+            currentStateIndex: 0,
+            processedCities: [],
+            cycleStartedAt: new Date(),
+            lastCycleCompletedAt: new Date(),
+            updatedAt: new Date()
+          }
+        },
         { upsert: true }
       );
-      // Do NOT reset progress - this prevents restart
+      console.log('[Redfin] ✅ Ready for next cycle!');
     }
   } finally {
     await closeSharedBrowser();

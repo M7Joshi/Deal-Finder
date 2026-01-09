@@ -155,7 +155,7 @@ export async function sendNow(req, res) {
       template: 'agent_offer_v1.html',
       variables: {
         date: new Date().toISOString().slice(0, 10),
-        agent_name: agentName || '',
+        agent_name: 'Listing Agent',
         property_address: prop.fullAddress || '',
         offer_price: (typeof offerPrice === 'number') ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(offerPrice) : '',
         emd: '$5,000',

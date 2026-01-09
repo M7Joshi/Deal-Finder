@@ -9,9 +9,9 @@ export default function Sidebar({ isAdmin, onLogout }: Props) {
   const active = 'text-white bg-white/10';
 
   return (
-    <aside className="w-56 shrink-0 h-screen sticky top-0 bg-[#0f1320] border-r border-white/10 p-4">
-      <div className="text-lg font-semibold text-white px-2 py-2">Deal Finder</div>
-      <nav className="mt-4 flex flex-col gap-1">
+    <aside className="w-56 shrink-0 h-screen sticky top-0 bg-[#0f1320] border-r border-white/10 p-4 flex flex-col">
+      <div className="text-lg font-semibold text-white px-2 py-2 shrink-0">Deal Finder</div>
+      <nav className="mt-4 flex flex-col gap-1 flex-1 overflow-y-auto">
         <NavLink to="/" end className={({ isActive }) => `${base} ${isActive ? active : idle}`}>
           <span>Dashboard</span>
         </NavLink>

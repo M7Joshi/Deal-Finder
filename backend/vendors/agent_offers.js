@@ -37,6 +37,7 @@ const SPACING_MS = Math.floor(60000 / Math.max(RATE_PER_MIN, 1));
 // We intentionally query raw collections to avoid requiring app-wide Mongoose models
 function usersCol() { return mongoose.connection.collection('users'); }
 function propsCol() { return mongoose.connection.collection('properties'); }
+function scrapedDealsCol() { return mongoose.connection.collection('scrapeddeals'); }
 
 /**
  * Main worker
@@ -105,8 +106,10 @@ export default async function runAgentOffers() {
 
     log.info(`[agent_offers] subadmin ${subadminWithSmtp.name} states=${states.join(',')} smtp=${s.smtp_host ? 'configured' : 'not-configured'}`);
 
-    // 2) Find candidate properties for this subadmin
+    // 2) Find candidate properties for this subadmin from BOTH collections
     let candidates = [];
+
+    // 2a) Query from properties collection (legacy)
     try {
       const cursor = propsCol().find(
         {
@@ -132,13 +135,53 @@ export default async function runAgentOffers() {
           },
         }
       );
-      // limit if supported; otherwise slice after materializing
       if (typeof cursor.limit === 'function') cursor.limit(DAILY_CAP);
       const arr = await toArraySafe(cursor);
       candidates = Array.isArray(arr) ? arr.slice(0, DAILY_CAP) : [];
+      log.info(`[agent_offers] found ${candidates.length} candidates from properties collection`);
     } catch (e) {
-      log.error('[agent_offers] candidate fetch failed', { err: String(e && e.message ? e.message : e), states });
-      candidates = [];
+      log.error('[agent_offers] properties fetch failed', { err: String(e && e.message ? e.message : e), states });
+    }
+
+    // 2b) Query from scrapeddeals collection (Deals page) - isDeal=true with agent email
+    // Only send when agentLookupStatus is 'found' (not pending/null)
+    try {
+      const remainingCap = DAILY_CAP - candidates.length;
+      if (remainingCap > 0) {
+        const cursor = scrapedDealsCol().find(
+          {
+            isDeal: true,
+            state: { $in: states },
+            agentEmail: { $exists: true, $ne: null, $ne: '' },
+            agentEmailSent: { $ne: true }, // Skip already sent
+            agentLookupStatus: 'found', // Only send when lookup is complete (not pending)
+          },
+          {
+            projection: {
+              _id: 1,
+              fullAddress: 1,
+              agentEmail: 1,
+              agentName: 1,
+              listingPrice: 1,
+              listPrice: 1,
+              amv: 1,
+              offerPrice: 1,
+              state: 1,
+              source: 1,
+            },
+          }
+        );
+        if (typeof cursor.limit === 'function') cursor.limit(remainingCap);
+        const arr = await toArraySafe(cursor);
+        const scrapedCandidates = Array.isArray(arr) ? arr.slice(0, remainingCap) : [];
+
+        // Mark these as from scrapeddeals so we can update the right collection later
+        scrapedCandidates.forEach(c => { c._fromScrapedDeals = true; });
+        candidates = candidates.concat(scrapedCandidates);
+        log.info(`[agent_offers] found ${scrapedCandidates.length} candidates from scrapeddeals collection`);
+      }
+    } catch (e) {
+      log.error('[agent_offers] scrapeddeals fetch failed', { err: String(e && e.message ? e.message : e), states });
     }
 
     if (!candidates.length) {
@@ -175,9 +218,8 @@ async function workerLoop(queue, subadmin, dedupeCutoff) {
 
 // --- per-property send with dedupe, logging, and stamping ---
 async function processOne(property, subadmin, dedupeCutoff) {
-  // normalize email + agent name from either schema
+  // normalize email from either schema
   const agentEmail = property.agentEmail || property.agent_email || '';
-  const agentName  = property.agentName || property.agent || '';
   if (!agentEmail) return; // defensive guard
 
   // 3a) dedupe check (recent sent to SAME property by SAME subadmin)
@@ -222,7 +264,7 @@ async function processOne(property, subadmin, dedupeCutoff) {
       template: 'agent_offer_v1.html',
       variables: {
         date: new Date().toISOString().slice(0, 10),
-        agent_name: agentName || '',
+        agent_name: 'Listing Agent',
         property_address: property.fullAddress || '',
         offer_price: offerPrice != null ? `$${offerPrice.toLocaleString()}` : '',
         emd: '$5,000',
@@ -239,20 +281,38 @@ async function processOne(property, subadmin, dedupeCutoff) {
     });
 
     // 3d) stamp property.offerStatus for quick lookups
-    await propsCol().updateOne(
-      { _id: property._id },
-      {
-        $set: {
-          offerStatus: {
-            lastSentAt: now(),
-            subadminId: subadmin._id || subadmin.id,
-            lastResult: 'sent',
-            lastMessageId: result?.messageId || null,
+    // Update the correct collection based on source
+    if (property._fromScrapedDeals) {
+      // Update scrapeddeals collection
+      await scrapedDealsCol().updateOne(
+        { _id: property._id },
+        {
+          $set: {
+            agentEmailSent: true,
+            agentEmailSentAt: now(),
+            agentEmailSentBy: subadmin._id || subadmin.id,
+            agentEmailMessageId: result?.messageId || null,
           },
-          agentEmailNormalized: agentEmail,
-        },
-      }
-    );
+        }
+      );
+      log.info(`[agent_offers] marked scrapeddeals agentEmailSent=true for ${property.fullAddress}`);
+    } else {
+      // Update properties collection (legacy)
+      await propsCol().updateOne(
+        { _id: property._id },
+        {
+          $set: {
+            offerStatus: {
+              lastSentAt: now(),
+              subadminId: subadmin._id || subadmin.id,
+              lastResult: 'sent',
+              lastMessageId: result?.messageId || null,
+            },
+            agentEmailNormalized: agentEmail,
+          },
+        }
+      );
+    }
   } catch (e) {
     await AgentSend.findByIdAndUpdate(record._id, {
       status: 'failed',
