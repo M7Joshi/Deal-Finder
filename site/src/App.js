@@ -79,17 +79,19 @@ function Sidebar({ open, onClose, isAdmin, onLogout }) {
       width: 200,
       height: "100%",
       background: "lightgray",
-      overflow: "hidden",
+      overflowY: "auto",
+      overflowX: "hidden",
       display: "flex",
       flexDirection: "column",
       justifyContent: "flex-start",
       pt: 4,
-      scrollbarWidth: "none",           // Firefox
-      msOverflowStyle: "none",          // IE/Edge
+      scrollbarWidth: "thin",           // Firefox - thin scrollbar
       "&::-webkit-scrollbar": {         // Chrome/Safari
-        width: 0,
-        height: 0,
-        display: "none"
+        width: 6,
+      },
+      "&::-webkit-scrollbar-thumb": {
+        backgroundColor: "#999",
+        borderRadius: 3,
       }
     }}>
       <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", py: 2 }}>
