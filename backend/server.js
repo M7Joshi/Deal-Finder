@@ -21,7 +21,7 @@ const L = log.child('server');
 // Enabled by default in production. Disable with DISK_JANITOR=0.
 const JANITOR_ENABLED = process.env.DISK_JANITOR !== '0';
 const JANITOR_MAX_AGE_HOURS = Number(process.env.DISK_JANITOR_MAX_AGE_HOURS || 12);
-const JANITOR_INTERVAL_MIN = Number(process.env.DISK_JANITOR_INTERVAL_MIN || 0); // 0 = run once at boot
+const JANITOR_INTERVAL_MIN = Number(process.env.DISK_JANITOR_INTERVAL_MIN || 30); // default 30 min in production
 const PUPPETEER_DIR = process.env.PUPPETEER_CACHE_DIR || (process.platform === 'linux' ? '/var/data/puppeteer' : path.resolve(process.cwd(), '.puppeteer-cache'));
 
 async function safeRm(p) {
@@ -81,7 +81,12 @@ async function janitorOnce() {
         const full = path.join(tmpDir, name);
         // common puppeteer/chrome tmp prefixes
         const isPptrTmp = /^(puppeteer|puppeteer_dev|pptr-|chrome-profile|core\.)/i.test(name);
-        if (!isPptrTmp) continue;
+        // debug screenshot directories from scrapers
+        const isDebugDir = /^(bofa_debug|chase_debug|redfin_value_debug|price_sync_debug)$/i.test(name);
+        // debug screenshot files from scrapers (privy-*.png, realtor_*.png, etc.)
+        const isDebugFile = /^(privy-|realtor_|movoto_|zillow_|wellsfargo-).*\.(png|html|txt)$/i.test(name);
+
+        if (!isPptrTmp && !isDebugDir && !isDebugFile) continue;
 
         try {
           const st = await fs.stat(full);
@@ -94,6 +99,32 @@ async function janitorOnce() {
       }
     } catch (e) {
       L.debug('Janitor: tmp dir scan skipped', { error: e.message });
+    }
+
+    // 3) Clean debug screenshot directories (clean files inside, keep dirs)
+    const debugDirs = [
+      path.join(os.tmpdir(), 'bofa_debug'),
+      path.join(os.tmpdir(), 'chase_debug'),
+      path.join(os.tmpdir(), 'redfin_value_debug'),
+      path.join(os.tmpdir(), 'price_sync_debug'),
+    ];
+    for (const dir of debugDirs) {
+      try {
+        const files = await fs.readdir(dir);
+        for (const file of files) {
+          const full = path.join(dir, file);
+          try {
+            const st = await fs.stat(full);
+            if (isOldStat(st, JANITOR_MAX_AGE_HOURS)) {
+              await safeRm(full);
+            }
+          } catch {
+            await safeRm(full);
+          }
+        }
+      } catch {
+        // dir doesn't exist, skip
+      }
     }
   } catch (e) {
     L.warn('Janitor: run failed', { error: e.message });
