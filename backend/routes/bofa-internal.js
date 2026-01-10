@@ -219,19 +219,43 @@ async function scrapeBofaValues(page) {
 }
 
 /**
- * Internal function to lookup a single address (same as /api/bofa/batch uses)
+ * Core lookup implementation - does the actual scraping work
  * @param {string} address - Full address string
+ * @param {boolean} useDirect - Force direct connection (no proxy)
  * @returns {Object} Result with ok, amv, avgSalePrice, estimatedHomeValue, etc.
  */
-export async function lookupSingleAddressInternal(address) {
+async function doLookup(address, useDirect = false) {
   let browser = null;
   let page = null;
 
   try {
     const cleanAddress = normalizeStreetAddress(address.trim());
 
-    const { browser: br, proxy } = await openBrowserWithProxy();
-    browser = br;
+    // If useDirect is true, skip proxy entirely
+    let proxy = null;
+    if (useDirect) {
+      L.info('Using direct connection (no proxy)', { address: cleanAddress });
+      browser = await puppeteer.launch({
+        ...(CHROME_PATH ? { executablePath: CHROME_PATH } : {}),
+        headless: 'shell',
+        defaultViewport: null,
+        ignoreHTTPSErrors: true,
+        args: [
+          '--no-first-run',
+          '--no-default-browser-check',
+          '--disable-gpu',
+          '--disable-dev-shm-usage',
+          '--no-sandbox',
+          '--window-size=1366,768',
+          '--lang=en-US,en;q=0.9',
+        ],
+      });
+    } else {
+      const result = await openBrowserWithProxy();
+      browser = result.browser;
+      proxy = result.proxy;
+    }
+
     page = await browser.newPage();
 
     if (proxy?.credentials) {
@@ -330,33 +354,95 @@ export async function lookupSingleAddressInternal(address) {
       address: cleanAddress,
       avgSalePrice,
       estimatedHomeValue,
-      amv
+      amv,
+      usedDirect: useDirect
     };
 
   } catch (error) {
-    L.error('Single address lookup failed', { address, error: error.message });
-
-    // Take screenshot on failure to debug
-    if (page) {
-      try {
-        const screenshotPath = `bofa-error-${Date.now()}.png`;
-        await page.screenshot({ path: screenshotPath, fullPage: true });
-        L.info('Saved debug screenshot', { path: screenshotPath });
-      } catch (ssErr) {
-        L.warn('Failed to take screenshot', { err: ssErr.message });
-      }
-    }
-
+    // Clean up browser resources
     if (page) try { await page.close(); } catch {}
     if (browser) try { await browser.close(); } catch {}
 
+    // Re-throw with context
+    const enhancedError = new Error(error.message);
+    enhancedError.usedDirect = useDirect;
+    throw enhancedError;
+  }
+}
+
+/**
+ * Internal function to lookup a single address (same as /api/bofa/batch uses)
+ * Automatically retries with direct connection if proxy fails with selector error
+ * @param {string} address - Full address string
+ * @param {boolean} forceDirect - Force direct connection (no proxy) - skip retry logic
+ * @returns {Object} Result with ok, amv, avgSalePrice, estimatedHomeValue, etc.
+ */
+export async function lookupSingleAddressInternal(address, forceDirect = false) {
+  // If direct mode is already set globally or forced, just use direct
+  if (forceDirect || isDirectMode()) {
+    try {
+      return await doLookup(address, true);
+    } catch (error) {
+      L.error('Direct lookup failed', { address, error: error.message });
+      return {
+        ok: false,
+        address: address,
+        avgSalePrice: null,
+        estimatedHomeValue: null,
+        amv: null,
+        error: error.message
+      };
+    }
+  }
+
+  // Try with proxy first
+  try {
+    const result = await doLookup(address, false);
+    return result;
+  } catch (proxyError) {
+    // Check if error is proxy-related (selector not found = page blocked/didn't load)
+    const isProxyBlockError = proxyError.message.includes('#address') ||
+                              proxyError.message.includes('selector') ||
+                              proxyError.message.includes('timeout') ||
+                              proxyError.message.includes('Navigation');
+
+    if (isProxyBlockError) {
+      L.warn('Proxy attempt failed, retrying with direct connection', {
+        address,
+        proxyError: proxyError.message
+      });
+
+      // Retry with direct connection
+      try {
+        const directResult = await doLookup(address, true);
+        L.info('Direct connection succeeded after proxy failure', { address });
+        return directResult;
+      } catch (directError) {
+        L.error('Both proxy and direct attempts failed', {
+          address,
+          proxyError: proxyError.message,
+          directError: directError.message
+        });
+        return {
+          ok: false,
+          address: address,
+          avgSalePrice: null,
+          estimatedHomeValue: null,
+          amv: null,
+          error: `Proxy: ${proxyError.message} | Direct: ${directError.message}`
+        };
+      }
+    }
+
+    // Non-proxy error, just return failure
+    L.error('Lookup failed (non-proxy error)', { address, error: proxyError.message });
     return {
       ok: false,
       address: address,
       avgSalePrice: null,
       estimatedHomeValue: null,
       amv: null,
-      error: error.message
+      error: proxyError.message
     };
   }
 }
