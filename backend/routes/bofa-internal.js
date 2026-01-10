@@ -336,6 +336,17 @@ export async function lookupSingleAddressInternal(address) {
   } catch (error) {
     L.error('Single address lookup failed', { address, error: error.message });
 
+    // Take screenshot on failure to debug
+    if (page) {
+      try {
+        const screenshotPath = `bofa-error-${Date.now()}.png`;
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+        L.info('Saved debug screenshot', { path: screenshotPath });
+      } catch (ssErr) {
+        L.warn('Failed to take screenshot', { err: ssErr.message });
+      }
+    }
+
     if (page) try { await page.close(); } catch {}
     if (browser) try { await browser.close(); } catch {}
 
