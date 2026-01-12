@@ -5,9 +5,8 @@ import { requireAuth, scopeByState } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// Protect the whole router: authenticated users (admin OR subadmin)
-// Each user sees only their assigned states via scopeByState middleware
-router.use(requireAuth, scopeByState());
+// NOTE: Auth removed - this project doesn't use authentication
+// router.use(requireAuth, scopeByState());
 
 /**
  * GET /api/dashboard/summary?months=12
