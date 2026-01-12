@@ -13,7 +13,7 @@ RUN npm ci
 COPY . .
 
 # Build-time environment variable for API URL
-ARG REACT_APP_API_BASE_URL=https://dealfinder-api.onrender.com
+ARG REACT_APP_API_BASE_URL=https://deal-finder-2s8j.onrender.com
 ENV REACT_APP_API_BASE_URL=$REACT_APP_API_BASE_URL
 
 # Build the React app
