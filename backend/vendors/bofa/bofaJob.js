@@ -33,10 +33,11 @@ const _nextBofaProxy = makeProxySupplierFromPool(_bofaPool);
 
 const {
   MONGO_URI,
-  BOFA_MAX_CONCURRENCY = process.env.BOFA_MAX_CONCURRENCY || '17',
+  BOFA_MAX_CONCURRENCY = process.env.BOFA_MAX_CONCURRENCY || '20',
   BOFA_BATCH_SIZE = process.env.BOFA_BATCH_SIZE || '2000',
   BOFA_RESULT_TIMEOUT_MS = process.env.BOFA_RESULT_TIMEOUT_MS || '40000',
   BOFA_EGRESS_COOLDOWN_MS = process.env.BOFA_EGRESS_COOLDOWN_MS || '800',
+  BOFA_CYCLE_DELAY_MS = process.env.BOFA_CYCLE_DELAY_MS || '3000', // 3 second delay between cycles
 } = process.env;
 
 // --- Tunable fast-path timeouts & behavior ---
@@ -1292,9 +1293,21 @@ async function runOnce() {
   const chunks = [];
   for (let i = 0; i < deduped.length; i += 25) chunks.push(deduped.slice(i, i + 25));
 
-  const limit = pLimit(Number(BOFA_MAX_CONCURRENCY) || 8);
-  const tasks = chunks.map(c => limit(() => worker(c)));
-  const all = (await Promise.all(tasks)).flat().filter(Boolean);
+  const limit = pLimit(Number(BOFA_MAX_CONCURRENCY) || 20);
+  const cycleDelay = Number(BOFA_CYCLE_DELAY_MS) || 3000;
+
+  let all = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const results = await limit(() => worker(chunk));
+    all = all.concat(results.filter(Boolean));
+
+    // Wait 3 seconds between cycles (except for last chunk)
+    if (i < chunks.length - 1) {
+      console.log(`[BoA] Cycle ${i + 1}/${chunks.length} complete. Waiting ${cycleDelay / 1000}s before next cycle...`);
+      await new Promise(r => setTimeout(r, cycleDelay));
+    }
+  }
 
   console.log(`🏁 Done. Updated ${all.length} properties.`);
   return all.length;
