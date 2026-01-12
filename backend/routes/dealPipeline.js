@@ -1,11 +1,10 @@
 import express from 'express';
 import ScrapedDeal from '../models/ScrapedDeal.js';
-import { requireAuth } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
 // Get deals by stage (email_sent, follow_up, deal_status)
-router.get('/stage/:stage', requireAuth, async (req, res) => {
+router.get('/stage/:stage', async (req, res) => {
   try {
     const { stage } = req.params;
     const { page = 1, limit = 50, status, sortBy = 'updatedAt', sortOrder = 'desc' } = req.query;
@@ -50,7 +49,7 @@ router.get('/stage/:stage', requireAuth, async (req, res) => {
 });
 
 // Move deal to a different stage
-router.put('/move/:id', requireAuth, async (req, res) => {
+router.put('/move/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { toStage, dealStatus, followUpDate, note } = req.body;
@@ -85,7 +84,7 @@ router.put('/move/:id', requireAuth, async (req, res) => {
         deal.followUpNotes.push({
           note,
           createdAt: new Date(),
-          createdBy: req.user?._id || null
+          createdBy: null
         });
         Object.assign(deal, updateData);
         await deal.save();
@@ -111,7 +110,7 @@ router.put('/move/:id', requireAuth, async (req, res) => {
 });
 
 // Update deal status (for deal_status page)
-router.put('/status/:id', requireAuth, async (req, res) => {
+router.put('/status/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { dealStatus, offerAmount, note } = req.body;
@@ -133,7 +132,7 @@ router.put('/status/:id', requireAuth, async (req, res) => {
         deal.followUpNotes.push({
           note,
           createdAt: new Date(),
-          createdBy: req.user?._id || null
+          createdBy: null
         });
         Object.assign(deal, updateData);
         await deal.save();
@@ -159,7 +158,7 @@ router.put('/status/:id', requireAuth, async (req, res) => {
 });
 
 // Add note to a deal
-router.post('/note/:id', requireAuth, async (req, res) => {
+router.post('/note/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { note } = req.body;
@@ -177,7 +176,7 @@ router.post('/note/:id', requireAuth, async (req, res) => {
     deal.followUpNotes.push({
       note: note.trim(),
       createdAt: new Date(),
-      createdBy: req.user?._id || null
+      createdBy: null
     });
 
     await deal.save();
@@ -189,7 +188,7 @@ router.post('/note/:id', requireAuth, async (req, res) => {
 });
 
 // Update follow-up date
-router.put('/followup-date/:id', requireAuth, async (req, res) => {
+router.put('/followup-date/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { followUpDate } = req.body;
@@ -212,7 +211,7 @@ router.put('/followup-date/:id', requireAuth, async (req, res) => {
 });
 
 // Get pipeline stats (counts for each stage)
-router.get('/stats', requireAuth, async (_req, res) => {
+router.get('/stats', async (_req, res) => {
   try {
     const [emailSent, followUp, dealStatus] = await Promise.all([
       ScrapedDeal.countDocuments({ dealStage: 'email_sent' }),
