@@ -20,9 +20,11 @@ const L = log.child('server');
 // ---- Boot Janitor: free disk space from stale Puppeteer artifacts ----
 // Enabled by default in production. Disable with DISK_JANITOR=0.
 const JANITOR_ENABLED = process.env.DISK_JANITOR !== '0';
-const JANITOR_MAX_AGE_HOURS = Number(process.env.DISK_JANITOR_MAX_AGE_HOURS || 12);
-const JANITOR_INTERVAL_MIN = Number(process.env.DISK_JANITOR_INTERVAL_MIN || 30); // default 30 min in production
+const JANITOR_MAX_AGE_HOURS = Number(process.env.DISK_JANITOR_MAX_AGE_HOURS || 1); // Reduced to 1 hour for aggressive cleanup
+const JANITOR_INTERVAL_MIN = Number(process.env.DISK_JANITOR_INTERVAL_MIN || 10); // Run every 10 minutes
 const PUPPETEER_DIR = process.env.PUPPETEER_CACHE_DIR || (process.platform === 'linux' ? '/var/data/puppeteer' : path.resolve(process.cwd(), '.puppeteer-cache'));
+const VAR_DATA_DIR = '/var/data'; // Persistent storage on Render
+const DISK_WARN_THRESHOLD_MB = Number(process.env.DISK_WARN_THRESHOLD_MB || 400); // Warn at 400MB of 512MB
 
 async function safeRm(p) {
   try {
@@ -38,10 +40,99 @@ function isOldStat(stat, maxAgeHours) {
   return ageMs > maxAgeHours * 60 * 60 * 1000;
 }
 
+// Get directory size in MB
+async function getDirSizeMB(dirPath) {
+  try {
+    let totalSize = 0;
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    for (const ent of entries) {
+      const fullPath = path.join(dirPath, ent.name);
+      try {
+        if (ent.isDirectory()) {
+          totalSize += await getDirSizeMB(fullPath);
+        } else {
+          const stat = await fs.stat(fullPath);
+          totalSize += stat.size;
+        }
+      } catch { /* skip inaccessible */ }
+    }
+    return totalSize / (1024 * 1024); // Convert to MB
+  } catch {
+    return 0;
+  }
+}
+
+// Aggressive cleanup when disk is critically full
+async function emergencyCleanup() {
+  L.warn('Janitor: EMERGENCY CLEANUP - Disk space critical!');
+
+  // 1) Remove ALL puppeteer profiles (except chrome binary)
+  try {
+    const entries = await fs.readdir(PUPPETEER_DIR, { withFileTypes: true });
+    for (const ent of entries) {
+      if (ent.name === 'chrome') continue; // Keep browser binary
+      await safeRm(path.join(PUPPETEER_DIR, ent.name));
+    }
+  } catch { /* dir may not exist */ }
+
+  // 2) Clean ALL debug screenshots regardless of age
+  const tmpDir = os.tmpdir();
+  try {
+    const entries = await fs.readdir(tmpDir, { withFileTypes: true });
+    for (const ent of entries) {
+      const name = ent.name;
+      if (/^(puppeteer|pptr-|chrome-profile|privy-|bofa_debug|chase_debug|redfin|realtor_|movoto_|zillow_|wellsfargo-)/i.test(name)) {
+        await safeRm(path.join(tmpDir, name));
+      }
+    }
+  } catch { /* skip */ }
+
+  // 3) Clean /var/data except essential files
+  try {
+    const entries = await fs.readdir(VAR_DATA_DIR, { withFileTypes: true });
+    for (const ent of entries) {
+      const name = ent.name;
+      // Keep only essential: puppeteer/chrome binary, session files
+      if (name === 'puppeteer') continue; // Will clean inside separately
+      if (name.endsWith('-session.json')) continue; // Keep session files
+      if (ent.isDirectory()) {
+        // Clean directories older than 30 minutes
+        const full = path.join(VAR_DATA_DIR, name);
+        try {
+          const st = await fs.stat(full);
+          if (isOldStat(st, 0.5)) { // 30 minutes
+            await safeRm(full);
+          }
+        } catch {
+          await safeRm(full);
+        }
+      }
+    }
+  } catch { /* /var/data may not exist */ }
+
+  L.info('Janitor: Emergency cleanup complete');
+}
+
 async function janitorOnce() {
   if (!JANITOR_ENABLED) return;
 
   try {
+    // Check disk usage first - if critical, do emergency cleanup
+    const varDataSize = await getDirSizeMB(VAR_DATA_DIR);
+    const tmpSize = await getDirSizeMB(os.tmpdir());
+
+    L.info('Janitor: Disk check', {
+      varDataMB: varDataSize.toFixed(1),
+      tmpMB: tmpSize.toFixed(1),
+      threshold: DISK_WARN_THRESHOLD_MB
+    });
+
+    // Emergency cleanup if /var/data is over threshold
+    if (varDataSize > DISK_WARN_THRESHOLD_MB) {
+      await emergencyCleanup();
+      return; // Emergency cleanup is aggressive, skip normal cleanup
+    }
+
     // 1) Clean Puppeteer workspace: keep browser builds under "chrome/"
     // Remove stale ephemeral profiles like "*-profile-*", "user-data-dir*", "screenshots", "traces", etc.
     try {
@@ -51,17 +142,12 @@ async function janitorOnce() {
         // Keep the browser cache folder named "chrome"
         if (ent.isDirectory() && ent.name === 'chrome') continue;
 
-        // Only touch known ephemeral clutter or anything older than threshold
-        const matchesEphemeral =
-          /profile|user[-_ ]?data|session|tmp|temp|screenshots?|traces?|trace|crash|report/i.test(ent.name);
-
+        // Remove ALL non-chrome items (browser profiles are disposable)
         try {
           const st = await fs.stat(full);
           const oldEnough = isOldStat(st, JANITOR_MAX_AGE_HOURS);
-          if (ent.isDirectory() || ent.isSymbolicLink() || ent.isFile()) {
-            if (matchesEphemeral || oldEnough) {
-              await safeRm(full);
-            }
+          if (oldEnough) {
+            await safeRm(full);
           }
         } catch {
           // If stat fails, try to remove anyway
@@ -125,6 +211,33 @@ async function janitorOnce() {
       } catch {
         // dir doesn't exist, skip
       }
+    }
+
+    // 4) Clean /var/data persistent storage (Render's 512MB disk)
+    try {
+      const entries = await fs.readdir(VAR_DATA_DIR, { withFileTypes: true });
+      for (const ent of entries) {
+        const name = ent.name;
+        const full = path.join(VAR_DATA_DIR, name);
+
+        // Skip puppeteer dir (handled separately) and session files
+        if (name === 'puppeteer') continue;
+        if (name.endsWith('-session.json')) continue;
+
+        // Clean old files/directories
+        if (ent.isDirectory() || ent.isFile()) {
+          try {
+            const st = await fs.stat(full);
+            if (isOldStat(st, JANITOR_MAX_AGE_HOURS)) {
+              await safeRm(full);
+            }
+          } catch {
+            await safeRm(full);
+          }
+        }
+      }
+    } catch (e) {
+      L.debug('Janitor: /var/data scan skipped', { error: e.message });
     }
   } catch (e) {
     L.warn('Janitor: run failed', { error: e.message });
