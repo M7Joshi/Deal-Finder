@@ -1834,12 +1834,25 @@ const selectedStates = stateList; // keep var for logs if needed
     if (jobs.has('scraped_deals_amv') || jobs.has('bofa')) {
       tasks.push((async () => {
         try {
-          log.info('ScrapedDeal AMV: Starting AMV fetching phase...');
+          log.info('ScrapedDeal AMV: Checking pending AMV count...');
+
+          // Check if we have 500+ pending addresses before running BofA
+          const AMV_THRESHOLD = Number(process.env.AMV_THRESHOLD || 500);
+          const pendingCount = await ScrapedDeal.countDocuments({
+            $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+          });
+
+          if (pendingCount < AMV_THRESHOLD) {
+            log.info(`ScrapedDeal AMV: Only ${pendingCount} pending (threshold: ${AMV_THRESHOLD}) - skipping AMV phase, continue scraping`);
+            return;
+          }
+
+          log.info(`ScrapedDeal AMV: Found ${pendingCount} pending addresses (>= ${AMV_THRESHOLD}), starting AMV phase...`);
 
           // Use same batch size and concurrency as RedfinFetcher page
-          // Default to 10 parallel browsers for faster processing
-          const BATCH_SIZE = Math.max(1, Number(process.env.SCRAPED_DEALS_AMV_BATCH || 100));
-          const CONCURRENCY = Math.max(1, Math.min(10, Number(process.env.SCRAPED_DEALS_AMV_CONCURRENCY || 10)));
+          // Default to 20 parallel browsers for faster processing
+          const BATCH_SIZE = Math.max(1, Number(process.env.SCRAPED_DEALS_AMV_BATCH || 500));
+          const CONCURRENCY = Math.max(1, Math.min(20, Number(process.env.SCRAPED_DEALS_AMV_CONCURRENCY || 20)));
           log.info('ScrapedDeal AMV: Fetching AMV for deals without valuation...', { batchSize: BATCH_SIZE, concurrency: CONCURRENCY });
 
           // Find ScrapedDeal entries that don't have AMV yet
