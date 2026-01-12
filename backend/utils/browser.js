@@ -42,6 +42,40 @@ const CHROME_PATH = getDefaultChromePath();
 // Use a dedicated userDataDir to avoid Chrome "SingletonLock" on default profile
 const SHARED_USER_DATA_DIR = process.env.SHARED_CHROME_USER_DATA_DIR || `/tmp/df-shared-${process.pid}`;
 const PROTOCOL_TIMEOUT = Number(process.env.PPTR_PROTOCOL_TIMEOUT || 180000); // 180s default (3 min)
+
+// Cleanup Chrome cache to prevent /tmp from filling up (Render has 2GB limit)
+function cleanupChromeCache() {
+  try {
+    const tmpDir = os.tmpdir();
+    const entries = fs.readdirSync(tmpDir);
+    let cleaned = 0;
+    for (const entry of entries) {
+      // Clean up old Chrome profile directories and puppeteer temp files
+      if (entry.startsWith('df-shared-') ||
+          entry.startsWith('deal-finder-') ||
+          entry.startsWith('puppeteer_') ||
+          entry.startsWith('.org.chromium.') ||
+          entry.startsWith('chrome_')) {
+        const fullPath = path.join(tmpDir, entry);
+        try {
+          const stat = fs.statSync(fullPath);
+          // Only clean if older than 30 minutes
+          if (Date.now() - stat.mtimeMs > 30 * 60 * 1000) {
+            fs.rmSync(fullPath, { recursive: true, force: true });
+            cleaned++;
+          }
+        } catch {}
+      }
+    }
+    if (cleaned > 0) console.log(`[browser] Cleaned ${cleaned} old temp directories`);
+  } catch (e) {
+    console.log('[browser] Cache cleanup error:', e?.message);
+  }
+}
+
+// Run cleanup on startup and periodically (every 10 minutes)
+cleanupChromeCache();
+setInterval(cleanupChromeCache, 10 * 60 * 1000);
 // ---- Shared browser guard (singleton) ----
 function isOpen(b) { try { return !!b && b.isConnected(); } catch { return false; } }
 
@@ -63,10 +97,14 @@ export async function getSharedBrowser(launchOpts = {}) {
       '--disable-gpu',
       '--disable-dev-shm-usage',
       '--no-sandbox',
-
       '--window-size=1366,768',
       '--remote-debugging-port=0',
       '--lang=en-US,en;q=0.9',
+      // Minimize disk usage to prevent /tmp overflow on Render (2GB limit)
+      '--disk-cache-size=50000000',  // 50MB cache limit
+      '--media-cache-size=50000000', // 50MB media cache
+      '--disable-background-networking',
+      '--disable-component-update',
     ],
   };
 const browser = await puppeteer.launch({ protocolTimeout: PROTOCOL_TIMEOUT, ...defaults, ...(launchOpts || {}) });
@@ -178,6 +216,11 @@ export async function openBrowser(launchArgs = []) {
       '--window-size=1366,768',
       '--remote-debugging-port=0',
       '--lang=en-US,en;q=0.9',
+      // Minimize disk usage to prevent /tmp overflow on Render (2GB limit)
+      '--disk-cache-size=50000000',  // 50MB cache limit
+      '--media-cache-size=50000000', // 50MB media cache
+      '--disable-background-networking',
+      '--disable-component-update',
       ...launchArgs,
     ],
   });
@@ -249,8 +292,12 @@ export async function initSharedBrowser() {
         '--hide-scrollbars',
         '--metrics-recording-only',
         '--mute-audio',
-        '--no-zygote',
-        '--single-process',
+        // Minimize disk usage to prevent /tmp overflow on Render (2GB limit)
+        '--disk-cache-size=50000000',  // 50MB cache limit
+        '--media-cache-size=50000000', // 50MB media cache
+        '--disable-component-update',
+        // Note: --no-zygote and --single-process cause crashes on Windows, only use on Linux servers
+        ...(isServer ? ['--no-zygote', '--single-process'] : []),
         // Force a virtual display size for headless
         ...(isServer ? ['--headless=new', '--disable-setuid-sandbox'] : ['--start-maximized']),
       ],
