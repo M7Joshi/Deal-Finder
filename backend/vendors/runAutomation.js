@@ -608,16 +608,13 @@ async function bootstrapScheduler() {
       $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
     });
     if (pendingAMV >= PENDING_THRESHOLD) {
-      log.info('Scheduler bootstrap: Found MANY pending AMV addresses, MUST process BofA first', { pendingAMV, threshold: PENDING_THRESHOLD });
-      // Skip to cleanup_amv phase to process ALL pending addresses first
+      log.info('Scheduler bootstrap: Found 500+ pending AMV addresses, starting BofA phase', { pendingAMV, threshold: PENDING_THRESHOLD });
       schedulerPhase = 'cleanup_amv';
       scheduleNextRun(0); // Start immediately
       return;
     } else if (pendingAMV > 0) {
-      log.info('Scheduler bootstrap: Found some pending AMV addresses, starting with BofA phase', { pendingAMV });
-      schedulerPhase = 'bofa_after_redfin';
-      scheduleNextRun(0);
-      return;
+      log.info('Scheduler bootstrap: Found pending AMV addresses but below threshold, continuing scraping', { pendingAMV, threshold: PENDING_THRESHOLD });
+      // Don't start BofA yet - wait until we have 500+ addresses
     }
   } catch (e) {
     // CRITICAL: If we can't check pending, assume there ARE pending and go to cleanup
