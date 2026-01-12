@@ -238,6 +238,7 @@ const dedupeByKey = <T,>(items: T[], keyFn: (x: T) => string) => {
 
 export default function Deals() {
   const navigate = useNavigate();
+  const location = useLocation();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm')); // < 600px
   const isTablet = useMediaQuery(theme.breakpoints.down('md')); // < 900px
@@ -791,12 +792,34 @@ const cleanAddress = (address?: string | null): string => {
     }
   }, [selected]);
 
-  // initial load - ONLY runs once on mount (empty dependency array)
+  // initial load + refresh when page becomes visible again
   useEffect(() => {
     loadSummary();
     loadDeals();
+
+    // Refresh data when user navigates back to this tab/page
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadSummary();
+        loadDeals();
+      }
+    };
+
+    // Refresh data when window gets focus (e.g., user switches back from another tab)
+    const handleFocus = () => {
+      loadSummary();
+      loadDeals();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Empty array = only run once on mount
+  }, []); // Empty array = setup listeners once on mount
 
   useEffect(() => {
     // Reset Street View as default when opening a property
