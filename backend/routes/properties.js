@@ -208,10 +208,13 @@ router.get('/table', requireAuth, scopeByState(), async (req, res) => {
       } }
     );
 
-    // Add sorting by AMV if requested: ?sortBy=amv&order=asc|desc
+    // Add sorting - by AMV if requested, otherwise by updatedAt (newest first)
     if (sortBy === 'amv') {
       const sortOrder = order === 'asc' ? 1 : -1;
       pipeline.push({ $sort: { amv: sortOrder, _id: 1 } });
+    } else {
+      // Default: sort by updatedAt descending so newest AMV lookups appear first
+      pipeline.push({ $sort: { updatedAt: -1, _id: -1 } });
     }
 
     // Execute aggregation (limit added to prevent memory issues)
