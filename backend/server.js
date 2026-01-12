@@ -40,21 +40,19 @@ function isOldStat(stat, maxAgeHours) {
   return ageMs > maxAgeHours * 60 * 60 * 1000;
 }
 
-// Get directory size in MB
+// Get directory size in MB (non-recursive, fast check)
 async function getDirSizeMB(dirPath) {
   try {
     let totalSize = 0;
     const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    // Only check top-level files to avoid hanging on deep directories
     for (const ent of entries) {
-      const fullPath = path.join(dirPath, ent.name);
-      try {
-        if (ent.isDirectory()) {
-          totalSize += await getDirSizeMB(fullPath);
-        } else {
-          const stat = await fs.stat(fullPath);
+      if (!ent.isDirectory()) {
+        try {
+          const stat = await fs.stat(path.join(dirPath, ent.name));
           totalSize += stat.size;
-        }
-      } catch { /* skip inaccessible */ }
+        } catch { /* skip */ }
+      }
     }
     return totalSize / (1024 * 1024); // Convert to MB
   } catch {
@@ -244,15 +242,23 @@ async function janitorOnce() {
   }
 }
 
-// Run once at boot (default). Optionally run on an interval if configured.
+// Run janitor in background (don't block server startup)
 (async () => {
-  await janitorOnce();
+  // Run first cleanup after short delay to let server start first
+  setTimeout(async () => {
+    try {
+      L.info('Janitor: Starting initial cleanup...');
+      await janitorOnce();
+      L.info('Janitor: Initial cleanup complete');
+    } catch (e) {
+      L.warn('Janitor: Initial cleanup failed', { error: e?.message });
+    }
+  }, 5000); // 5 second delay
+
   if (JANITOR_INTERVAL_MIN > 0) {
     const ms = JANITOR_INTERVAL_MIN * 60 * 1000;
-    setInterval(janitorOnce, ms).unref();
+    setInterval(() => janitorOnce().catch(() => {}), ms).unref();
     L.info('Janitor: scheduled', { everyMinutes: JANITOR_INTERVAL_MIN });
-  } else {
-    L.info('Janitor: ran once at boot', { enabled: JANITOR_ENABLED, maxAgeHours: JANITOR_MAX_AGE_HOURS });
   }
 })();
 // ---- End Boot Janitor ----
