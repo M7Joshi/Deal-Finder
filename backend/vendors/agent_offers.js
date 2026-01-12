@@ -292,10 +292,13 @@ async function processOne(property, subadmin, dedupeCutoff) {
             agentEmailSentAt: now(),
             agentEmailSentBy: subadmin._id || subadmin.id,
             agentEmailMessageId: result?.messageId || null,
+            // Move to email_sent stage in deal pipeline
+            dealStage: 'email_sent',
+            movedToEmailSentAt: now(),
           },
         }
       );
-      log.info(`[agent_offers] marked scrapeddeals agentEmailSent=true for ${property.fullAddress}`);
+      log.info(`[agent_offers] marked scrapeddeals agentEmailSent=true, dealStage=email_sent for ${property.fullAddress}`);
     } else {
       // Update properties collection (legacy)
       await propsCol().updateOne(

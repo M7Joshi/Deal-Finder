@@ -19,6 +19,9 @@ import ScrapedDeals from "./screens/ScrapedDeals.tsx";
 import ManageSubadmins from "./screens/ManageSubadmins.tsx";
 import PendingAMV from "./screens/PendingAMV.tsx";
 import AgentLookup from "./screens/AgentLookup.tsx";
+import EmailSent from "./screens/EmailSent.tsx";
+import FollowUp from "./screens/FollowUp.tsx";
+import DealStatus from "./screens/DealStatus.tsx";
 import Login from "./components/Login/Login.tsx";
 import { verify, clearToken } from "./helpers";
 
@@ -61,6 +64,9 @@ function Protected({ children }) {
 // ---- SIDEBAR + LAYOUT ----
 const navItems = [
   { label: "Deals", to: "/deals" },  // Everyone can see this
+  { label: "Email Sent", to: "/email-sent" },  // Deals where email has been sent
+  { label: "Follow Up", to: "/follow-up" },  // Deals needing follow-up
+  { label: "Deal Status", to: "/deal-status" },  // Final deal status tracking
   { label: "Pending AMV", to: "/pending-amv" },  // Shows addresses waiting for BofA AMV
   { label: "All Addresses", to: "/all-addresses" },  // Everyone can see this
   { label: "Agent Lookup", to: "/agent-lookup" },  // Single address agent lookup
@@ -287,6 +293,10 @@ export default function App() {
             <Route index element={<Navigate to="/deals" replace />} />
             {/* Deals - accessible to everyone */}
             <Route path="deals" element={<Deals />} />
+            {/* Deal Pipeline Pages */}
+            <Route path="email-sent" element={<EmailSent />} />
+            <Route path="follow-up" element={<FollowUp />} />
+            <Route path="deal-status" element={<DealStatus />} />
             {/* Pending AMV - shows addresses waiting for BofA valuation */}
             <Route path="pending-amv" element={<PendingAMV />} />
             {/* Agent Lookup - single address lookup */}

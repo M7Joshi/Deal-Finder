@@ -476,6 +476,9 @@ router.post('/save', async (req, res) => {
                     agentEmailSent: true,
                     emailSentAt: new Date(),
                     emailMessageId: emailResult.messageId || null,
+                    // Move to email_sent stage in deal pipeline
+                    dealStage: 'email_sent',
+                    movedToEmailSentAt: new Date(),
                   }
                 }
               );
@@ -498,6 +501,9 @@ router.post('/save', async (req, res) => {
                     agentEmailSent: true,
                     emailSentAt: new Date(),
                     emailMessageId: emailResult.messageId || null,
+                    // Move to email_sent stage in deal pipeline
+                    dealStage: 'email_sent',
+                    movedToEmailSentAt: new Date(),
                   }
                 }
               );

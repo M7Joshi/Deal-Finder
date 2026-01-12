@@ -37,6 +37,28 @@ const ScrapedDealSchema = new mongoose.Schema({
   emailSentAt: { type: Date, default: null },
   emailMessageId: { type: String, default: null },
 
+  // Deal Pipeline Tracking
+  dealStage: {
+    type: String,
+    enum: ['new', 'email_sent', 'follow_up', 'deal_status'],
+    default: 'new'
+  },
+  dealStatus: {
+    type: String,
+    enum: ['pending', 'interested', 'not_interested', 'under_contract', 'closed', 'dead', null],
+    default: null
+  },
+  followUpDate: { type: Date, default: null },
+  followUpNotes: [{
+    note: { type: String },
+    createdAt: { type: Date, default: Date.now },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
+  }],
+  offerAmount: { type: Number, default: null },
+  movedToEmailSentAt: { type: Date, default: null },
+  movedToFollowUpAt: { type: Date, default: null },
+  movedToDealStatusAt: { type: Date, default: null },
+
   // Timestamps
   scrapedAt: { type: Date, default: Date.now },      // When address was fetched from source
   bofaFetchedAt: { type: Date, default: null },      // When BofA AMV was fetched
@@ -54,6 +76,8 @@ ScrapedDealSchema.index({ source: 1 });
 ScrapedDealSchema.index({ state: 1 });
 ScrapedDealSchema.index({ createdAt: -1 });
 ScrapedDealSchema.index({ isDeal: 1 }); // For filtering deals
+ScrapedDealSchema.index({ dealStage: 1 }); // For pipeline pages
+ScrapedDealSchema.index({ dealStatus: 1 }); // For deal status filtering
 
 // Helper function to calculate if it's a deal
 // Requirements: AMV >= 2x LP AND AMV > $200,000
