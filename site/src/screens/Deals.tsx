@@ -8,7 +8,7 @@ import {
   FormControl, InputLabel, Select, MenuItem, Checkbox, ListItemText, OutlinedInput,
   LinearProgress, Box, useMediaQuery, useTheme,
 } from '@mui/material';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { apiFetch, startService, stopService, getServiceStatus } from '../helpers';
 
 
