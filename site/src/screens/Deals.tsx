@@ -792,7 +792,7 @@ const cleanAddress = (address?: string | null): string => {
     }
   }, [selected]);
 
-  // initial load + refresh when page becomes visible again
+  // initial load + refresh when page becomes visible again or when navigating to this page
   useEffect(() => {
     loadSummary();
     loadDeals();
@@ -819,7 +819,7 @@ const cleanAddress = (address?: string | null): string => {
       window.removeEventListener('focus', handleFocus);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Empty array = setup listeners once on mount
+  }, [location.pathname]); // Re-run when navigating to this page
 
   useEffect(() => {
     // Reset Street View as default when opening a property
