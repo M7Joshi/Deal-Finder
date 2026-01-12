@@ -600,21 +600,31 @@ async function bootstrapScheduler() {
   }
 
   // Check if there are pending AMV addresses - if so, start with BofA phase to process them first
+  // CRITICAL: If pending >= 500, MUST process AMV first before any scraping
+  const PENDING_THRESHOLD = 500;
   try {
     await connectDB();
     const pendingAMV = await ScrapedDeal.countDocuments({
       $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
     });
-    if (pendingAMV > 0) {
-      log.info('Scheduler bootstrap: Found pending AMV addresses, starting with BofA phase', { pendingAMV });
-      // Skip to BofA phase to process pending addresses first
-      // Use bofa_after_redfin so after completion it starts fresh cycle (privy)
-      schedulerPhase = 'bofa_after_redfin';
+    if (pendingAMV >= PENDING_THRESHOLD) {
+      log.info('Scheduler bootstrap: Found MANY pending AMV addresses, MUST process BofA first', { pendingAMV, threshold: PENDING_THRESHOLD });
+      // Skip to cleanup_amv phase to process ALL pending addresses first
+      schedulerPhase = 'cleanup_amv';
       scheduleNextRun(0); // Start immediately
+      return;
+    } else if (pendingAMV > 0) {
+      log.info('Scheduler bootstrap: Found some pending AMV addresses, starting with BofA phase', { pendingAMV });
+      schedulerPhase = 'bofa_after_redfin';
+      scheduleNextRun(0);
       return;
     }
   } catch (e) {
-    log.warn('Scheduler bootstrap: Could not check pending AMV', { error: e?.message });
+    // CRITICAL: If we can't check pending, assume there ARE pending and go to cleanup
+    log.error('Scheduler bootstrap: CANNOT CHECK PENDING AMV - defaulting to cleanup phase to be safe', { error: e?.message });
+    schedulerPhase = 'cleanup_amv';
+    scheduleNextRun(5000); // Short delay then check again
+    return;
   }
 
   scheduleNextRun(immediate ? 0 : RUN_INTERVAL_MS);

@@ -1663,7 +1663,9 @@ const scrapePropertiesV1 = async (page) => {
     }
     logPrivy.info(`Pending AMV check passed: ${pendingAMV}/${BATCH_THRESHOLD} - proceeding with scrape`);
   } catch (e) {
-    logPrivy.warn('Could not check pending AMV count', { error: e?.message });
+    // CRITICAL: If we can't check pending count, DON'T scrape - likely DB/disk issue
+    logPrivy.error('❌ CANNOT CHECK PENDING AMV - SKIPPING SCRAPE TO PREVENT PILEUP', { error: e?.message });
+    return allProperties; // Return empty - don't risk adding more addresses
   }
 
   // Load progress to resume from where we left off (async - uses MongoDB)

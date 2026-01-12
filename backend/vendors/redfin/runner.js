@@ -274,7 +274,9 @@ export async function runAllCities() {
     }
     console.log(`[Redfin] Pending AMV check passed: ${pendingAMV}/${BATCH_THRESHOLD} - proceeding with scrape`);
   } catch (e) {
-    console.warn('[Redfin] Could not check pending AMV count:', e?.message);
+    // CRITICAL: If we can't check pending count, DON'T scrape - likely DB/disk issue
+    console.error('[Redfin] ❌ CANNOT CHECK PENDING AMV - SKIPPING SCRAPE TO PREVENT PILEUP:', e?.message);
+    return; // Exit - don't risk adding more addresses
   }
 
   const progress = await getProgress();
