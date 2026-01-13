@@ -53,6 +53,12 @@ export default function EmailSent() {
   const [dealStatus, setDealStatus] = useState('pending');
   const [moving, setMoving] = useState(false);
 
+  // Delete dialog state
+  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; deal: Deal | null }>({
+    open: false, deal: null
+  });
+  const [deleting, setDeleting] = useState(false);
+
   const [toast, setToast] = useState<{ open: boolean; msg: string; sev: 'success' | 'error' }>({
     open: false, msg: '', sev: 'success'
   });
@@ -119,8 +125,55 @@ export default function EmailSent() {
     }
   };
 
-  const cellPadding = isMobile ? '8px 4px' : '12px 8px';
-  const cellFontSize = isMobile ? '13px' : '14px';
+  const openDeleteDialog = (deal: Deal) => {
+    setDeleteDialog({ open: true, deal });
+  };
+
+  const handleDelete = async () => {
+    if (!deleteDialog.deal) return;
+    setDeleting(true);
+    try {
+      const res = await apiFetch(`/api/scraped-deals/${deleteDialog.deal._id}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (data.success || res.ok) {
+        setToast({ open: true, msg: 'Deal deleted', sev: 'success' });
+        setDeleteDialog({ open: false, deal: null });
+        loadDeals();
+      } else {
+        setToast({ open: true, msg: data.error || 'Failed to delete', sev: 'error' });
+      }
+    } catch (e: any) {
+      setToast({ open: true, msg: e?.message || 'Failed to delete', sev: 'error' });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  // Calculate pricing values
+  const getLP = (deal: Deal) => deal.listingPrice || 0;
+  const getLP80 = (deal: Deal) => {
+    const lp = getLP(deal);
+    return lp > 0 ? Math.round(lp * 0.8) : null;
+  };
+  const getAMV40 = (deal: Deal) => {
+    const amv = deal.amv || 0;
+    return amv > 0 ? Math.round(amv * 0.4) : null;
+  };
+  const getAMV30 = (deal: Deal) => {
+    const amv = deal.amv || 0;
+    return amv > 0 ? Math.round(amv * 0.3) : null;
+  };
+  const getOffer = (deal: Deal) => {
+    const lp80 = getLP80(deal);
+    const amv40 = getAMV40(deal);
+    if (lp80 && amv40) return Math.min(lp80, amv40);
+    return lp80 || amv40 || null;
+  };
+
+  const cellPadding = isMobile ? '8px 4px' : '10px 6px';
+  const cellFontSize = isMobile ? '12px' : '13px';
 
   if (loading) return <div style={{ padding: 24 }}>Loading...</div>;
   if (error) return <div style={{ padding: 24, color: '#ef4444' }}>{error}</div>;
@@ -147,19 +200,20 @@ export default function EmailSent() {
           boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
         }}
       >
-        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: 800 }}>
+        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: 1200 }}>
           <thead>
             <tr style={{ background: '#111827', color: '#fff' }}>
-              {['Address', 'Agent', 'Email', 'Phone', 'Sent Date', 'LP', 'AMV', 'Actions'].map((h, i) => (
+              {['Address', 'LP', '80%', 'AMV', '40%', '30%', 'Offer', 'Agent', 'Email', 'Phone', 'Sent Date', 'Move To', 'Delete'].map((h, i) => (
                 <th
                   key={h}
                   style={{
-                    textAlign: i === 0 ? 'left' : i === 7 ? 'center' : 'left',
+                    textAlign: i === 0 || i === 7 || i === 8 || i === 9 ? 'left' : 'right',
                     padding: cellPadding,
                     fontSize: 11,
                     letterSpacing: 0.3,
                     textTransform: 'uppercase',
                     whiteSpace: 'nowrap',
+                    borderBottom: '1px solid rgba(255,255,255,0.12)',
                   }}
                 >
                   {h}
@@ -170,8 +224,26 @@ export default function EmailSent() {
           <tbody>
             {deals.map((deal, i) => (
               <tr key={deal._id} style={{ background: i % 2 === 0 ? '#fff' : '#f9fafb' }}>
-                <td style={{ padding: cellPadding, fontSize: cellFontSize, fontWeight: 600, color: '#111' }}>
+                <td style={{ padding: cellPadding, fontSize: cellFontSize, fontWeight: 600, color: '#111', minWidth: 150 }}>
                   {deal.fullAddress || deal.address || '—'}
+                </td>
+                <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {fmt(getLP(deal))}
+                </td>
+                <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {fmt(getLP80(deal))}
+                </td>
+                <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {fmt(deal.amv)}
+                </td>
+                <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {fmt(getAMV40(deal))}
+                </td>
+                <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {fmt(getAMV30(deal))}
+                </td>
+                <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 600, color: '#059669' }}>
+                  {fmt(getOffer(deal))}
                 </td>
                 <td style={{ padding: cellPadding, fontSize: cellFontSize, color: '#374151' }}>
                   {deal.agentName || '—'}
@@ -186,38 +258,63 @@ export default function EmailSent() {
                     <a href={`tel:${deal.agentPhone}`} style={{ color: '#2563eb' }}>{deal.agentPhone}</a>
                   ) : '—'}
                 </td>
-                <td style={{ padding: cellPadding, fontSize: cellFontSize, color: '#6b7280' }}>
+                <td style={{ padding: cellPadding, fontSize: cellFontSize, color: '#6b7280', whiteSpace: 'nowrap' }}>
                   {formatDate(deal.emailSentAt)}
                 </td>
-                <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right' }}>
-                  {fmt(deal.listingPrice)}
+                <td style={{ padding: cellPadding, whiteSpace: 'nowrap' }}>
+                  <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => openMoveDialog(deal, 'follow_up')}
+                      sx={{
+                        fontSize: 10,
+                        px: 1,
+                        py: 0.25,
+                        minWidth: 'auto',
+                        textTransform: 'none',
+                        color: '#d97706',
+                        borderColor: '#d97706',
+                        '&:hover': { backgroundColor: '#fffbeb', borderColor: '#b45309' }
+                      }}
+                    >
+                      Follow Up
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => openMoveDialog(deal, 'deal_status')}
+                      sx={{
+                        fontSize: 10,
+                        px: 1,
+                        py: 0.25,
+                        minWidth: 'auto',
+                        textTransform: 'none',
+                        color: '#059669',
+                        borderColor: '#059669',
+                        '&:hover': { backgroundColor: '#ecfdf5', borderColor: '#047857' }
+                      }}
+                    >
+                      Status
+                    </Button>
+                  </Stack>
                 </td>
-                <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right' }}>
-                  {fmt(deal.amv)}
-                </td>
-                <td style={{ padding: cellPadding, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                <td style={{ padding: cellPadding, whiteSpace: 'nowrap' }}>
                   <Button
                     size="small"
                     variant="outlined"
-                    onClick={() => openMoveDialog(deal, 'follow_up')}
-                    sx={{ mr: 1, textTransform: 'none', fontSize: 12 }}
+                    color="error"
+                    onClick={() => openDeleteDialog(deal)}
+                    sx={{ fontSize: 10, px: 1, py: 0.25, minWidth: 'auto', textTransform: 'none' }}
                   >
-                    Follow Up
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="contained"
-                    onClick={() => openMoveDialog(deal, 'deal_status')}
-                    sx={{ textTransform: 'none', fontSize: 12, bgcolor: '#7c3aed', '&:hover': { bgcolor: '#6d28d9' } }}
-                  >
-                    Deal Status
+                    Delete
                   </Button>
                 </td>
               </tr>
             ))}
             {deals.length === 0 && (
               <tr>
-                <td colSpan={8} style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>
+                <td colSpan={13} style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>
                   No deals in Email Sent stage.
                 </td>
               </tr>
@@ -289,6 +386,32 @@ export default function EmailSent() {
           <Button onClick={() => setMoveDialog({ open: false, deal: null, toStage: '' })}>Cancel</Button>
           <Button variant="contained" onClick={handleMove} disabled={moving}>
             {moving ? 'Moving...' : 'Move'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteDialog.open} onClose={() => setDeleteDialog({ open: false, deal: null })} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ color: '#dc2626' }}>Delete Deal</DialogTitle>
+        <DialogContent>
+          <p style={{ margin: 0, color: '#374151' }}>
+            Are you sure you want to delete this deal?
+          </p>
+          {deleteDialog.deal && (
+            <p style={{ margin: '12px 0 0', fontWeight: 600, color: '#111827' }}>
+              {deleteDialog.deal.fullAddress || deleteDialog.deal.address || 'Unknown address'}
+            </p>
+          )}
+          <p style={{ margin: '12px 0 0', fontSize: 13, color: '#6b7280' }}>
+            This action cannot be undone.
+          </p>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialog({ open: false, deal: null })} disabled={deleting}>
+            Cancel
+          </Button>
+          <Button onClick={handleDelete} color="error" variant="contained" disabled={deleting}>
+            {deleting ? 'Deleting...' : 'Delete'}
           </Button>
         </DialogActions>
       </Dialog>

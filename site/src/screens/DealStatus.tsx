@@ -1,7 +1,7 @@
 // src/screens/DealStatus.tsx
 // Shows deals with their final status (interested, not interested, under contract, closed, dead)
 
-import React, { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import {
   Button, Stack, Chip, Snackbar, Alert, TextField,
   FormControl, InputLabel, Select, MenuItem, Tabs, Tab,
@@ -35,7 +35,6 @@ type Deal = {
 
 const currency = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const fmt = (n?: number | null) => (typeof n === 'number' && n > 0 ? currency.format(n) : '—');
-const formatDate = (d?: string | null) => d ? new Date(d).toLocaleDateString() : '—';
 const formatDateTime = (d?: string | null) => d ? new Date(d).toLocaleString() : '—';
 
 const STATUS_LABELS: Record<string, { label: string; color: string; bg: string }> = {
@@ -46,8 +45,6 @@ const STATUS_LABELS: Record<string, { label: string; color: string; bg: string }
   closed: { label: 'Closed', color: '#7c3aed', bg: '#ede9fe' },
   dead: { label: 'Dead', color: '#374151', bg: '#e5e7eb' },
 };
-
-const STATUS_OPTIONS = ['all', 'pending', 'interested', 'not_interested', 'under_contract', 'closed', 'dead'];
 
 export default function DealStatusPage() {
   const theme = useTheme();
@@ -60,6 +57,20 @@ export default function DealStatusPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
   const [statusFilter, setStatusFilter] = useState('all');
+
+  // Move dialog state
+  const [moveDialog, setMoveDialog] = useState<{ open: boolean; deal: Deal | null; toStage: string }>({
+    open: false, deal: null, toStage: ''
+  });
+  const [moveNote, setMoveNote] = useState('');
+  const [followUpDate, setFollowUpDate] = useState('');
+  const [moving, setMoving] = useState(false);
+
+  // Delete dialog state
+  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; deal: Deal | null }>({
+    open: false, deal: null
+  });
+  const [deleting, setDeleting] = useState(false);
 
   // Edit status dialog
   const [editDialog, setEditDialog] = useState<{ open: boolean; deal: Deal | null }>({ open: false, deal: null });
@@ -101,6 +112,73 @@ export default function DealStatusPage() {
   useEffect(() => {
     loadDeals();
   }, [loadDeals]);
+
+  const openMoveDialog = (deal: Deal, toStage: string) => {
+    setMoveDialog({ open: true, deal, toStage });
+    setMoveNote('');
+    setFollowUpDate('');
+  };
+
+  const handleMove = async () => {
+    if (!moveDialog.deal) return;
+    setMoving(true);
+    try {
+      const body: any = {
+        toStage: moveDialog.toStage,
+        note: moveNote || undefined,
+      };
+      if (moveDialog.toStage === 'follow_up' && followUpDate) {
+        body.followUpDate = followUpDate;
+      }
+
+      const res = await apiFetch(`/api/deal-pipeline/move/${moveDialog.deal._id}`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const stageLabels: Record<string, string> = {
+          'email_sent': 'Email Sent',
+          'follow_up': 'Follow Up'
+        };
+        setToast({ open: true, msg: `Moved to ${stageLabels[moveDialog.toStage] || moveDialog.toStage}`, sev: 'success' });
+        setMoveDialog({ open: false, deal: null, toStage: '' });
+        loadDeals();
+      } else {
+        setToast({ open: true, msg: data.error || 'Failed to move', sev: 'error' });
+      }
+    } catch (e: any) {
+      setToast({ open: true, msg: e?.message || 'Failed to move', sev: 'error' });
+    } finally {
+      setMoving(false);
+    }
+  };
+
+  const openDeleteDialog = (deal: Deal) => {
+    setDeleteDialog({ open: true, deal });
+  };
+
+  const handleDelete = async () => {
+    if (!deleteDialog.deal) return;
+    setDeleting(true);
+    try {
+      const res = await apiFetch(`/api/scraped-deals/${deleteDialog.deal._id}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (data.success || res.ok) {
+        setToast({ open: true, msg: 'Deal deleted', sev: 'success' });
+        setDeleteDialog({ open: false, deal: null });
+        loadDeals();
+      } else {
+        setToast({ open: true, msg: data.error || 'Failed to delete', sev: 'error' });
+      }
+    } catch (e: any) {
+      setToast({ open: true, msg: e?.message || 'Failed to delete', sev: 'error' });
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const handleUpdateStatus = async () => {
     if (!editDialog.deal) return;
@@ -165,14 +243,35 @@ export default function DealStatusPage() {
           backgroundColor: info.bg,
           color: info.color,
           fontWeight: 600,
-          fontSize: 11,
+          fontSize: 10,
         }}
       />
     );
   };
 
-  const cellPadding = isMobile ? '8px 4px' : '12px 8px';
-  const cellFontSize = isMobile ? '13px' : '14px';
+  // Calculate pricing values
+  const getLP = (deal: Deal) => deal.listingPrice || 0;
+  const getLP80 = (deal: Deal) => {
+    const lp = getLP(deal);
+    return lp > 0 ? Math.round(lp * 0.8) : null;
+  };
+  const getAMV40 = (deal: Deal) => {
+    const amv = deal.amv || 0;
+    return amv > 0 ? Math.round(amv * 0.4) : null;
+  };
+  const getAMV30 = (deal: Deal) => {
+    const amv = deal.amv || 0;
+    return amv > 0 ? Math.round(amv * 0.3) : null;
+  };
+  const getOffer = (deal: Deal) => {
+    const lp80 = getLP80(deal);
+    const amv40 = getAMV40(deal);
+    if (lp80 && amv40) return Math.min(lp80, amv40);
+    return lp80 || amv40 || null;
+  };
+
+  const cellPadding = isMobile ? '8px 4px' : '10px 6px';
+  const cellFontSize = isMobile ? '12px' : '13px';
 
   if (loading && deals.length === 0) return <div style={{ padding: 24 }}>Loading...</div>;
   if (error) return <div style={{ padding: 24, color: '#ef4444' }}>{error}</div>;
@@ -220,19 +319,20 @@ export default function DealStatusPage() {
           boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
         }}
       >
-        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: 1000 }}>
+        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: 1500 }}>
           <thead>
             <tr style={{ background: '#111827', color: '#fff' }}>
-              {['Address', 'Agent', 'Contact', 'Status', 'Offer', 'LP', 'AMV', 'Notes', 'Actions'].map((h, i) => (
+              {['Address', 'LP', '80%', 'AMV', '40%', '30%', 'Offer', 'Agent', 'Contact', 'Status', 'Notes', 'Edit', 'Move To', 'Delete'].map((h, i) => (
                 <th
                   key={h}
                   style={{
-                    textAlign: i === 0 ? 'left' : i === 8 ? 'center' : 'left',
+                    textAlign: i === 0 || i === 7 || i === 8 ? 'left' : 'right',
                     padding: cellPadding,
                     fontSize: 11,
                     letterSpacing: 0.3,
                     textTransform: 'uppercase',
                     whiteSpace: 'nowrap',
+                    borderBottom: '1px solid rgba(255,255,255,0.12)',
                   }}
                 >
                   {h}
@@ -246,8 +346,26 @@ export default function DealStatusPage() {
 
               return (
                 <tr key={deal._id} style={{ background: i % 2 === 0 ? '#fff' : '#f9fafb' }}>
-                  <td style={{ padding: cellPadding, fontSize: cellFontSize, fontWeight: 600, color: '#111' }}>
+                  <td style={{ padding: cellPadding, fontSize: cellFontSize, fontWeight: 600, color: '#111', minWidth: 150 }}>
                     {deal.fullAddress || deal.address || '—'}
+                  </td>
+                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {fmt(getLP(deal))}
+                  </td>
+                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {fmt(getLP80(deal))}
+                  </td>
+                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {fmt(deal.amv)}
+                  </td>
+                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {fmt(getAMV40(deal))}
+                  </td>
+                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {fmt(getAMV30(deal))}
+                  </td>
+                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 600, color: '#059669' }}>
+                    {fmt(getOffer(deal))}
                   </td>
                   <td style={{ padding: cellPadding, fontSize: cellFontSize, color: '#374151' }}>
                     {deal.agentName || '—'}
@@ -255,25 +373,16 @@ export default function DealStatusPage() {
                   <td style={{ padding: cellPadding, fontSize: cellFontSize }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                       {deal.agentEmail && (
-                        <a href={`mailto:${deal.agentEmail}`} style={{ color: '#2563eb', fontSize: 12 }}>{deal.agentEmail}</a>
+                        <a href={`mailto:${deal.agentEmail}`} style={{ color: '#2563eb', fontSize: 11 }}>{deal.agentEmail}</a>
                       )}
                       {deal.agentPhone && (
-                        <a href={`tel:${deal.agentPhone}`} style={{ color: '#2563eb', fontSize: 12 }}>{deal.agentPhone}</a>
+                        <a href={`tel:${deal.agentPhone}`} style={{ color: '#2563eb', fontSize: 11 }}>{deal.agentPhone}</a>
                       )}
                       {!deal.agentEmail && !deal.agentPhone && '—'}
                     </div>
                   </td>
                   <td style={{ padding: cellPadding, fontSize: cellFontSize }}>
                     {getStatusChip(deal.dealStatus)}
-                  </td>
-                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', fontWeight: 600 }}>
-                    {fmt(deal.offerAmount)}
-                  </td>
-                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right' }}>
-                    {fmt(deal.listingPrice)}
-                  </td>
-                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right' }}>
-                    {fmt(deal.amv)}
                   </td>
                   <td style={{ padding: cellPadding, fontSize: cellFontSize }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -282,19 +391,19 @@ export default function DealStatusPage() {
                         size="small"
                         variant="outlined"
                         onClick={() => setViewNotesDialog({ open: true, deal })}
-                        sx={{ cursor: 'pointer', fontSize: 11, minWidth: 28 }}
+                        sx={{ cursor: 'pointer', fontSize: 10, height: 20 }}
                       />
                       <Button
                         size="small"
                         variant="text"
                         onClick={() => setNoteDialog({ open: true, deal })}
-                        sx={{ minWidth: 0, p: 0.5, fontSize: 11 }}
+                        sx={{ minWidth: 0, p: 0.25, fontSize: 10 }}
                       >
                         +
                       </Button>
                     </div>
                   </td>
-                  <td style={{ padding: cellPadding, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                  <td style={{ padding: cellPadding, whiteSpace: 'nowrap' }}>
                     <Button
                       size="small"
                       variant="outlined"
@@ -304,9 +413,58 @@ export default function DealStatusPage() {
                         setOfferAmount(deal.offerAmount ? String(deal.offerAmount) : '');
                         setEditNote('');
                       }}
-                      sx={{ textTransform: 'none', fontSize: 12 }}
+                      sx={{ fontSize: 10, px: 1, py: 0.25, minWidth: 'auto', textTransform: 'none' }}
                     >
                       Edit
+                    </Button>
+                  </td>
+                  <td style={{ padding: cellPadding, whiteSpace: 'nowrap' }}>
+                    <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => openMoveDialog(deal, 'email_sent')}
+                        sx={{
+                          fontSize: 10,
+                          px: 1,
+                          py: 0.25,
+                          minWidth: 'auto',
+                          textTransform: 'none',
+                          color: '#2563eb',
+                          borderColor: '#2563eb',
+                          '&:hover': { backgroundColor: '#eff6ff', borderColor: '#1d4ed8' }
+                        }}
+                      >
+                        Email
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => openMoveDialog(deal, 'follow_up')}
+                        sx={{
+                          fontSize: 10,
+                          px: 1,
+                          py: 0.25,
+                          minWidth: 'auto',
+                          textTransform: 'none',
+                          color: '#d97706',
+                          borderColor: '#d97706',
+                          '&:hover': { backgroundColor: '#fffbeb', borderColor: '#b45309' }
+                        }}
+                      >
+                        Follow
+                      </Button>
+                    </Stack>
+                  </td>
+                  <td style={{ padding: cellPadding, whiteSpace: 'nowrap' }}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      color="error"
+                      onClick={() => openDeleteDialog(deal)}
+                      sx={{ fontSize: 10, px: 1, py: 0.25, minWidth: 'auto', textTransform: 'none' }}
+                    >
+                      Delete
                     </Button>
                   </td>
                 </tr>
@@ -314,7 +472,7 @@ export default function DealStatusPage() {
             })}
             {deals.length === 0 && (
               <tr>
-                <td colSpan={9} style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>
+                <td colSpan={14} style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>
                   No deals in Deal Status stage{statusFilter !== 'all' ? ` with status "${STATUS_LABELS[statusFilter]?.label}"` : ''}.
                 </td>
               </tr>
@@ -331,6 +489,72 @@ export default function DealStatusPage() {
           <Button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</Button>
         </div>
       )}
+
+      {/* Move Dialog */}
+      <Dialog open={moveDialog.open} onClose={() => setMoveDialog({ open: false, deal: null, toStage: '' })} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          Move to {moveDialog.toStage === 'email_sent' ? 'Email Sent' : 'Follow Up'}
+        </DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <div style={{ color: '#374151', fontSize: 14 }}>
+              <strong>Address:</strong> {moveDialog.deal?.fullAddress || moveDialog.deal?.address}
+            </div>
+
+            {moveDialog.toStage === 'follow_up' && (
+              <TextField
+                type="date"
+                label="Follow Up Date"
+                value={followUpDate}
+                onChange={(e) => setFollowUpDate(e.target.value)}
+                slotProps={{ inputLabel: { shrink: true } }}
+                fullWidth
+              />
+            )}
+
+            <TextField
+              label="Note (optional)"
+              multiline
+              rows={3}
+              value={moveNote}
+              onChange={(e) => setMoveNote(e.target.value)}
+              fullWidth
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMoveDialog({ open: false, deal: null, toStage: '' })}>Cancel</Button>
+          <Button variant="contained" onClick={handleMove} disabled={moving}>
+            {moving ? 'Moving...' : 'Move'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteDialog.open} onClose={() => setDeleteDialog({ open: false, deal: null })} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ color: '#dc2626' }}>Delete Deal</DialogTitle>
+        <DialogContent>
+          <p style={{ margin: 0, color: '#374151' }}>
+            Are you sure you want to delete this deal?
+          </p>
+          {deleteDialog.deal && (
+            <p style={{ margin: '12px 0 0', fontWeight: 600, color: '#111827' }}>
+              {deleteDialog.deal.fullAddress || deleteDialog.deal.address || 'Unknown address'}
+            </p>
+          )}
+          <p style={{ margin: '12px 0 0', fontSize: 13, color: '#6b7280' }}>
+            This action cannot be undone.
+          </p>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialog({ open: false, deal: null })} disabled={deleting}>
+            Cancel
+          </Button>
+          <Button onClick={handleDelete} color="error" variant="contained" disabled={deleting}>
+            {deleting ? 'Deleting...' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Edit Status Dialog */}
       <Dialog open={editDialog.open} onClose={() => setEditDialog({ open: false, deal: null })} maxWidth="sm" fullWidth>
