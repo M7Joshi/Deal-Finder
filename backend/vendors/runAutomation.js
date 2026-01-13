@@ -657,63 +657,93 @@ let bofaInUse = false;
 let bofaCurrentSource = null; // 'privy' | 'redfin' | null
 let lastBofaBatchSource = null; // Track which source completed the last BofA batch
 
+// Mutex to prevent race conditions when requesting BofA access
+let bofaLockMutex = false;
+let bofaLockQueue = [];
+
+async function acquireBofaMutex() {
+  return new Promise(resolve => {
+    if (!bofaLockMutex) {
+      bofaLockMutex = true;
+      resolve();
+    } else {
+      bofaLockQueue.push(resolve);
+    }
+  });
+}
+
+function releaseBofaMutex() {
+  if (bofaLockQueue.length > 0) {
+    const next = bofaLockQueue.shift();
+    next();
+  } else {
+    bofaLockMutex = false;
+  }
+}
+
 // Track addresses scraped per source for batch triggering
 let privyAddressCount = 0;
 let redfinAddressCount = 0;
 
 // Function to request BofA access - returns true if granted, false if busy
 // EQUAL PRIORITY: Strictly alternates between Privy and Redfin when both have 500+ pending
+// Uses mutex to prevent race conditions
 async function requestBofaAccess(source) {
-  if (bofaInUse) {
-    return false;
-  }
+  await acquireBofaMutex();
+  try {
+    if (bofaInUse) {
+      return false;
+    }
 
-  const ScrapedDeal = (await import('../models/ScrapedDeal.js')).default;
+    const ScrapedDeal = (await import('../models/ScrapedDeal.js')).default;
 
-  // Get pending counts for both sources
-  const pendingPrivy = await ScrapedDeal.countDocuments({
-    source: { $regex: /^privy/ },
-    $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
-  }).catch(() => 0);
+    // Get pending counts for both sources
+    const pendingPrivy = await ScrapedDeal.countDocuments({
+      source: { $regex: /^privy/ },
+      $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+    }).catch(() => 0);
 
-  const pendingRedfin = await ScrapedDeal.countDocuments({
-    source: 'redfin',
-    $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
-  }).catch(() => 0);
+    const pendingRedfin = await ScrapedDeal.countDocuments({
+      source: 'redfin',
+      $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
+    }).catch(() => 0);
 
-  log.info(`BOFA-QUEUE: ${source} requesting, lastBatch=${lastBofaBatchSource}, pendingPrivy=${pendingPrivy}, pendingRedfin=${pendingRedfin}`);
+    log.info(`BOFA-QUEUE: ${source} requesting, lastBatch=${lastBofaBatchSource}, pendingPrivy=${pendingPrivy}, pendingRedfin=${pendingRedfin}`);
 
-  // EQUAL PRIORITY LOGIC: Strictly alternate when both have pending work
-  const privyReady = pendingPrivy >= BOFA_TRIGGER_BATCH;
-  const redfinReady = pendingRedfin >= BOFA_TRIGGER_BATCH;
+    // EQUAL PRIORITY LOGIC: Strictly alternate when both have pending work
+    const privyReady = pendingPrivy >= BOFA_TRIGGER_BATCH;
+    const redfinReady = pendingRedfin >= BOFA_TRIGGER_BATCH;
 
-  // If both sources have 500+ pending, enforce strict alternating
-  if (privyReady && redfinReady) {
-    // First run (lastBofaBatchSource is null) - give to whoever has MORE pending for fairness
-    if (lastBofaBatchSource === null) {
-      const shouldBeRedfin = pendingRedfin >= pendingPrivy;
-      if ((source === 'privy' && shouldBeRedfin) || (source === 'redfin' && !shouldBeRedfin)) {
-        log.info(`BOFA-QUEUE: ${source} denied - other source has more pending (privy=${pendingPrivy}, redfin=${pendingRedfin})`);
+    // If both sources have 500+ pending, enforce strict alternating
+    if (privyReady && redfinReady) {
+      // First run (lastBofaBatchSource is null) - give to whoever has MORE pending for fairness
+      if (lastBofaBatchSource === null) {
+        const shouldBeRedfin = pendingRedfin >= pendingPrivy;
+        if ((source === 'privy' && shouldBeRedfin) || (source === 'redfin' && !shouldBeRedfin)) {
+          log.info(`BOFA-QUEUE: ${source} denied - other source has more pending (privy=${pendingPrivy}, redfin=${pendingRedfin})`);
+          return false;
+        }
+      }
+      // Last was Privy, must give to Redfin now
+      else if (lastBofaBatchSource === 'privy' && source === 'privy') {
+        log.info(`BOFA-QUEUE: Privy denied - alternating to Redfin (${pendingRedfin} pending)`);
+        return false;
+      }
+      // Last was Redfin, must give to Privy now
+      else if (lastBofaBatchSource === 'redfin' && source === 'redfin') {
+        log.info(`BOFA-QUEUE: Redfin denied - alternating to Privy (${pendingPrivy} pending)`);
         return false;
       }
     }
-    // Last was Privy, must give to Redfin now
-    else if (lastBofaBatchSource === 'privy' && source === 'privy') {
-      log.info(`BOFA-QUEUE: Privy denied - alternating to Redfin (${pendingRedfin} pending)`);
-      return false;
-    }
-    // Last was Redfin, must give to Privy now
-    else if (lastBofaBatchSource === 'redfin' && source === 'redfin') {
-      log.info(`BOFA-QUEUE: Redfin denied - alternating to Privy (${pendingPrivy} pending)`);
-      return false;
-    }
-  }
 
-  // Grant access
-  bofaInUse = true;
-  bofaCurrentSource = source;
-  log.info(`BOFA-QUEUE: ${source.toUpperCase()} acquired BofA lock (17 browsers)`);
-  return true;
+    // Grant access
+    bofaInUse = true;
+    bofaCurrentSource = source;
+    log.info(`BOFA-QUEUE: ${source.toUpperCase()} acquired BofA lock (17 browsers)`);
+    return true;
+  } finally {
+    releaseBofaMutex();
+  }
 }
 
 // Function to release BofA access
@@ -1062,10 +1092,9 @@ async function runRedfinWithBofA() {
           await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
           continue;
         } else {
-          // BofA is busy with Privy - wait and check again
-          log.info(`REDFIN: BofA busy (${bofaCurrentSource}). Waiting 30s before retry...`);
-          await new Promise(r => setTimeout(r, 30000));
-          continue;
+          // BofA is busy with Privy - DON'T just wait, continue scraping addresses!
+          log.info(`REDFIN: BofA busy (${bofaCurrentSource}). Continuing to scrape more addresses while waiting...`);
+          // Fall through to scraping code below instead of waiting
         }
       }
 
