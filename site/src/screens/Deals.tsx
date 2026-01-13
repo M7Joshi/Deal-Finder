@@ -1058,19 +1058,18 @@ const cleanAddress = (address?: string | null): string => {
       ? userStates.join(', ')
       : 'No states assigned';
 
-  // Responsive table cell styles - compact for all screens, no horizontal scroll
+  // Responsive table cell styles
+  const cellPadding = isMobile ? '8px 4px' : '12px 6px';
+  const cellFontSize = isMobile ? '13px' : '15px';
   const tdBaseResponsive: React.CSSProperties = {
-    padding: '4px 3px',
+    padding: cellPadding,
     borderBottom: '1px solid #e5e7eb',
     color: '#111827',
     verticalAlign: 'middle',
-    fontSize: '11px',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+    fontSize: cellFontSize,
   };
-  const tdRResponsive: React.CSSProperties = { ...tdBaseResponsive, textAlign: 'right' };
-  const tdLWideResponsive: React.CSSProperties = { ...tdBaseResponsive, textAlign: 'left' };
+  const tdRResponsive: React.CSSProperties = { ...tdBaseResponsive, textAlign: 'right', whiteSpace: 'nowrap' };
+  const tdLWideResponsive: React.CSSProperties = { ...tdBaseResponsive, textAlign: 'left', minWidth: isMobile ? 120 : 160 };
 
   return (
     <div style={{ padding: isMobile ? 12 : 24 }}>
@@ -1270,14 +1269,15 @@ const cleanAddress = (address?: string | null): string => {
 
       <div
         style={{
-          borderRadius: 8,
+          overflowX: 'auto',
+          borderRadius: isMobile ? 8 : 12,
           border: '1px solid #e5e7eb',
           background: '#fff',
           boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
-          overflow: 'hidden',
+          WebkitOverflowScrolling: 'touch',
         }}
       >
-        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: isMobile ? 1100 : 1000 }}>
           <thead>
             <tr style={{ background: '#111827', color: '#fff' }}>
               {[
@@ -1291,22 +1291,22 @@ const cleanAddress = (address?: string | null): string => {
                 'Agent',
                 'Email',
                 '',
-                'Actions',
+                'Move To',
+                'Delete',
               ].map((h, i) => (
                 <th
                   key={h + i}
                   style={{
                     textAlign: i === 0 ? 'left' : 'right',
-                    padding: '4px 3px',
-                    fontSize: 10,
-                    letterSpacing: 0.1,
+                    padding: isMobile ? '8px 4px' : '10px 6px',
+                    fontSize: isMobile ? 10 : 11,
+                    letterSpacing: 0.3,
                     textTransform: 'uppercase',
                     borderBottom: '1px solid rgba(255,255,255,0.12)',
                     position: 'sticky',
                     top: 0,
                     zIndex: 1,
                     whiteSpace: 'nowrap',
-                    overflow: 'hidden',
                   }}
                 >
                   {h}
@@ -1433,78 +1433,80 @@ const cleanAddress = (address?: string | null): string => {
                         />
                       )}
                     </td>
-                    {/* Actions Column - Move To + Delete combined */}
+                    {/* Move To Column */}
                     <td style={{ ...tdRResponsive, whiteSpace: 'nowrap' }}>
-                      <Stack direction="row" spacing={0.25} justifyContent="flex-end">
+                      <Stack direction="row" spacing={0.5} justifyContent="flex-end">
                         <Button
                           size="small"
                           variant="outlined"
                           onClick={(ev) => { ev.stopPropagation(); openMoveDialog(r, 'email_sent'); }}
                           sx={{
-                            fontSize: 10,
-                            px: 0.5,
-                            py: 0.15,
+                            fontSize: isMobile ? 9 : 11,
+                            px: isMobile ? 0.5 : 1,
+                            py: 0.25,
                             minWidth: 'auto',
                             color: '#2563eb',
                             borderColor: '#2563eb',
                             '&:hover': { backgroundColor: '#eff6ff', borderColor: '#1d4ed8' }
                           }}
                         >
-                          Em
+                          Email
                         </Button>
                         <Button
                           size="small"
                           variant="outlined"
                           onClick={(ev) => { ev.stopPropagation(); openMoveDialog(r, 'follow_up'); }}
                           sx={{
-                            fontSize: 10,
-                            px: 0.5,
-                            py: 0.15,
+                            fontSize: isMobile ? 9 : 11,
+                            px: isMobile ? 0.5 : 1,
+                            py: 0.25,
                             minWidth: 'auto',
                             color: '#d97706',
                             borderColor: '#d97706',
                             '&:hover': { backgroundColor: '#fffbeb', borderColor: '#b45309' }
                           }}
                         >
-                          Fw
+                          Follow
                         </Button>
                         <Button
                           size="small"
                           variant="outlined"
                           onClick={(ev) => { ev.stopPropagation(); openMoveDialog(r, 'deal_status'); }}
                           sx={{
-                            fontSize: 10,
-                            px: 0.5,
-                            py: 0.15,
+                            fontSize: isMobile ? 9 : 11,
+                            px: isMobile ? 0.5 : 1,
+                            py: 0.25,
                             minWidth: 'auto',
                             color: '#059669',
                             borderColor: '#059669',
                             '&:hover': { backgroundColor: '#ecfdf5', borderColor: '#047857' }
                           }}
                         >
-                          St
-                        </Button>
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          color="error"
-                          onClick={(ev) => { ev.stopPropagation(); openDeleteDialog(r); }}
-                          sx={{
-                            fontSize: 10,
-                            px: 0.5,
-                            py: 0.15,
-                            minWidth: 'auto',
-                          }}
-                        >
-                          Del
+                          Status
                         </Button>
                       </Stack>
+                    </td>
+                    {/* Delete Column */}
+                    <td style={{ ...tdRResponsive, whiteSpace: 'nowrap' }}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        color="error"
+                        onClick={(ev) => { ev.stopPropagation(); openDeleteDialog(r); }}
+                        sx={{
+                          fontSize: isMobile ? 10 : 12,
+                          px: isMobile ? 1 : 1.5,
+                          minWidth: 'auto',
+                        }}
+                      >
+                        Delete
+                      </Button>
                     </td>
                   </tr>
                   {/* Expandable Agent Details Row */}
                   {isAgentExpanded && hasAgentInfo && (
                     <tr style={{ background: '#f5f3ff' }}>
-                      <td colSpan={11} style={{ padding: '12px 14px' }}>
+                      <td colSpan={13} style={{ padding: '12px 14px' }}>
                         <div style={{
                           display: 'flex',
                           gap: 24,
