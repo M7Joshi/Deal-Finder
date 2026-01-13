@@ -646,6 +646,10 @@ const BOFA_TOTAL_CONCURRENCY = Number(process.env.BOFA_TOTAL_CONCURRENCY || 20);
 // Batch size before triggering BofA (500 addresses per scraper)
 const BOFA_TRIGGER_BATCH = Number(process.env.BOFA_TRIGGER_BATCH || 500);
 
+// PAUSE threshold - when pending AMV exceeds this, scrapers should WAIT instead of adding more
+// Default: 2x trigger batch = 1000 addresses. Prevents scrapers from running away.
+const SCRAPER_PAUSE_THRESHOLD = Number(process.env.SCRAPER_PAUSE_THRESHOLD || BOFA_TRIGGER_BATCH * 2);
+
 // Break times: 2 min before BofA, 3 min after cycle completes
 const BREAK_BEFORE_BOFA_MS = Number(process.env.BREAK_BEFORE_BOFA_MS || 120000); // 2 minutes
 const BREAK_AFTER_CYCLE_MS = Number(process.env.BREAK_AFTER_CYCLE_MS || 180000); // 3 minutes
@@ -1117,6 +1121,15 @@ async function runPrivyWithBofA() {
         }
       }
 
+      // CHECK PAUSE THRESHOLD: If pending AMV is too high, WAIT instead of scraping more
+      if (pendingPrivyAMV >= SCRAPER_PAUSE_THRESHOLD) {
+        log.warn(`PRIVY: PAUSED - Pending AMV (${pendingPrivyAMV}) exceeds threshold (${SCRAPER_PAUSE_THRESHOLD}). Waiting for BofA to catch up...`);
+        // Run agent lookup while waiting
+        await runPrivyAgentLookup();
+        await new Promise(r => setTimeout(r, 30000)); // Wait 30s before rechecking
+        continue;
+      }
+
       // Scrape more addresses (will stop when batch limit reached)
       log.info(`PRIVY: Scraping addresses...`);
       const startCount = await ScrapedDeal.countDocuments({ source: 'privy' }).catch(() => 0);
@@ -1233,10 +1246,17 @@ async function runRedfinWithBofA() {
           await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
           continue;
         } else {
-          // BofA is busy with Privy - DON'T just wait, continue scraping addresses!
-          log.info(`REDFIN: BofA busy (${bofaCurrentSource}). Continuing to scrape more addresses while waiting...`);
-          // Fall through to scraping code below instead of waiting
+          // BofA is busy with Privy - check if we should pause or continue
+          log.info(`REDFIN: BofA busy (${bofaCurrentSource}).`);
+          // Fall through to check pause threshold below
         }
+      }
+
+      // CHECK PAUSE THRESHOLD: If pending AMV is too high, WAIT instead of scraping more
+      if (pendingRedfinAMV >= SCRAPER_PAUSE_THRESHOLD) {
+        log.warn(`REDFIN: PAUSED - Pending AMV (${pendingRedfinAMV}) exceeds threshold (${SCRAPER_PAUSE_THRESHOLD}). Waiting for BofA to catch up...`);
+        await new Promise(r => setTimeout(r, 30000)); // Wait 30s before rechecking
+        continue;
       }
 
       // Scrape more addresses (will stop when batch limit reached)
