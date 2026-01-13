@@ -35,7 +35,11 @@ type Deal = {
 
 const currency = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const fmt = (n?: number | null) => (typeof n === 'number' && n > 0 ? currency.format(n) : '—');
-const formatDateTime = (d?: string | null) => d ? new Date(d).toLocaleString() : '—';
+const formatDateTime = (d?: string | null) => {
+  if (!d) return '—';
+  const date = new Date(d);
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+};
 
 const STATUS_LABELS: Record<string, { label: string; color: string; bg: string }> = {
   pending: { label: 'Pending', color: '#6b7280', bg: '#f3f4f6' },
@@ -329,7 +333,7 @@ export default function DealStatusPage() {
         <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: 1500 }}>
           <thead>
             <tr style={{ background: '#111827', color: '#fff' }}>
-              {['Address', 'LP', '80%', 'AMV', '40%', '30%', 'Offer', 'Agent', 'Contact', 'Status', 'Notes', 'Edit', 'Move To', 'Delete'].map((h, i) => (
+              {['Address', 'LP', '80%', 'AMV', '40%', '30%', 'Offer', 'Agent', 'Contact', 'Moved At', 'Status', 'Notes', 'Edit', 'Move To', 'Delete'].map((h, i) => (
                 <th
                   key={h}
                   style={{
@@ -387,6 +391,9 @@ export default function DealStatusPage() {
                       )}
                       {!deal.agentEmail && !deal.agentPhone && '—'}
                     </div>
+                  </td>
+                  <td style={{ padding: cellPadding, fontSize: cellFontSize, color: '#6b7280', whiteSpace: 'nowrap', textAlign: 'right' }}>
+                    {formatDateTime(deal.movedToDealStatusAt)}
                   </td>
                   <td style={{ padding: cellPadding, fontSize: cellFontSize }}>
                     {getStatusChip(deal.dealStatus)}
@@ -479,7 +486,7 @@ export default function DealStatusPage() {
             })}
             {deals.length === 0 && (
               <tr>
-                <td colSpan={14} style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>
+                <td colSpan={15} style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>
                   No deals in Deal Status stage{statusFilter !== 'all' ? ` with status "${STATUS_LABELS[statusFilter]?.label}"` : ''}.
                 </td>
               </tr>

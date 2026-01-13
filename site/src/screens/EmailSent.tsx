@@ -22,6 +22,7 @@ type Deal = {
   agentPhone?: string;
   agentEmail?: string;
   emailSentAt?: string;
+  movedToEmailSentAt?: string;
   dealStage?: string;
   dealStatus?: string;
   followUpDate?: string;
@@ -32,6 +33,11 @@ type Deal = {
 const currency = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const fmt = (n?: number | null) => (typeof n === 'number' && n > 0 ? currency.format(n) : '—');
 const formatDate = (d?: string | null) => d ? new Date(d).toLocaleDateString() : '—';
+const formatDateTime = (d?: string | null) => {
+  if (!d) return '—';
+  const date = new Date(d);
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+};
 
 export default function EmailSent() {
   const theme = useTheme();
@@ -210,7 +216,7 @@ export default function EmailSent() {
         <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: 1200 }}>
           <thead>
             <tr style={{ background: '#111827', color: '#fff' }}>
-              {['Address', 'LP', '80%', 'AMV', '40%', '30%', 'Offer', 'Agent', 'Email', 'Phone', 'Sent Date', 'Move To', 'Delete'].map((h, i) => (
+              {['Address', 'LP', '80%', 'AMV', '40%', '30%', 'Offer', 'Agent', 'Email', 'Phone', 'Moved At', 'Email Sent', 'Move To', 'Delete'].map((h, i) => (
                 <th
                   key={h}
                   style={{
@@ -265,8 +271,11 @@ export default function EmailSent() {
                     <a href={`tel:${deal.agentPhone}`} style={{ color: '#2563eb' }}>{deal.agentPhone}</a>
                   ) : '—'}
                 </td>
-                <td style={{ padding: cellPadding, fontSize: cellFontSize, color: '#6b7280', whiteSpace: 'nowrap' }}>
-                  {formatDate(deal.emailSentAt)}
+                <td style={{ padding: cellPadding, fontSize: cellFontSize, color: '#6b7280', whiteSpace: 'nowrap', textAlign: 'right' }}>
+                  {formatDateTime(deal.movedToEmailSentAt)}
+                </td>
+                <td style={{ padding: cellPadding, fontSize: cellFontSize, color: '#6b7280', whiteSpace: 'nowrap', textAlign: 'right' }}>
+                  {formatDateTime(deal.emailSentAt)}
                 </td>
                 <td style={{ padding: cellPadding, whiteSpace: 'nowrap' }}>
                   <Stack direction="row" spacing={0.5} justifyContent="flex-end">
@@ -321,7 +330,7 @@ export default function EmailSent() {
             ))}
             {deals.length === 0 && (
               <tr>
-                <td colSpan={13} style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>
+                <td colSpan={14} style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>
                   No deals in Email Sent stage.
                 </td>
               </tr>

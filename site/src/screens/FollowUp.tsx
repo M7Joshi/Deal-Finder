@@ -35,7 +35,11 @@ type Deal = {
 const currency = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const fmt = (n?: number | null) => (typeof n === 'number' && n > 0 ? currency.format(n) : '—');
 const formatDate = (d?: string | null) => d ? new Date(d).toLocaleDateString() : '—';
-const formatDateTime = (d?: string | null) => d ? new Date(d).toLocaleString() : '—';
+const formatDateTime = (d?: string | null) => {
+  if (!d) return '—';
+  const date = new Date(d);
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+};
 
 export default function FollowUp() {
   const theme = useTheme();
@@ -279,7 +283,7 @@ export default function FollowUp() {
         <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: 1400 }}>
           <thead>
             <tr style={{ background: '#111827', color: '#fff' }}>
-              {['Address', 'LP', '80%', 'AMV', '40%', '30%', 'Offer', 'Agent', 'Contact', 'Follow Up Date', 'Notes', 'Move To', 'Delete'].map((h, i) => (
+              {['Address', 'LP', '80%', 'AMV', '40%', '30%', 'Offer', 'Agent', 'Contact', 'Moved At', 'Follow Up Date', 'Notes', 'Move To', 'Delete'].map((h, i) => (
                 <th
                   key={h}
                   style={{
@@ -338,6 +342,9 @@ export default function FollowUp() {
                       )}
                       {!deal.agentEmail && !deal.agentPhone && '—'}
                     </div>
+                  </td>
+                  <td style={{ padding: cellPadding, fontSize: cellFontSize, color: '#6b7280', whiteSpace: 'nowrap', textAlign: 'right' }}>
+                    {formatDateTime(deal.movedToFollowUpAt)}
                   </td>
                   <td style={{ padding: cellPadding, fontSize: cellFontSize }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -431,7 +438,7 @@ export default function FollowUp() {
             })}
             {deals.length === 0 && (
               <tr>
-                <td colSpan={13} style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>
+                <td colSpan={14} style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>
                   No deals in Follow Up stage.
                 </td>
               </tr>
