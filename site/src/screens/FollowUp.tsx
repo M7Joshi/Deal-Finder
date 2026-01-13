@@ -220,19 +220,26 @@ export default function FollowUp() {
     return new Date(date) < new Date();
   };
 
-  // Calculate pricing values
-  const getLP = (deal: Deal) => deal.listingPrice || 0;
+  // Calculate pricing values - ensure proper number conversion
+  const toNum = (v: any): number | null => {
+    if (v == null) return null;
+    const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[^0-9.\-]/g, ''));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+
+  const getLP = (deal: Deal) => toNum(deal.listingPrice);
   const getLP80 = (deal: Deal) => {
     const lp = getLP(deal);
-    return lp > 0 ? Math.round(lp * 0.8) : null;
+    return lp ? Math.round(lp * 0.8) : null;
   };
+  const getAMV = (deal: Deal) => toNum(deal.amv);
   const getAMV40 = (deal: Deal) => {
-    const amv = deal.amv || 0;
-    return amv > 0 ? Math.round(amv * 0.4) : null;
+    const amv = getAMV(deal);
+    return amv ? Math.round(amv * 0.4) : null;
   };
   const getAMV30 = (deal: Deal) => {
-    const amv = deal.amv || 0;
-    return amv > 0 ? Math.round(amv * 0.3) : null;
+    const amv = getAMV(deal);
+    return amv ? Math.round(amv * 0.3) : null;
   };
   const getOffer = (deal: Deal) => {
     const lp80 = getLP80(deal);
@@ -307,7 +314,7 @@ export default function FollowUp() {
                     {fmt(getLP80(deal))}
                   </td>
                   <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {fmt(deal.amv)}
+                    {fmt(getAMV(deal))}
                   </td>
                   <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
                     {fmt(getAMV40(deal))}
