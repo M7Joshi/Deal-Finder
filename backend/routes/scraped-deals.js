@@ -76,8 +76,8 @@ async function fetchMissingAgentsInBackground(deals) {
   }
 }
 
-// NOTE: Auth removed - this project doesn't use authentication
-// router.use(requireAuth, scopeByState());
+// Apply auth to all routes - users only see their assigned states
+router.use(requireAuth, scopeByState());
 
 // Helper: Calculate if address qualifies as a deal
 // Requirements: AMV >= 2x LP AND AMV > $200,000

@@ -5,8 +5,8 @@ import { requireAuth, scopeByState } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// NOTE: Auth removed - this project doesn't use authentication
-// router.use(requireAuth, scopeByState());
+// Apply auth to all routes - users only see their assigned states
+router.use(requireAuth, scopeByState());
 
 /**
  * GET /api/dashboard/summary?months=12

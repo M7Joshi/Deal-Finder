@@ -1,7 +1,11 @@
 import express from 'express';
 import ScrapedDeal from '../models/ScrapedDeal.js';
+import { requireAuth, scopeByState } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
+
+// Apply auth to all routes - users only see their assigned states
+router.use(requireAuth, scopeByState());
 
 // Get deals by stage (email_sent, follow_up, deal_status)
 router.get('/stage/:stage', async (req, res) => {
@@ -14,7 +18,8 @@ router.get('/stage/:stage', async (req, res) => {
       return res.status(400).json({ error: 'Invalid stage' });
     }
 
-    const query = { dealStage: stage };
+    // Apply state filter for subadmins
+    const query = { ...req.stateFilter, dealStage: stage };
 
     // For deal_status page, optionally filter by status
     if (stage === 'deal_status' && status) {
@@ -211,17 +216,18 @@ router.put('/followup-date/:id', async (req, res) => {
 });
 
 // Get pipeline stats (counts for each stage)
-router.get('/stats', async (_req, res) => {
+router.get('/stats', async (req, res) => {
   try {
+    const stateFilter = req.stateFilter || {};
     const [emailSent, followUp, dealStatus] = await Promise.all([
-      ScrapedDeal.countDocuments({ dealStage: 'email_sent' }),
-      ScrapedDeal.countDocuments({ dealStage: 'follow_up' }),
-      ScrapedDeal.countDocuments({ dealStage: 'deal_status' })
+      ScrapedDeal.countDocuments({ ...stateFilter, dealStage: 'email_sent' }),
+      ScrapedDeal.countDocuments({ ...stateFilter, dealStage: 'follow_up' }),
+      ScrapedDeal.countDocuments({ ...stateFilter, dealStage: 'deal_status' })
     ]);
 
     // Get deal status breakdown
     const statusBreakdown = await ScrapedDeal.aggregate([
-      { $match: { dealStage: 'deal_status' } },
+      { $match: { ...stateFilter, dealStage: 'deal_status' } },
       { $group: { _id: '$dealStatus', count: { $sum: 1 } } }
     ]);
 
