@@ -307,19 +307,19 @@ export default function FollowUp() {
                   <td style={{ padding: cellPadding, fontSize: cellFontSize, fontWeight: 600, color: '#111', minWidth: 150 }}>
                     {deal.fullAddress || deal.address || '—'}
                   </td>
-                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap', color: '#374151' }}>
                     {fmt(getLP(deal))}
                   </td>
-                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap', color: '#374151' }}>
                     {fmt(getLP80(deal))}
                   </td>
-                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap', color: '#374151' }}>
                     {fmt(getAMV(deal))}
                   </td>
-                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap', color: '#374151' }}>
                     {fmt(getAMV40(deal))}
                   </td>
-                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap', color: '#374151' }}>
                     {fmt(getAMV30(deal))}
                   </td>
                   <td style={{ padding: cellPadding, fontSize: cellFontSize, textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 600, color: '#059669' }}>
