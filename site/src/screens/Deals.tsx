@@ -265,6 +265,14 @@ export default function Deals() {
   // Track which row's agent details are expanded
   const [expandedAgentId, setExpandedAgentId] = useState<string | null>(null);
 
+  // Delete confirmation dialog state
+  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; deal: Row | null }>({ open: false, deal: null });
+  const [deleting, setDeleting] = useState(false);
+
+  // Move to stage dialog state
+  const [moveDialog, setMoveDialog] = useState<{ open: boolean; deal: Row | null; toStage: string }>({ open: false, deal: null, toStage: '' });
+  const [moving, setMoving] = useState(false);
+
   // Toggle selection for a single row
   const toggleRowSelection = (id: string) => {
     setSelectedRows(prev => {
@@ -909,11 +917,24 @@ const cleanAddress = (address?: string | null): string => {
     return () => controller.abort();
   }, [selected, geo?.lat, geo?.lng, GMAPS_KEY]);
 
-  const handleDelete = async (r: Row) => {
-    const id = getId(r);
-    if (!id) { setToast({ open: true, msg: 'Cannot delete: missing id', sev: 'error' }); return; }
-    if (!window.confirm('Delete this deal? This cannot be undone.')) return;
+  // Open delete confirmation dialog
+  const openDeleteDialog = (r: Row) => {
+    setDeleteDialog({ open: true, deal: r });
+  };
 
+  // Confirm delete from dialog
+  const confirmDelete = async () => {
+    const r = deleteDialog.deal;
+    if (!r) return;
+
+    const id = getId(r);
+    if (!id) {
+      setToast({ open: true, msg: 'Cannot delete: missing id', sev: 'error' });
+      setDeleteDialog({ open: false, deal: null });
+      return;
+    }
+
+    setDeleting(true);
     const prev = rows;
     setRows(cur => cur.filter(x => getId(x) !== id));
     try {
@@ -926,7 +947,61 @@ const cleanAddress = (address?: string | null): string => {
     } catch (e: any) {
       setRows(prev);
       setToast({ open: true, msg: `Delete failed: ${e?.message || 'unknown error'}`, sev: 'error' });
+    } finally {
+      setDeleting(false);
+      setDeleteDialog({ open: false, deal: null });
     }
+  };
+
+  // Open move dialog
+  const openMoveDialog = (r: Row, toStage: string) => {
+    setMoveDialog({ open: true, deal: r, toStage });
+  };
+
+  // Confirm move to stage
+  const confirmMove = async () => {
+    const { deal, toStage } = moveDialog;
+    if (!deal || !toStage) return;
+
+    const id = getId(deal);
+    if (!id) {
+      setToast({ open: true, msg: 'Cannot move: missing id', sev: 'error' });
+      setMoveDialog({ open: false, deal: null, toStage: '' });
+      return;
+    }
+
+    setMoving(true);
+    try {
+      const res = await apiFetch(`/api/deal-pipeline/move/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toStage })
+      });
+      const data = await res.json();
+
+      if (data.success || data.deal) {
+        // Remove from current view since it moved to another stage
+        setRows(cur => cur.filter(x => getId(x) !== id));
+        const stageLabels: Record<string, string> = {
+          'email_sent': 'Email Sent',
+          'follow_up': 'Follow Up',
+          'deal_status': 'Deal Status'
+        };
+        setToast({ open: true, msg: `Moved to ${stageLabels[toStage] || toStage}`, sev: 'success' });
+      } else {
+        setToast({ open: true, msg: data.error || 'Failed to move deal', sev: 'error' });
+      }
+    } catch (e: any) {
+      setToast({ open: true, msg: `Move failed: ${e?.message || 'unknown error'}`, sev: 'error' });
+    } finally {
+      setMoving(false);
+      setMoveDialog({ open: false, deal: null, toStage: '' });
+    }
+  };
+
+  // Legacy handleDelete for backwards compatibility (uses dialog now)
+  const handleDelete = async (r: Row) => {
+    openDeleteDialog(r);
   };
 
   const handleSaveEdit = async () => {
@@ -1202,7 +1277,7 @@ const cleanAddress = (address?: string | null): string => {
           WebkitOverflowScrolling: 'touch',
         }}
       >
-        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: isMobile ? 800 : 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: isMobile ? 1100 : 1000 }}>
           <thead>
             <tr style={{ background: '#111827', color: '#fff' }}>
               {[
@@ -1216,6 +1291,8 @@ const cleanAddress = (address?: string | null): string => {
                 'Agent',
                 'Email',
                 '',
+                'Move To',
+                'Delete',
               ].map((h, i) => (
                 <th
                   key={h + i}
@@ -1356,11 +1433,80 @@ const cleanAddress = (address?: string | null): string => {
                         />
                       )}
                     </td>
+                    {/* Move To Column */}
+                    <td style={{ ...tdRResponsive, whiteSpace: 'nowrap' }}>
+                      <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={(ev) => { ev.stopPropagation(); openMoveDialog(r, 'email_sent'); }}
+                          sx={{
+                            fontSize: isMobile ? 9 : 11,
+                            px: isMobile ? 0.5 : 1,
+                            py: 0.25,
+                            minWidth: 'auto',
+                            color: '#2563eb',
+                            borderColor: '#2563eb',
+                            '&:hover': { backgroundColor: '#eff6ff', borderColor: '#1d4ed8' }
+                          }}
+                        >
+                          Email
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={(ev) => { ev.stopPropagation(); openMoveDialog(r, 'follow_up'); }}
+                          sx={{
+                            fontSize: isMobile ? 9 : 11,
+                            px: isMobile ? 0.5 : 1,
+                            py: 0.25,
+                            minWidth: 'auto',
+                            color: '#d97706',
+                            borderColor: '#d97706',
+                            '&:hover': { backgroundColor: '#fffbeb', borderColor: '#b45309' }
+                          }}
+                        >
+                          Follow
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={(ev) => { ev.stopPropagation(); openMoveDialog(r, 'deal_status'); }}
+                          sx={{
+                            fontSize: isMobile ? 9 : 11,
+                            px: isMobile ? 0.5 : 1,
+                            py: 0.25,
+                            minWidth: 'auto',
+                            color: '#059669',
+                            borderColor: '#059669',
+                            '&:hover': { backgroundColor: '#ecfdf5', borderColor: '#047857' }
+                          }}
+                        >
+                          Status
+                        </Button>
+                      </Stack>
+                    </td>
+                    {/* Delete Column */}
+                    <td style={{ ...tdRResponsive, whiteSpace: 'nowrap' }}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        color="error"
+                        onClick={(ev) => { ev.stopPropagation(); openDeleteDialog(r); }}
+                        sx={{
+                          fontSize: isMobile ? 10 : 12,
+                          px: isMobile ? 1 : 1.5,
+                          minWidth: 'auto',
+                        }}
+                      >
+                        Delete
+                      </Button>
+                    </td>
                   </tr>
                   {/* Expandable Agent Details Row */}
                   {isAgentExpanded && hasAgentInfo && (
                     <tr style={{ background: '#f5f3ff' }}>
-                      <td colSpan={11} style={{ padding: '12px 14px' }}>
+                      <td colSpan={13} style={{ padding: '12px 14px' }}>
                         <div style={{
                           display: 'flex',
                           gap: 24,
@@ -1837,6 +1983,68 @@ const cleanAddress = (address?: string | null): string => {
           </>
         )}
       </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteDialog.open} onClose={() => setDeleteDialog({ open: false, deal: null })} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ color: '#dc2626' }}>Delete Deal</DialogTitle>
+        <DialogContent>
+          <p style={{ margin: 0, color: '#374151' }}>
+            Are you sure you want to delete this deal?
+          </p>
+          {deleteDialog.deal && (
+            <p style={{ margin: '12px 0 0', fontWeight: 600, color: '#111827' }}>
+              {deleteDialog.deal.fullAddress || deleteDialog.deal.address || 'Unknown address'}
+            </p>
+          )}
+          <p style={{ margin: '12px 0 0', fontSize: 13, color: '#6b7280' }}>
+            This action cannot be undone.
+          </p>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialog({ open: false, deal: null })} disabled={deleting}>
+            Cancel
+          </Button>
+          <Button onClick={confirmDelete} color="error" variant="contained" disabled={deleting}>
+            {deleting ? 'Deleting...' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Move to Stage Confirmation Dialog */}
+      <Dialog open={moveDialog.open} onClose={() => setMoveDialog({ open: false, deal: null, toStage: '' })} maxWidth="xs" fullWidth>
+        <DialogTitle>
+          Move to {moveDialog.toStage === 'email_sent' ? 'Email Sent' : moveDialog.toStage === 'follow_up' ? 'Follow Up' : 'Deal Status'}
+        </DialogTitle>
+        <DialogContent>
+          <p style={{ margin: 0, color: '#374151' }}>
+            Move this deal to the <strong>{moveDialog.toStage === 'email_sent' ? 'Email Sent' : moveDialog.toStage === 'follow_up' ? 'Follow Up' : 'Deal Status'}</strong> page?
+          </p>
+          {moveDialog.deal && (
+            <p style={{ margin: '12px 0 0', fontWeight: 600, color: '#111827' }}>
+              {moveDialog.deal.fullAddress || moveDialog.deal.address || 'Unknown address'}
+            </p>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMoveDialog({ open: false, deal: null, toStage: '' })} disabled={moving}>
+            Cancel
+          </Button>
+          <Button
+            onClick={confirmMove}
+            variant="contained"
+            disabled={moving}
+            sx={{
+              backgroundColor: moveDialog.toStage === 'email_sent' ? '#2563eb' : moveDialog.toStage === 'follow_up' ? '#d97706' : '#059669',
+              '&:hover': {
+                backgroundColor: moveDialog.toStage === 'email_sent' ? '#1d4ed8' : moveDialog.toStage === 'follow_up' ? '#b45309' : '#047857',
+              }
+            }}
+          >
+            {moving ? 'Moving...' : 'Move'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       <Snackbar open={toast.open} autoHideDuration={3000} onClose={() => setToast(t => ({ ...t, open: false }))}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
         <Alert onClose={() => setToast(t => ({ ...t, open: false }))} severity={toast.sev} variant="filled" sx={{ width: '100%' }}>

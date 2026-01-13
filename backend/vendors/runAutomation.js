@@ -662,7 +662,7 @@ let privyAddressCount = 0;
 let redfinAddressCount = 0;
 
 // Function to request BofA access - returns true if granted, false if busy
-// ALTERNATING: If last batch was Privy, give Redfin a turn (if it has 500+), and vice versa
+// EQUAL PRIORITY: Strictly alternates between Privy and Redfin when both have 500+ pending
 async function requestBofaAccess(source) {
   if (bofaInUse) {
     return false;
@@ -683,16 +683,27 @@ async function requestBofaAccess(source) {
 
   log.info(`BOFA-QUEUE: ${source} requesting, lastBatch=${lastBofaBatchSource}, pendingPrivy=${pendingPrivy}, pendingRedfin=${pendingRedfin}`);
 
-  // ALTERNATING LOGIC: Give the other source a turn if it has 500+ pending
-  if (lastBofaBatchSource === 'privy' && source === 'privy') {
-    // Last was Privy, check if Redfin has 500+ pending - if yes, deny Privy
-    if (pendingRedfin >= BOFA_TRIGGER_BATCH) {
+  // EQUAL PRIORITY LOGIC: Strictly alternate when both have pending work
+  const privyReady = pendingPrivy >= BOFA_TRIGGER_BATCH;
+  const redfinReady = pendingRedfin >= BOFA_TRIGGER_BATCH;
+
+  // If both sources have 500+ pending, enforce strict alternating
+  if (privyReady && redfinReady) {
+    // First run (lastBofaBatchSource is null) - give to whoever has MORE pending for fairness
+    if (lastBofaBatchSource === null) {
+      const shouldBeRedfin = pendingRedfin >= pendingPrivy;
+      if ((source === 'privy' && shouldBeRedfin) || (source === 'redfin' && !shouldBeRedfin)) {
+        log.info(`BOFA-QUEUE: ${source} denied - other source has more pending (privy=${pendingPrivy}, redfin=${pendingRedfin})`);
+        return false;
+      }
+    }
+    // Last was Privy, must give to Redfin now
+    else if (lastBofaBatchSource === 'privy' && source === 'privy') {
       log.info(`BOFA-QUEUE: Privy denied - alternating to Redfin (${pendingRedfin} pending)`);
       return false;
     }
-  } else if (lastBofaBatchSource === 'redfin' && source === 'redfin') {
-    // Last was Redfin, check if Privy has 500+ pending - if yes, deny Redfin
-    if (pendingPrivy >= BOFA_TRIGGER_BATCH) {
+    // Last was Redfin, must give to Privy now
+    else if (lastBofaBatchSource === 'redfin' && source === 'redfin') {
       log.info(`BOFA-QUEUE: Redfin denied - alternating to Privy (${pendingPrivy} pending)`);
       return false;
     }
@@ -926,9 +937,11 @@ async function runPrivyWithBofA() {
           await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
           continue;
         } else {
-          // BofA is busy with Redfin - wait and check again
-          log.info(`PRIVY: BofA busy (${bofaCurrentSource}). Waiting 30s before retry...`);
-          await new Promise(r => setTimeout(r, 30000));
+          // BofA is busy - use this idle time to run agent lookup
+          log.info(`PRIVY: BofA busy (${bofaCurrentSource}). Running agent lookup while waiting...`);
+          await runPrivyAgentLookup();
+          // Small break after agent lookup before retrying BofA
+          await new Promise(r => setTimeout(r, 10000));
           continue;
         }
       }
@@ -973,6 +986,34 @@ async function runPrivyWithBofA() {
 
         log.info(`PRIVY: Taking ${BREAK_AFTER_CYCLE_MS / 1000}s break before next cycle...`);
         await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
+
+        // Complete all pending agent lookups before starting next scraping cycle
+        log.info('PRIVY: Completing all pending agent lookups before next cycle...');
+        let pendingAgentCount = await ScrapedDeal.countDocuments({
+          source: { $regex: /^privy/ },
+          isDeal: true,
+          $or: [
+            { agentLookupStatus: null },
+            { agentLookupStatus: 'pending' },
+            { agentLookupStatus: { $exists: false } }
+          ]
+        }).catch(() => 0);
+
+        while (pendingAgentCount > 0 && !control.abort) {
+          log.info(`PRIVY: ${pendingAgentCount} deals still need agent lookup...`);
+          await runPrivyAgentLookup();
+          // Recheck count after lookup
+          pendingAgentCount = await ScrapedDeal.countDocuments({
+            source: { $regex: /^privy/ },
+            isDeal: true,
+            $or: [
+              { agentLookupStatus: null },
+              { agentLookupStatus: 'pending' },
+              { agentLookupStatus: { $exists: false } }
+            ]
+          }).catch(() => 0);
+        }
+        log.info('PRIVY: All pending agent lookups completed. Starting next cycle...');
       }
     }
 

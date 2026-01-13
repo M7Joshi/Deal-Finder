@@ -244,7 +244,7 @@ function Shell({ user, onLogout }) {
       )}
 
       {/* Main content */}
-      <Box sx={{ ml: { md: "200px" }, pl: 1, pr: 2, py: 2, overflowX: "hidden" }}>
+      <Box sx={{ ml: { md: "200px" }, pl: 1, pr: 2, py: 2, overflowX: "auto" }}>
         <Outlet />
       </Box>
     </Box>
