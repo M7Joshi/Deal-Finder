@@ -59,7 +59,9 @@ import path from 'node:path';
 import mongoose from 'mongoose';
 import Property from '../models/Property.js';
 import ScrapedDeal from '../models/ScrapedDeal.js';
+import User from '../models/User.js';
 import { getPrivyPage, lookupAddressAgent } from '../routes/agent-lookup.js';
+import { sendOffer, computeOfferPrice } from '../services/emailService.js';
 import { getPreferredChromeProxy, SERVICE_PROBE_URL } from '../services/proxyManager.js';
 import { getVendorProxyPool, toProxyArg } from '../utils/proxyBuilder.js';
 import { computeAMV as computePropertyAMV } from '../models/Property.js';
@@ -759,6 +761,119 @@ function releaseBofaAccess(source) {
 // Track if agent lookup is running (to prevent duplicate runs)
 let privyAgentLookupRunning = false;
 
+// ============ AUTO-EMAIL HELPERS ============
+
+// Helper: Validate email format
+function isValidEmail(email) {
+  if (!email || typeof email !== 'string') return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+}
+
+// Helper: Find subadmin assigned to a specific state
+async function findSubadminByState(stateCode) {
+  if (!stateCode) return null;
+  const normalizedState = String(stateCode).toUpperCase().trim();
+
+  const subadmin = await User.findOne({
+    role: 'subadmin',
+    states: normalizedState,
+  }).lean();
+
+  if (subadmin) {
+    return {
+      email: subadmin.email,
+      name: subadmin.full_name || subadmin.email,
+      smtp: {
+        host: subadmin.smtp_host || null,
+        port: subadmin.smtp_port || 587,
+        user: subadmin.smtp_user || subadmin.email,
+        pass: subadmin.smtp_pass || null,
+        secure: subadmin.smtp_secure || false,
+      },
+    };
+  }
+  return null;
+}
+
+// Helper: Auto-send email to agent when deal qualifies
+async function autoSendAgentEmail(deal) {
+  try {
+    // Skip if no valid agent email
+    if (!isValidEmail(deal.agentEmail)) {
+      log.debug('AUTO-EMAIL: Skipping - no valid agent email', { address: deal.fullAddress });
+      return { sent: false, reason: 'no_email' };
+    }
+
+    // Skip if email already sent
+    if (deal.agentEmailSent) {
+      log.debug('AUTO-EMAIL: Skipping - already sent', { address: deal.fullAddress });
+      return { sent: false, reason: 'already_sent' };
+    }
+
+    // Skip if not a deal
+    if (!deal.isDeal) {
+      log.debug('AUTO-EMAIL: Skipping - not a deal', { address: deal.fullAddress });
+      return { sent: false, reason: 'not_a_deal' };
+    }
+
+    // Skip if no state
+    if (!deal.state) {
+      log.debug('AUTO-EMAIL: Skipping - no state on deal', { address: deal.fullAddress });
+      return { sent: false, reason: 'no_state' };
+    }
+
+    // Find subadmin for this state
+    const subadmin = await findSubadminByState(deal.state);
+    if (!subadmin) {
+      log.debug('AUTO-EMAIL: Skipping - no subadmin for state', { address: deal.fullAddress, state: deal.state });
+      return { sent: false, reason: 'no_subadmin_for_state' };
+    }
+
+    // Compute offer price
+    const offerPrice = computeOfferPrice({
+      listPrice: deal.listingPrice,
+      amv: deal.amv,
+    });
+
+    if (!offerPrice) {
+      log.debug('AUTO-EMAIL: Skipping - cannot compute offer price', { address: deal.fullAddress });
+      return { sent: false, reason: 'no_offer_price' };
+    }
+
+    // Build property object for email
+    const property = {
+      fullAddress: deal.fullAddress,
+      listPrice: deal.listingPrice,
+      amv: deal.amv,
+      agentEmail: deal.agentEmail,
+      agentName: deal.agentName || 'Listing Agent',
+    };
+
+    // Send the email
+    const result = await sendOffer({ property, subadmin, offerPrice });
+
+    log.info('AUTO-EMAIL: Sent successfully', {
+      address: deal.fullAddress,
+      agentEmail: deal.agentEmail,
+      state: deal.state,
+      fromSubadmin: subadmin.email,
+      messageId: result?.messageId,
+    });
+
+    return {
+      sent: true,
+      messageId: result?.messageId || null,
+      subadminEmail: subadmin.email,
+    };
+  } catch (err) {
+    log.error('AUTO-EMAIL: Failed to send', {
+      address: deal.fullAddress,
+      error: err?.message,
+    });
+    return { sent: false, reason: 'error', error: err?.message };
+  }
+}
+
 /**
  * Run agent lookup for Privy deals that became deals (isDeal=true) but haven't been looked up yet
  * This runs during BofA processing when Privy scraper is idle
@@ -897,6 +1012,7 @@ async function runBofaForSource(source) {
       })
     );
 
+    let emailsSent = 0;
     for (const { deal, result } of chunkResults) {
       if (result?.ok && result.amv && result.amv > 0) {
         const lp = deal.listingPrice || 0;
@@ -907,6 +1023,28 @@ async function runBofaForSource(source) {
           { $set: { amv: result.amv, bofaFetchedAt: new Date(), isDeal } }
         );
         totalSuccess++;
+
+        // AUTO-EMAIL: If this became a deal and has agent email, send offer email
+        if (isDeal && isValidEmail(deal.agentEmail) && !deal.agentEmailSent) {
+          const dealWithAmv = { ...deal, amv: result.amv, isDeal: true };
+          const emailResult = await autoSendAgentEmail(dealWithAmv);
+          if (emailResult.sent) {
+            // Update deal with email sent status
+            await ScrapedDeal.updateOne(
+              { _id: deal._id },
+              {
+                $set: {
+                  agentEmailSent: true,
+                  emailSentAt: new Date(),
+                  emailMessageId: emailResult.messageId,
+                  dealStage: 'email_sent',
+                  movedToEmailSentAt: new Date(),
+                }
+              }
+            );
+            emailsSent++;
+          }
+        }
       } else if (result?.noDataFound) {
         await ScrapedDeal.updateOne(
           { _id: deal._id },
@@ -916,6 +1054,9 @@ async function runBofaForSource(source) {
       } else {
         totalFail++;
       }
+    }
+    if (emailsSent > 0) {
+      log.info(`BofA-${source}: Sent ${emailsSent} auto-emails this chunk`);
     }
 
     // Log progress every chunk
