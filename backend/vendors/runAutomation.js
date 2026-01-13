@@ -1198,21 +1198,34 @@ async function schedulerTick() {
       return;
     }
 
-    // ===== CLEANUP: Process any remaining addresses without AMV =====
+    // ===== CLEANUP: Process remaining AMV while ALSO running scrapers =====
     case 'cleanup_amv': {
       const remaining = await ScrapedDeal.countDocuments({
         $or: [{ amv: null }, { amv: { $exists: false } }, { amv: 0 }]
       }).catch(() => 0);
 
       if (remaining > 0) {
-        log.info(`Scheduler: Cleanup - ${remaining} addresses still need AMV, using all 17 browsers`);
+        log.info(`Scheduler: Cleanup - ${remaining} addresses need AMV. Running BofA + Scrapers in PARALLEL`);
 
-        // Use full 17 browser concurrency for cleanup
+        // Run BofA cleanup AND scrapers in parallel so we don't get stuck
         try {
-          const amvJobs = new Set(['bofa', 'scraped_deals_amv']);
-          await runAutomation(amvJobs);
+          const bofaPromise = (async () => {
+            try {
+              const amvJobs = new Set(['bofa', 'scraped_deals_amv']);
+              await runAutomation(amvJobs);
+            } catch (e) {
+              log.error('Scheduler: Cleanup BofA error', { error: e?.message });
+            }
+          })();
+
+          // Also run scrapers in parallel if enabled
+          const privyPromise = PRIVY_ENABLED ? runPrivyWithBofA() : Promise.resolve();
+          const redfinPromise = REDFIN_ENABLED ? runRedfinWithBofA() : Promise.resolve();
+
+          // Wait for all to complete (or at least attempt)
+          await Promise.allSettled([bofaPromise, privyPromise, redfinPromise]);
         } catch (e) {
-          log.error('Scheduler: Cleanup BofA error', { error: e?.message });
+          log.error('Scheduler: Cleanup parallel error', { error: e?.message });
         }
 
         // Check again
@@ -1221,7 +1234,7 @@ async function schedulerTick() {
         }).catch(() => 0);
 
         if (stillRemaining > 0) {
-          log.info(`Scheduler: Still ${stillRemaining} remaining, continuing cleanup`);
+          log.info(`Scheduler: Still ${stillRemaining} remaining, continuing cleanup + scraping`);
           scheduleNextRun(5000);
           return;
         }
