@@ -26,14 +26,15 @@ import Login from "./components/Login/Login.tsx";
 import { verify, clearToken } from "./helpers";
 
 
-// ---- THEME (deep midnight w/ subtle gradient) ----
+// ---- THEME (light mode with clean styling) ----
 const theme = createTheme({
   palette: {
-    mode: "dark",
+    mode: "light",
     background: { default: "#ffffff", paper: "#ffffff" },
     primary: { main: "#111111" },
     secondary: { main: "#a78bfa" },
-    divider: "rgba(255,255,255,0.08)",
+    text: { primary: "#111827", secondary: "#374151" },
+    divider: "rgba(0,0,0,0.08)",
   },
   typography: {
     fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial",
@@ -44,13 +45,13 @@ const theme = createTheme({
     MuiPaper: {
       styleOverrides: {
         root: {
-          backgroundImage: "linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,0))",
-          border: "1px solid rgba(255,255,255,0.06)"
+          backgroundImage: "none",
+          border: "1px solid rgba(0,0,0,0.08)"
         }
       }
     },
     MuiTableHead: {
-      styleOverrides: { root: { backgroundColor: "rgba(255,255,255,0.05)" } }
+      styleOverrides: { root: { backgroundColor: "#f9fafb" } }
     }
   }
 });
@@ -67,14 +68,13 @@ const navItems = [
   { label: "Email Sent", to: "/email-sent" },  // Deals where email has been sent
   { label: "Follow Up", to: "/follow-up" },  // Deals needing follow-up
   { label: "Deal Status", to: "/deal-status" },  // Final deal status tracking
-  { label: "Pending AMV", to: "/pending-amv" },  // Shows addresses waiting for BofA AMV
   { label: "All Addresses", to: "/all-addresses" },  // Everyone can see this
-  { label: "Agent Lookup", to: "/agent-lookup" },  // Single address agent lookup
+  { label: "Pending AMV", to: "/pending-amv", adminOnly: true },  // Admin only
+  { label: "Agent Lookup", to: "/agent-lookup", adminOnly: true },  // Admin only
+  { label: "Privy Fetcher", to: "/privy-fetcher", adminOnly: true },  // Admin only
+  { label: "Redfin Fetcher", to: "/redfin-fetcher", adminOnly: true },  // Admin only
+  { label: "BofA Viewer", to: "/bofa-viewer", adminOnly: true },  // Admin only
   { label: "Manage Subadmins", to: "/manage-subadmins", adminOnly: true },
-  { label: "Privy Fetcher", to: "/privy-fetcher" },  // Everyone can see this
-  { label: "Redfin Fetcher", to: "/redfin-fetcher" },  // Everyone can see this
-  { label: "BofA Viewer", to: "/bofa-viewer" },  // Everyone can see this
-  // { label: "Agent Fetcher", to: "/agent-fetcher" },  // Commented out - can enable later
   { label: "Users", to: "/users", adminOnly: true },
 ];
 
@@ -297,15 +297,26 @@ export default function App() {
             <Route path="email-sent" element={<EmailSent />} />
             <Route path="follow-up" element={<FollowUp />} />
             <Route path="deal-status" element={<DealStatus />} />
-            {/* Pending AMV - shows addresses waiting for BofA valuation */}
-            <Route path="pending-amv" element={<PendingAMV />} />
-            {/* Agent Lookup - single address lookup */}
-            <Route path="agent-lookup" element={<AgentLookup />} />
+            {/* Pending AMV - shows addresses waiting for BofA valuation (Admin only) */}
+            <Route path="pending-amv" element={
+              (user?.isAdmin || user?.role === "admin") ? <PendingAMV /> : <Navigate to="/deals" replace />
+            } />
+            {/* Agent Lookup - single address lookup (Admin only) */}
+            <Route path="agent-lookup" element={
+              (user?.isAdmin || user?.role === "admin") ? <AgentLookup /> : <Navigate to="/deals" replace />
+            } />
             {/* Pages accessible to everyone */}
             <Route path="all-addresses" element={<ScrapedDeals />} />
-            <Route path="privy-fetcher" element={<PrivyFetcher />} />
-            <Route path="redfin-fetcher" element={<RedfinFetcher />} />
-            <Route path="bofa-viewer" element={<BofaViewer />} />
+            {/* Admin-only fetcher pages */}
+            <Route path="privy-fetcher" element={
+              (user?.isAdmin || user?.role === "admin") ? <PrivyFetcher /> : <Navigate to="/deals" replace />
+            } />
+            <Route path="redfin-fetcher" element={
+              (user?.isAdmin || user?.role === "admin") ? <RedfinFetcher /> : <Navigate to="/deals" replace />
+            } />
+            <Route path="bofa-viewer" element={
+              (user?.isAdmin || user?.role === "admin") ? <BofaViewer /> : <Navigate to="/deals" replace />
+            } />
             {/* <Route path="agent-fetcher" element={<AgentFetcher />} /> */}{/* Commented out - can enable later */}
             {/* Admin-only routes */}
             <Route path="manage-subadmins" element={
