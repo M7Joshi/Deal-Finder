@@ -177,6 +177,7 @@ async function captureDebug(page, frame, address, tag='unhandled') {
       }
     }
   } catch {}
+  */
 }
 
 export async function getChaseEstimate(page, address) {
