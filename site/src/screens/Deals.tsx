@@ -1,6 +1,6 @@
 
 // src/screens/Deals.tsx
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { getDeals, getDashboardSummary, updatePropertyBasic, deletePropertyById, sendAgentOffer } from '../api.tsx';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions,
@@ -272,6 +272,22 @@ export default function Deals() {
   // Move to stage dialog state
   const [moveDialog, setMoveDialog] = useState<{ open: boolean; deal: Row | null; toStage: string }>({ open: false, deal: null, toStage: '' });
   const [moving, setMoving] = useState(false);
+
+  // Refs for synced horizontal scrollbars (top + bottom)
+  const topScrollRef = useRef<HTMLDivElement>(null);
+  const tableScrollRef = useRef<HTMLDivElement>(null);
+
+  // Sync scroll between top scrollbar and table
+  const handleTopScroll = () => {
+    if (topScrollRef.current && tableScrollRef.current) {
+      tableScrollRef.current.scrollLeft = topScrollRef.current.scrollLeft;
+    }
+  };
+  const handleTableScroll = () => {
+    if (topScrollRef.current && tableScrollRef.current) {
+      topScrollRef.current.scrollLeft = tableScrollRef.current.scrollLeft;
+    }
+  };
 
   // Toggle selection for a single row
   const toggleRowSelection = (id: string) => {
@@ -1267,7 +1283,26 @@ const cleanAddress = (address?: string | null): string => {
         <Card title="Not Deals" value={totals.nonDeals} />
       </div>
 
+      {/* Top scrollbar for mobile - synced with table */}
+      {isMobile && (
+        <div
+          ref={topScrollRef}
+          onScroll={handleTopScroll}
+          style={{
+            overflowX: 'auto',
+            overflowY: 'hidden',
+            marginBottom: 4,
+            borderRadius: 6,
+            background: '#f3f4f6',
+          }}
+        >
+          <div style={{ width: 1100, height: 8 }} />
+        </div>
+      )}
+
       <div
+        ref={tableScrollRef}
+        onScroll={handleTableScroll}
         style={{
           overflowX: 'auto',
           borderRadius: isMobile ? 8 : 12,
