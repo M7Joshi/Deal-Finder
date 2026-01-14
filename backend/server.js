@@ -8,7 +8,6 @@ import connectDB from './db/db.js';
 import { log } from './utils/logger.js';
 import { ensureMasterAdmin } from './utils/ensureMasterAdmin.js';
 import agentOffersRoutes from './routes/agent_offers.js';
-import runAgentOffers from './vendors/agent_offers.js';
 import mongoose from 'mongoose';
 
 dotenv.config();
@@ -276,6 +275,8 @@ async function runAgentOffersScheduled() {
   agentOffersRunning = true;
   try {
     L.info('[AgentOffers] Starting scheduled run...');
+    // Dynamic import to avoid circular dependency
+    const { default: runAgentOffers } = await import('./vendors/agent_offers.js');
     await runAgentOffers();
     L.info('[AgentOffers] Scheduled run completed');
   } catch (e) {
