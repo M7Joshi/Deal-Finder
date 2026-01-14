@@ -9,6 +9,9 @@ import ScrapedDeal from '../../models/ScrapedDeal.js';
 // Import control object for abort checking
 import { control } from '../runAutomation.js';
 
+// Track URLs already processed for agent details to avoid duplicate calls
+const processedAgentUrls = new Set();
+
 // Close all shared browsers
 async function closeSharedBrowser() {
   await Promise.all([
@@ -47,6 +50,9 @@ async function markCityProcessed(cityKey) {
 
 // Reset progress (for starting fresh cycle)
 export async function resetProgress() {
+  // Clear the URL cache to start fresh
+  processedAgentUrls.clear();
+
   await ScraperProgress.updateOne(
     { scraper: 'redfin' },
     {
@@ -189,12 +195,14 @@ async function runCity(stateCode, city) {
       let brokerage = home.brokerName || null;
 
       // Optional: Deep scrape for agent details (slower)
-      if (USE_AGENT_ENRICHMENT && url) {
+      // Skip if we've already processed this URL to avoid duplicate calls
+      if (USE_AGENT_ENRICHMENT && url && !processedAgentUrls.has(url)) {
         try {
+          processedAgentUrls.add(url); // Mark as processed BEFORE calling to prevent race conditions
           const enriched = await extractAgentDetails(url);
           if (enriched) {
             agentName = enriched.agentName || agentName;
-            agentPhone = enriched.agentPhone || agentPhone;  // Fixed: was 'phone', should be 'agentPhone'
+            agentPhone = enriched.agentPhone || agentPhone;
             agentEmail = enriched.email || agentEmail;
             brokerage = enriched.brokerage || brokerage;
           }
@@ -375,6 +383,9 @@ export async function runAllCities() {
     if ((progress2.currentStateIndex || 0) >= STATES_TO_PROCESS.length - 1 && !control.abort && !shouldPauseScraping()) {
       console.log('[Redfin] ✅ Completed FULL CYCLE through all states!');
       console.log('[Redfin] 🔄 Resetting progress to start a new cycle...');
+      // Clear URL cache before starting new cycle
+      console.log(`[Redfin] Clearing URL cache (${processedAgentUrls.size} URLs processed)`);
+      processedAgentUrls.clear();
       // Increment cycle count and reset progress for next cycle
       await ScraperProgress.updateOne(
         { scraper: 'redfin' },
