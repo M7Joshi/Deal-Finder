@@ -1283,22 +1283,20 @@ const cleanAddress = (address?: string | null): string => {
         <Card title="Not Deals" value={totals.nonDeals} />
       </div>
 
-      {/* Top scrollbar for mobile - synced with table */}
-      {isMobile && (
-        <div
-          ref={topScrollRef}
-          onScroll={handleTopScroll}
-          style={{
-            overflowX: 'auto',
-            overflowY: 'hidden',
-            marginBottom: 4,
-            borderRadius: 6,
-            background: '#f3f4f6',
-          }}
-        >
-          <div style={{ width: 1100, height: 8 }} />
-        </div>
-      )}
+      {/* Top scrollbar - synced with table (shows when table needs horizontal scroll) */}
+      <div
+        ref={topScrollRef}
+        onScroll={handleTopScroll}
+        style={{
+          overflowX: 'auto',
+          overflowY: 'hidden',
+          marginBottom: 4,
+          borderRadius: 6,
+          background: '#f3f4f6',
+        }}
+      >
+        <div style={{ width: isMobile ? 1100 : 1000, height: 8 }} />
+      </div>
 
       <div
         ref={tableScrollRef}
