@@ -138,11 +138,11 @@ export async function quickLogin(page) {
   // Step 2: Click "Continue" button to proceed to password step
   L.info('Looking for Continue button...');
 
-  // Take screenshot before clicking
-  try {
-    await activePage.screenshot({ path: `c:/Users/91812/Desktop/Demo-3 Mioym/deal-finder-1/backend/privy-before-continue-${Date.now()}.png`, fullPage: true });
-    L.info('Screenshot saved before Continue click');
-  } catch {}
+  // SCREENSHOTS DISABLED
+  // try {
+  //   await activePage.screenshot({ path: `c:/Users/91812/Desktop/Demo-3 Mioym/deal-finder-1/backend/privy-before-continue-${Date.now()}.png`, fullPage: true });
+  //   L.info('Screenshot saved before Continue click');
+  // } catch {}
 
   let continueBtn = await findButtonByText(activePage, ['Continue', 'Next', 'Submit'], 5000);
   if (!continueBtn) {
@@ -184,11 +184,11 @@ export async function quickLogin(page) {
   // Wait a moment for the click to register
   await new Promise(r => setTimeout(r, 1500));
 
-  // Take screenshot after clicking
-  try {
-    await activePage.screenshot({ path: `c:/Users/91812/Desktop/Demo-3 Mioym/deal-finder-1/backend/privy-after-continue-${Date.now()}.png`, fullPage: true });
-    L.info('Screenshot saved after Continue click');
-  } catch {}
+  // SCREENSHOTS DISABLED - uncomment to re-enable
+  // try {
+  //   await activePage.screenshot({ path: `c:/Users/91812/Desktop/Demo-3 Mioym/deal-finder-1/backend/privy-after-continue-${Date.now()}.png`, fullPage: true });
+  //   L.info('Screenshot saved after Continue click');
+  // } catch {}
 
   // Step 3: Wait for password field to appear (this is the key - need longer wait)
   L.info('Waiting for password field to appear...');
@@ -211,10 +211,11 @@ export async function quickLogin(page) {
     }
 
     L.error('Password input not found after 30 seconds');
-    try {
-      await activePage.screenshot({ path: `c:/Users/91812/Desktop/Demo-3 Mioym/deal-finder-1/backend/privy-no-pwd-${Date.now()}.png`, fullPage: true });
-      L.info('Screenshot saved');
-    } catch {}
+    // SCREENSHOTS DISABLED - uncomment to re-enable
+    // try {
+    //   await activePage.screenshot({ path: `c:/Users/91812/Desktop/Demo-3 Mioym/deal-finder-1/backend/privy-no-pwd-${Date.now()}.png`, fullPage: true });
+    //   L.info('Screenshot saved');
+    // } catch {}
     return { success: false, page: activePage };
   }
 
@@ -291,9 +292,10 @@ export async function quickLogin(page) {
   // Still on sign_in means credentials were rejected
   if (finalUrl.includes('sign_in')) {
     L.error('Still on sign-in page - credentials may be incorrect');
-    try {
-      await activePage.screenshot({ path: `c:/Users/91812/Desktop/Demo-3 Mioym/deal-finder-1/backend/privy-login-failed-${Date.now()}.png`, fullPage: true });
-    } catch {}
+    // SCREENSHOTS DISABLED - uncomment to re-enable
+    // try {
+    //   await activePage.screenshot({ path: `c:/Users/91812/Desktop/Demo-3 Mioym/deal-finder-1/backend/privy-login-failed-${Date.now()}.png`, fullPage: true });
+    // } catch {}
     return { success: false, page: activePage };
   }
 

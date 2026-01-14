@@ -429,6 +429,9 @@ function safeName(s) {
   return String(s).replace(/[^a-z0-9\-_.]/gi, '_').slice(0, 120);
 }
 async function snap(page, base) {
+  // SCREENSHOTS DISABLED - function now no-op until re-enabled
+  return;
+  /*
   try {
     ensureDebugDir();
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
@@ -438,6 +441,7 @@ async function snap(page, base) {
   } catch (e) {
     console.warn('[chase:debug] snapshot failed:', e?.message || e);
   }
+  */
 }
 
 // --- Helpers for robust text clicks (no Playwright selectors) and iframe handling ---

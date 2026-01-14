@@ -152,6 +152,9 @@ async function humanizePage(page) {
 }
 
 async function snapshot(page, tag) {
+  // SCREENSHOTS DISABLED - function now no-op until re-enabled
+  return;
+  /*
   try {
     if (!DEBUG_HOMES || !page) return;
     const safe = String(tag || 'step').replace(/[^a-z0-9_-]/gi, '_');
@@ -162,6 +165,7 @@ async function snapshot(page, tag) {
   } catch {
     // ignore
   }
+  */
 }
 
 /**

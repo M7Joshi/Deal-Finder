@@ -224,17 +224,18 @@ async function scrapeMovoto(address, page) {
     return price;
   } catch (error) {
     console.error(`[MOVOTO-ERROR] ${address}:`, error.message);
-    
-    if (SCREENSHOT_ON_ERROR) {
-      try {
-        const fs = require('fs');
-        if (!fs.existsSync(DEBUG_DIR)) fs.mkdirSync(DEBUG_DIR, { recursive: true });
-        const filename = `${DEBUG_DIR}/movoto_${Date.now()}.png`;
-        await page.screenshot({ path: filename, fullPage: true });
-        console.log(`[MOVOTO] Screenshot saved: ${filename}`);
-      } catch (e) {}
-    }
-    
+
+    // SCREENSHOTS DISABLED - uncomment to re-enable
+    // if (SCREENSHOT_ON_ERROR) {
+    //   try {
+    //     const fs = require('fs');
+    //     if (!fs.existsSync(DEBUG_DIR)) fs.mkdirSync(DEBUG_DIR, { recursive: true });
+    //     const filename = `${DEBUG_DIR}/movoto_${Date.now()}.png`;
+    //     await page.screenshot({ path: filename, fullPage: true });
+    //     console.log(`[MOVOTO] Screenshot saved: ${filename}`);
+    //   } catch (e) {}
+    // }
+
     return null;
   }
 }
@@ -287,17 +288,18 @@ async function scrapeZillow(address, page) {
     return price;
   } catch (error) {
     console.error(`[ZILLOW-ERROR] ${address}:`, error.message);
-    
-    if (SCREENSHOT_ON_ERROR) {
-      try {
-        const fs = require('fs');
-        if (!fs.existsSync(DEBUG_DIR)) fs.mkdirSync(DEBUG_DIR, { recursive: true });
-        const filename = `${DEBUG_DIR}/zillow_${Date.now()}.png`;
-        await page.screenshot({ path: filename, fullPage: true });
-        console.log(`[ZILLOW] Screenshot saved: ${filename}`);
-      } catch (e) {}
-    }
-    
+
+    // SCREENSHOTS DISABLED - uncomment to re-enable
+    // if (SCREENSHOT_ON_ERROR) {
+    //   try {
+    //     const fs = require('fs');
+    //     if (!fs.existsSync(DEBUG_DIR)) fs.mkdirSync(DEBUG_DIR, { recursive: true });
+    //     const filename = `${DEBUG_DIR}/zillow_${Date.now()}.png`;
+    //     await page.screenshot({ path: filename, fullPage: true });
+    //     console.log(`[ZILLOW] Screenshot saved: ${filename}`);
+    //   } catch (e) {}
+    // }
+
     return null;
   }
 }

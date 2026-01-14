@@ -332,14 +332,15 @@ async function lookupAddressAgent(page, address) {
   L.info('Card click result:', cardClicked);
 
   if (!cardClicked.clicked) {
-    // Take a screenshot for debugging
-    try {
-      const screenshotPath = `C:/Users/91812/Desktop/Demo-3 Mioym/deal-finder-1/backend/debug-no-cards-${Date.now()}.png`;
-      await page.screenshot({ path: screenshotPath, fullPage: false });
-      L.warn(`No property card found for the address. Screenshot saved: ${screenshotPath}`);
-    } catch (e) {
-      L.warn('No property card found and could not save screenshot');
-    }
+    // SCREENSHOTS DISABLED - uncomment to re-enable
+    // try {
+    //   const screenshotPath = `C:/Users/91812/Desktop/Demo-3 Mioym/deal-finder-1/backend/debug-no-cards-${Date.now()}.png`;
+    //   await page.screenshot({ path: screenshotPath, fullPage: false });
+    //   L.warn(`No property card found for the address. Screenshot saved: ${screenshotPath}`);
+    // } catch (e) {
+    //   L.warn('No property card found and could not save screenshot');
+    // }
+    L.warn('No property card found for the address');
     return { ok: false, error: 'Property not found in Privy' };
   }
 

@@ -155,6 +155,9 @@ async function typeAndConfirm(ctx, inputHandle, address) {
 }
 
 async function captureDebug(page, frame, address, tag='unhandled') {
+  // SCREENSHOTS DISABLED - function now no-op until re-enabled
+  return;
+  /*
   try {
     const safe = String(address).replace(/[^a-z0-9]+/gi, '_').slice(0,140);
     const dir = '/tmp/chase_debug';

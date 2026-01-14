@@ -1062,17 +1062,18 @@ const docs = await col
         console.log(`   ↳ input now: "${inputDump || ''}"`);
       } catch {}
 
-      if (REDFIN_SCREEN_ON_ERROR === '1') {
-        try {
-          ensureDir(REDFIN_DEBUG_DIR);
-          const stamp = Date.now();
-          const base = path.join(REDFIN_DEBUG_DIR, `${stamp}-${String(ids[0])}`);
-          await page.screenshot({ path: `${base}.png`, fullPage: true }).catch(() => {});
-          const html = await page.content().catch(() => '');
-          if (html) fs.writeFileSync(`${base}.html`, html);
-          console.log(`   ↳ saved debug to ${base}.{png,html}`);
-        } catch {}
-      }
+      // SCREENSHOTS DISABLED - uncomment to re-enable
+      // if (REDFIN_SCREEN_ON_ERROR === '1') {
+      //   try {
+      //     ensureDir(REDFIN_DEBUG_DIR);
+      //     const stamp = Date.now();
+      //     const base = path.join(REDFIN_DEBUG_DIR, `${stamp}-${String(ids[0])}`);
+      //     await page.screenshot({ path: `${base}.png`, fullPage: true }).catch(() => {});
+      //     const html = await page.content().catch(() => '');
+      //     if (html) fs.writeFileSync(`${base}.html`, html);
+      //     console.log(`   ↳ saved debug to ${base}.{png,html}`);
+      //   } catch {}
+      // }
       await sleep(400);
     }
 

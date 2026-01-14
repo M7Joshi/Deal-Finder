@@ -777,6 +777,9 @@ async function waitForResultsAny(page, { timeout = 40000 } = {}) {
 }
 
 async function maybeScreenshot(page, label) {
+  // SCREENSHOTS DISABLED - function now no-op until re-enabled
+  return;
+  /*
   try {
     if (String(process.env.BOFA_SCREEN_ON_ERROR || '0') !== '1') return;
     const dir = process.env.BOFA_DEBUG_DIR || '/tmp/bofa_debug';
@@ -785,6 +788,7 @@ async function maybeScreenshot(page, label) {
     const pathOut = `${dir}/bofa_${label}_${ts}.png`;
     await page.screenshot({ path: pathOut, fullPage: true }).catch(() => {});
   } catch {}
+  */
 }
 
 // Fully reload the BoA home with a fresh DOM (same tab)

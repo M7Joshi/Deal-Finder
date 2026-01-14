@@ -431,10 +431,10 @@ async function performBofaLookup(cleanAddress) {
     const foundResults = await waitForResultsAny(page, { timeout: 45000 });
 
     if (!foundResults) {
-      // Take a screenshot to see the error state
-      const errorPath = `./tmp/bofa_error_${Date.now()}.png`;
-      await page.screenshot({ path: errorPath, fullPage: true }).catch(() => {});
-      L.warn('Results section not found, screenshot saved', { path: errorPath });
+      // SCREENSHOTS DISABLED - re-enable by uncommenting below
+      // const errorPath = `./tmp/bofa_error_${Date.now()}.png`;
+      // await page.screenshot({ path: errorPath, fullPage: true }).catch(() => {});
+      L.warn('Results section not found');
 
       const pageContent = await page.content();
 

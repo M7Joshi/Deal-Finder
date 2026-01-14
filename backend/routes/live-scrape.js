@@ -1366,12 +1366,12 @@ async function privyHandler(req, res) {
       L.info('Waiting for autocomplete dropdown...');
       await new Promise(r => setTimeout(r, 3000));
 
-      // DEBUG: Take screenshot of dropdown state
-      try {
-        const screenshotPath = `c:/Users/91812/Desktop/Demo-3 Mioym/deal-finder-1/backend/var/dropdown-${cityToUse.replace(/\s+/g, '-')}.png`;
-        await page.screenshot({ path: screenshotPath, fullPage: false });
-        L.info(`Saved search dropdown screenshot for ${cityToUse}`);
-      } catch (e) {}
+      // SCREENSHOTS DISABLED - uncomment to re-enable
+      // try {
+      //   const screenshotPath = `c:/Users/91812/Desktop/Demo-3 Mioym/deal-finder-1/backend/var/dropdown-${cityToUse.replace(/\s+/g, '-')}.png`;
+      //   await page.screenshot({ path: screenshotPath, fullPage: false });
+      //   L.info(`Saved search dropdown screenshot for ${cityToUse}`);
+      // } catch (e) {}
 
       // Use page.evaluate to find ALL visible dropdown-like elements
       // Also use a position-based approach to find elements near the search input
@@ -2453,8 +2453,8 @@ async function privyHandler(req, res) {
               debugInfo.hasCourtesy = courtesyStart > -1;
 
               // ========== PHONE EXTRACTION ==========
-              // Pattern 1: "List Agent Direct Phone: 678-951-7041" from agent section
-              const phoneLabeled = agentSectionText.match(/List\s+Agent\s+(?:Direct\s+|Preferred\s+)?Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
+              // Pattern 1: "List Agent Direct Phone:" or "List Agent Mobile Phone:" from agent section
+              const phoneLabeled = agentSectionText.match(/List\s+Agent\s+(?:Direct\s+|Preferred\s+|Mobile\s+)?Phone\s*[:\s]\s*([(\d)\s\-\.]+\d)/i);
               if (phoneLabeled) {
                 agentPhone = phoneLabeled[1].trim();
                 debugInfo.foundElements.push({ sel: 'List Agent Phone', text: agentPhone });

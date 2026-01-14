@@ -248,13 +248,13 @@ async function getRealtorEstimate(page, addrString) {
         await wait(500);
       }
       if (!gotValue) {
-        // Take a screenshot to help debugging
-        try {
-          ensureDirSync(SCREENSHOT_DIR);
-          const fname = path.join(SCREENSHOT_DIR, `no_value_${Date.now()}.png`);
-          await page.screenshot({ path: fname, fullPage: true });
-          console.log(`[SNAPSHOT] Saved ${fname}`);
-        } catch {}
+        // SCREENSHOTS DISABLED - uncomment to re-enable
+        // try {
+        //   ensureDirSync(SCREENSHOT_DIR);
+        //   const fname = path.join(SCREENSHOT_DIR, `no_value_${Date.now()}.png`);
+        //   await page.screenshot({ path: fname, fullPage: true });
+        //   console.log(`[SNAPSHOT] Saved ${fname}`);
+        // } catch {}
         // Try next URL, if any
         continue;
       }

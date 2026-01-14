@@ -628,8 +628,9 @@ export async function loginToPrivy(page) {
         await new Promise(r => setTimeout(r, 2000));
 
       } else {
-        L.warn('Email input not found on sign_in after waiting; capturing screenshot.');
-        try{ await page.screenshot({ path: `/tmp/privy-email-missing-${Date.now()}.png`, fullPage:true }); }catch{}
+        L.warn('Email input not found on sign_in after waiting.');
+        // SCREENSHOTS DISABLED - uncomment to re-enable
+        // try{ await page.screenshot({ path: `/tmp/privy-email-missing-${Date.now()}.png`, fullPage:true }); }catch{}
       }
 
       // Wait for either password or OTP
@@ -737,12 +738,13 @@ export async function loginToPrivy(page) {
 
         if (captchaDetected) {
           L.error('CAPTCHA detected on login page - automated login blocked', { type: captchaDetected });
-          try {
-            await page.screenshot({ path: `/tmp/privy-captcha-${Date.now()}.png`, fullPage: true });
-            L.info('CAPTCHA screenshot saved');
-          } catch (ssErr) {
-            L.warn('Failed to save CAPTCHA screenshot', { error: ssErr?.message });
-          }
+          // SCREENSHOTS DISABLED - uncomment to re-enable
+          // try {
+          //   await page.screenshot({ path: `/tmp/privy-captcha-${Date.now()}.png`, fullPage: true });
+          //   L.info('CAPTCHA screenshot saved');
+          // } catch (ssErr) {
+          //   L.warn('Failed to save CAPTCHA screenshot', { error: ssErr?.message });
+          // }
         }
 
         // Submit the form
@@ -796,12 +798,13 @@ export async function loginToPrivy(page) {
 
         if (loginError) {
           L.error('Login error detected on page', { error: loginError });
-          try {
-            await page.screenshot({ path: `/tmp/privy-login-error-${Date.now()}.png`, fullPage: true });
-            L.info('Screenshot saved for login error');
-          } catch (ssErr) {
-            L.warn('Failed to save login error screenshot', { error: ssErr?.message });
-          }
+          // SCREENSHOTS DISABLED - uncomment to re-enable
+          // try {
+          //   await page.screenshot({ path: `/tmp/privy-login-error-${Date.now()}.png`, fullPage: true });
+          //   L.info('Screenshot saved for login error');
+          // } catch (ssErr) {
+          //   L.warn('Failed to save login error screenshot', { error: ssErr?.message });
+          // }
         }
       }
 
@@ -818,12 +821,13 @@ export async function loginToPrivy(page) {
         const timeoutUrl = page.url();
         if (/\/users\/sign_in/i.test(timeoutUrl)) {
           L.error('Still on sign_in page after 60s timeout - login likely failed', { url: timeoutUrl });
-          try {
-            await page.screenshot({ path: `/tmp/privy-login-timeout-${Date.now()}.png`, fullPage: true });
-            L.info('Timeout screenshot saved for debugging');
-          } catch (ssErr) {
-            L.warn('Failed to save timeout screenshot', { error: ssErr?.message });
-          }
+          // SCREENSHOTS DISABLED - uncomment to re-enable
+          // try {
+          //   await page.screenshot({ path: `/tmp/privy-login-timeout-${Date.now()}.png`, fullPage: true });
+          //   L.info('Timeout screenshot saved for debugging');
+          // } catch (ssErr) {
+          //   L.warn('Failed to save timeout screenshot', { error: ssErr?.message });
+          // }
           // Capture page HTML for debugging
           try {
             const pageContent = await page.evaluate(() => document.body?.innerHTML?.substring(0, 5000) || '');
@@ -1064,7 +1068,8 @@ export async function loginToPrivy(page) {
     }
   } catch (error) {
     __privyLoginInFlight = false;
-    try{ await page.screenshot({ path: `/tmp/privy-login-fail-${Date.now()}.png`, fullPage:true }); }catch{}
+    // SCREENSHOTS DISABLED - uncomment to re-enable
+    // try{ await page.screenshot({ path: `/tmp/privy-login-fail-${Date.now()}.png`, fullPage:true }); }catch{}
     try {
       const html = await page.content();
       logPrivy.debug('Privy login DOM snippet', { head: html.slice(0, 4000) });

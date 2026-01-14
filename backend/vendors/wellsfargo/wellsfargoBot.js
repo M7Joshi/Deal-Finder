@@ -662,13 +662,14 @@ class WellsFargoBot {
       let pageHTML = '';
       let pageText = '';
 
-      try {
-        const debugScreenshotPath = `wellsfargo-debug-${Date.now()}.png`;
-        await this.page.screenshot({ path: debugScreenshotPath, fullPage: true });
-        L.info('Debug screenshot saved', { path: debugScreenshotPath });
-      } catch (err) {
-        L.warn('Could not take screenshot', { error: err.message });
-      }
+      // SCREENSHOTS DISABLED - uncomment to re-enable
+      // try {
+      //   const debugScreenshotPath = `wellsfargo-debug-${Date.now()}.png`;
+      //   await this.page.screenshot({ path: debugScreenshotPath, fullPage: true });
+      //   L.info('Debug screenshot saved', { path: debugScreenshotPath });
+      // } catch (err) {
+      //   L.warn('Could not take screenshot', { error: err.message });
+      // }
 
       // Get page HTML to debug
       try {
