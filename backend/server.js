@@ -8,6 +8,7 @@ import connectDB from './db/db.js';
 import { log } from './utils/logger.js';
 import { ensureMasterAdmin } from './utils/ensureMasterAdmin.js';
 import agentOffersRoutes from './routes/agent_offers.js';
+import runAgentOffers from './vendors/agent_offers.js';
 import mongoose from 'mongoose';
 
 dotenv.config();
@@ -262,6 +263,37 @@ async function janitorOnce() {
   }
 })();
 // ---- End Boot Janitor ----
+
+// ---- Agent Offers Scheduler: runs every 2 hours ----
+const AGENT_OFFERS_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 hours
+let agentOffersRunning = false;
+
+async function runAgentOffersScheduled() {
+  if (agentOffersRunning) {
+    L.info('[AgentOffers] Skipping - previous run still in progress');
+    return;
+  }
+  agentOffersRunning = true;
+  try {
+    L.info('[AgentOffers] Starting scheduled run...');
+    await runAgentOffers();
+    L.info('[AgentOffers] Scheduled run completed');
+  } catch (e) {
+    L.error('[AgentOffers] Scheduled run failed', { error: e?.message || String(e) });
+  } finally {
+    agentOffersRunning = false;
+  }
+}
+
+// Start agent offers scheduler after 30 seconds (let server start first)
+setTimeout(() => {
+  L.info('[AgentOffers] Scheduler started - will run every 2 hours');
+  // Run immediately on startup, then every 2 hours
+  runAgentOffersScheduled().catch(() => {});
+  setInterval(() => runAgentOffersScheduled().catch(() => {}), AGENT_OFFERS_INTERVAL_MS).unref();
+}, 30000);
+// ---- End Agent Offers Scheduler ----
+
 const app = express();
 const PORT = Number(process.env.PORT || 3015);
 
