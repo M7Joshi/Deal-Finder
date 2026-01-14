@@ -294,6 +294,12 @@ export async function runAllCities() {
   }
 
   const progress = await getProgress();
+  console.log(`[Redfin] DEBUG - Raw progress from DB:`, JSON.stringify({
+    currentState: progress.currentState,
+    currentStateIndex: progress.currentStateIndex,
+    processedCitiesCount: (progress.processedCities || []).length,
+    _id: progress._id?.toString()
+  }));
   const startStateIndex = progress.currentStateIndex || 0;
   const processedCitiesSet = new Set(progress.processedCities || []);
 
