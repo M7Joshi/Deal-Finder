@@ -1295,7 +1295,7 @@ const cleanAddress = (address?: string | null): string => {
           background: '#f3f4f6',
         }}
       >
-        <div style={{ width: isMobile ? 1100 : 1000, height: 8 }} />
+        <div style={{ width: isMobile ? 1300 : 1200, height: 8 }} />
       </div>
 
       <div
@@ -1310,7 +1310,7 @@ const cleanAddress = (address?: string | null): string => {
           WebkitOverflowScrolling: 'touch',
         }}
       >
-        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: isMobile ? 1100 : 1000 }}>
+        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: isMobile ? 1300 : 1200 }}>
           <thead>
             <tr style={{ background: '#111827', color: '#fff' }}>
               {[
