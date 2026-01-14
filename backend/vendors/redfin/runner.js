@@ -9,8 +9,8 @@ import ScrapedDeal from '../../models/ScrapedDeal.js';
 // Import control object for abort checking
 import { control } from '../runAutomation.js';
 
-// Track URLs already processed for agent details to avoid duplicate calls
-const processedAgentUrls = new Set();
+// Track URLs already processed to avoid duplicate processing entirely
+const processedPropertyUrls = new Set();
 
 // Close all shared browsers
 async function closeSharedBrowser() {
@@ -51,7 +51,7 @@ async function markCityProcessed(cityKey) {
 // Reset progress (for starting fresh cycle)
 export async function resetProgress() {
   // Clear the URL cache to start fresh
-  processedAgentUrls.clear();
+  processedPropertyUrls.clear();
 
   await ScraperProgress.updateOne(
     { scraper: 'redfin' },
@@ -186,6 +186,14 @@ async function runCity(stateCode, city) {
       const url = home.url ? `https://www.redfin.com${home.url}` : null;
       const mlsId = home.mlsId?.value || home.mlsId || null;
 
+      // Skip if we've already processed this property URL (prevents duplicates from overlapping city searches)
+      if (url && processedPropertyUrls.has(url)) {
+        continue;
+      }
+      if (url) {
+        processedPropertyUrls.add(url);
+      }
+
       const fullAddress = `${streetLine}, ${cityName}, ${state} ${zip}`.trim();
 
       // Agent info from API (if available)
@@ -195,10 +203,8 @@ async function runCity(stateCode, city) {
       let brokerage = home.brokerName || null;
 
       // Optional: Deep scrape for agent details (slower)
-      // Skip if we've already processed this URL to avoid duplicate calls
-      if (USE_AGENT_ENRICHMENT && url && !processedAgentUrls.has(url)) {
+      if (USE_AGENT_ENRICHMENT && url) {
         try {
-          processedAgentUrls.add(url); // Mark as processed BEFORE calling to prevent race conditions
           const enriched = await extractAgentDetails(url);
           if (enriched) {
             agentName = enriched.agentName || agentName;
@@ -384,8 +390,8 @@ export async function runAllCities() {
       console.log('[Redfin] ✅ Completed FULL CYCLE through all states!');
       console.log('[Redfin] 🔄 Resetting progress to start a new cycle...');
       // Clear URL cache before starting new cycle
-      console.log(`[Redfin] Clearing URL cache (${processedAgentUrls.size} URLs processed)`);
-      processedAgentUrls.clear();
+      console.log(`[Redfin] Clearing URL cache (${processedPropertyUrls.size} properties processed)`);
+      processedPropertyUrls.clear();
       // Increment cycle count and reset progress for next cycle
       await ScraperProgress.updateOne(
         { scraper: 'redfin' },
