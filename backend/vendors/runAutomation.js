@@ -436,7 +436,7 @@ function getRequestedJobsRaw() {
 
 // --- Job selection (ENV/CLI) ---
 const ALL_JOBS = ['privy', 'home_valuations', 'current_listings', 'agent_offers', 'redfin', 'bofa', 'chase', 'amv_daemon', 'scraped_deals_amv'];
-const DEFAULT_JOBS = ['privy','redfin','home_valuations','agent_offers'];
+const DEFAULT_JOBS = ['privy','home_valuations','agent_offers'];
 
 // Coerce any input (string/array/set) into a Set of valid job keys
 function toJobSet(input) {
