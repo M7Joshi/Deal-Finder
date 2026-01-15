@@ -930,11 +930,14 @@ const cleanAddress = (address?: string | null): string => {
     const prev = rows;
     setRows(cur => cur.filter(x => getId(x) !== id));
     try {
-      const res = await deletePropertyById(String(id));
-      if ((res as any)?.ok || res === undefined) {
+      const res = await apiFetch(`/api/scraped-deals/${id}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (data.ok || res.ok) {
         setToast({ open: true, msg: 'Deal deleted', sev: 'success' });
       } else {
-        setToast({ open: true, msg: 'Deleted', sev: 'success' });
+        setToast({ open: true, msg: data.error || 'Failed to delete', sev: 'error' });
       }
     } catch (e: any) {
       setRows(prev);
