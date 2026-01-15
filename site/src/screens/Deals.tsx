@@ -619,7 +619,8 @@ const cleanAddress = (address?: string | null): string => {
       console.log('[Deals:loadDeals] Starting fetch...');
 
       // Fetch ONLY real deals (AMV >= 2x LP AND AMV > $200k) from the endpoint
-      const response = await apiFetch('/api/scraped-deals/deals?limit=500');
+      // Increased limit to 2000 to fetch all deals without truncation
+      const response = await apiFetch('/api/scraped-deals/deals?limit=2000');
       console.log('[Deals:loadDeals] Response status:', response.status);
 
       const data = await response.json();
@@ -680,11 +681,8 @@ const cleanAddress = (address?: string | null): string => {
       });
 
       setRows(normalized);
-      setTotals(prev => ({
-        ...prev,
-        deals: normalized.length,
-        nonDeals: 0,
-      }));
+      // Don't overwrite totals here - loadSummary() fetches the correct totals from the stats endpoint
+      // The normalized.length may be limited by the API limit parameter
       if (DEBUG) {
         try {
           console.table(
@@ -816,34 +814,12 @@ const cleanAddress = (address?: string | null): string => {
     }
   }, [selected]);
 
-  // initial load + refresh when page becomes visible again or when navigating to this page
+  // initial load only - removed excessive refresh triggers that caused constant reloading
   useEffect(() => {
     loadSummary();
     loadDeals();
-
-    // Refresh data when user navigates back to this tab/page
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        loadSummary();
-        loadDeals();
-      }
-    };
-
-    // Refresh data when window gets focus (e.g., user switches back from another tab)
-    const handleFocus = () => {
-      loadSummary();
-      loadDeals();
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('focus', handleFocus);
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', handleFocus);
-    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.pathname]); // Re-run when navigating to this page
+  }, []); // Only run once on mount
 
   useEffect(() => {
     // Reset Street View as default when opening a property
