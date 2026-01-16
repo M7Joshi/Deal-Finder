@@ -22,6 +22,8 @@ import AgentLookup from "./screens/AgentLookup.tsx";
 import EmailSent from "./screens/EmailSent.tsx";
 import FollowUp from "./screens/FollowUp.tsx";
 import DealStatus from "./screens/DealStatus.tsx";
+import RedfinAMVTest from "./screens/RedfinAMVTest.tsx";
+import RedfinAMVLookup from "./screens/RedfinAMVLookup.tsx";
 import Login from "./components/Login/Login.tsx";
 import { verify, clearToken } from "./helpers";
 
@@ -74,6 +76,8 @@ const navItems = [
   { label: "Privy Fetcher", to: "/privy-fetcher", adminOnly: true },  // Admin only
   { label: "Redfin Fetcher", to: "/redfin-fetcher", adminOnly: true },  // Admin only
   { label: "BofA Viewer", to: "/bofa-viewer", adminOnly: true },  // Admin only
+  { label: "AMV Speed Test", to: "/amv-speed-test", adminOnly: true },  // Admin only - New Redfin AMV API test
+  { label: "Redfin AMV Lookup", to: "/redfin-amv-lookup", adminOnly: true },  // Admin only - Test AMV lookup
   { label: "Manage Subadmins", to: "/manage-subadmins", adminOnly: true },
   { label: "Users", to: "/users", adminOnly: true },
 ];
@@ -316,6 +320,14 @@ export default function App() {
             } />
             <Route path="bofa-viewer" element={
               (user?.isAdmin || user?.role === "admin") ? <BofaViewer /> : <Navigate to="/deals" replace />
+            } />
+            {/* AMV Speed Test - New Redfin AMV API test page */}
+            <Route path="amv-speed-test" element={
+              (user?.isAdmin || user?.role === "admin") ? <RedfinAMVTest /> : <Navigate to="/deals" replace />
+            } />
+            {/* Redfin AMV Lookup - Simple AMV lookup by URL/Property ID */}
+            <Route path="redfin-amv-lookup" element={
+              (user?.isAdmin || user?.role === "admin") ? <RedfinAMVLookup /> : <Navigate to="/deals" replace />
             } />
             {/* <Route path="agent-fetcher" element={<AgentFetcher />} /> */}{/* Commented out - can enable later */}
             {/* Admin-only routes */}
