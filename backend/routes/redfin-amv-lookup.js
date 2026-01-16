@@ -139,9 +139,18 @@ async function fetchRedfinAMV(propertyId) {
   try {
     const response = await fetch(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-        'Referer': 'https://www.redfin.com/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': `https://www.redfin.com/`,
+        'Origin': 'https://www.redfin.com',
+        'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
       },
     });
 
@@ -559,7 +568,8 @@ router.get('/stream-loop', async (req, res) => {
             ...resultData,
           })}\n\n`);
 
-          await new Promise(r => setTimeout(r, 200));
+          // Delay between AMV requests to avoid rate limiting
+          await new Promise(r => setTimeout(r, 500));
         }
 
         // Update progress after processing city
