@@ -406,6 +406,15 @@ router.get('/stream-loop', async (req, res) => {
 
   const isActive = () => activeStreams.get(streamId)?.active;
 
+  // Keepalive ping every 20 seconds to prevent Render timeout
+  const keepaliveInterval = setInterval(() => {
+    if (isActive()) {
+      res.write(`: keepalive\n\n`);
+    } else {
+      clearInterval(keepaliveInterval);
+    }
+  }, 20000);
+
   try {
     // Get progress to resume from
     const progress = await getProgress();
@@ -548,6 +557,10 @@ router.get('/stream-loop', async (req, res) => {
       startCityIndex = -1;
     }
 
+    // Cycle complete - reset progress for next cycle
+    console.log(`[Redfin AMV Lookup] Cycle complete! Processed ${totalProcessed} addresses, ${totalDeals} deals found`);
+    await resetProgress();
+
     const totalTime = Date.now() - startTime;
     res.write(`data: ${JSON.stringify({
       type: 'complete',
@@ -563,6 +576,7 @@ router.get('/stream-loop', async (req, res) => {
   } catch (err) {
     res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
   } finally {
+    clearInterval(keepaliveInterval);
     activeStreams.delete(streamId);
     res.end();
   }
