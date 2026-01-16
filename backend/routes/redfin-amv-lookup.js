@@ -378,6 +378,20 @@ router.post('/reset', async (req, res) => {
 });
 
 /**
+ * OPTIONS /api/redfin-amv-lookup/stream-loop
+ * Handle CORS preflight for SSE endpoint
+ */
+router.options('/stream-loop', (req, res) => {
+  const origin = req.headers.origin || '*';
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Max-Age', '86400');
+  res.status(204).end();
+});
+
+/**
  * GET /api/redfin-amv-lookup/stream-loop
  * SSE endpoint - loops through states/cities, scrapes listings, fetches AMV
  * Resumes from where it left off
@@ -385,10 +399,14 @@ router.post('/reset', async (req, res) => {
 router.get('/stream-loop', async (req, res) => {
   console.log('[Redfin AMV Lookup] Stream-loop started');
 
+  // Set proper CORS headers for SSE - use the requesting origin
+  const origin = req.headers.origin || '*';
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx/proxy buffering
   res.flushHeaders();
 
   const streamId = Date.now().toString();
