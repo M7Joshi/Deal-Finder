@@ -319,6 +319,8 @@ import wellsfargoRoutes from './routes/wellsfargo.js';
 import enrichRedfinAgentRoutes from './routes/enrich-redfin-agent.js';
 import agentLookupRoutes from './routes/agent-lookup.js';
 import dealPipelineRoutes from './routes/dealPipeline.js';
+import redfinAmvTestRoutes from './routes/redfin-amv-test.js';
+import redfinAmvLookupRoutes from './routes/redfin-amv-lookup.js';
 
 // Global guards: never crash the process; log and continue
 process.on('warning', (w) => {
@@ -447,6 +449,8 @@ app.use('/api/agent-lookup', agentLookupRoutes);
 // Dedicated dashboard prefix
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/deal-pipeline', dealPipelineRoutes);
+app.use('/api/redfin-amv-test', redfinAmvTestRoutes);
+app.use('/api/redfin-amv-lookup', redfinAmvLookupRoutes);
 
 // Start the server; connect to DB BEFORE starting server to avoid race conditions
 if (!IS_WORKER) {
