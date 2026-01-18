@@ -1132,12 +1132,14 @@ async function runPrivyWithBofA() {
 
       // Scrape more addresses (will stop when batch limit reached)
       log.info(`PRIVY: Scraping addresses...`);
-      const startCount = await ScrapedDeal.countDocuments({ source: 'privy' }).catch(() => 0);
+      // Use regex to count ALL privy sources (privy, privy-Tear, privy-flip)
+      const startCount = await ScrapedDeal.countDocuments({ source: { $regex: /^privy/ } }).catch(() => 0);
 
       resetBatchCounter();
       await runAutomation(new Set(['privy']));
 
-      const endCount = await ScrapedDeal.countDocuments({ source: 'privy' }).catch(() => 0);
+      // Use regex to count ALL privy sources (privy, privy-Tear, privy-flip)
+      const endCount = await ScrapedDeal.countDocuments({ source: { $regex: /^privy/ } }).catch(() => 0);
       const newAddresses = endCount - startCount;
       privyAddressCount += newAddresses;
 
