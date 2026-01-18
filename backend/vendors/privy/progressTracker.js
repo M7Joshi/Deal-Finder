@@ -51,13 +51,20 @@ function extractCityFromUrl(url) {
 export async function loadProgress() {
   try {
     const doc = await ScraperProgress.findOne({ scraper: SCRAPER_NAME }).lean();
+    // DEBUG: Log raw document to see what Mongoose returns
+    console.log('[PrivyProgress] RAW doc from MongoDB:', {
+      filterCycleIndex: doc?.filterCycleIndex,
+      completedStates: doc?.completedStates?.length,
+      processedCities: doc?.processedCities?.length,
+      currentState: doc?.currentState,
+    });
     if (doc) {
       // Convert MongoDB doc to our progress format
       const progress = {
         lastState: doc.lastState || null,
         lastCityIndex: doc.currentCityIndex ?? -1,
         currentState: doc.currentState || null,
-        completedStates: doc.processedCities || [], // Using processedCities to store completed states
+        completedStates: doc.completedStates || doc.processedCities || [], // Prefer completedStates, fallback to processedCities for migration
         lastUpdated: doc.updatedAt?.toISOString() || null,
         totalCitiesProcessed: doc.totalScraped || 0,
         totalStatesCompleted: doc.currentStateIndex || 0,
@@ -93,15 +100,23 @@ export function loadProgressSync() {
  * Save progress to MongoDB
  */
 export async function saveProgress(progress) {
+  // DEBUG: Log what we're about to save
+  console.log('[PrivyProgress] SAVING to MongoDB:', {
+    filterCycleIndex: progress.filterCycleIndex,
+    currentState: progress.currentState,
+    completedStates: progress.completedStates?.length || 0,
+    totalCitiesProcessed: progress.totalCitiesProcessed,
+  });
   try {
-    await ScraperProgress.findOneAndUpdate(
+    const result = await ScraperProgress.findOneAndUpdate(
       { scraper: SCRAPER_NAME },
       {
         scraper: SCRAPER_NAME,
         currentState: progress.currentState,
         currentCityIndex: progress.lastCityIndex,
         currentStateIndex: progress.totalStatesCompleted,
-        processedCities: progress.completedStates, // Store completed states here
+        completedStates: progress.completedStates, // Store completed states directly
+        processedCities: progress.completedStates, // Keep for backward compatibility
         totalScraped: progress.totalCitiesProcessed,
         cycleCount: progress.cycleCount,
         filterCycleIndex: progress.filterCycleIndex || 0,
@@ -110,6 +125,8 @@ export async function saveProgress(progress) {
       },
       { upsert: true, new: true }
     );
+    // DEBUG: Log what was actually saved
+    console.log('[PrivyProgress] SAVED result filterCycleIndex:', result?.filterCycleIndex);
   } catch (e) {
     console.warn('[PrivyProgress] Failed to save progress to MongoDB:', e.message);
   }
