@@ -1,6 +1,7 @@
 // routes/bofa-internal.js
 // Internal BofA lookup function for use by scheduler/automation
 // This exports the same lookup logic used by /api/bofa/batch endpoint
+// Direct mode enabled by default - proxy disabled
 
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
