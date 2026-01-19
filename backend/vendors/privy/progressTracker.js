@@ -51,13 +51,20 @@ function extractCityFromUrl(url) {
 export async function loadProgress() {
   try {
     const doc = await ScraperProgress.findOne({ scraper: SCRAPER_NAME }).lean();
+    // DEBUG: Log raw document to see what Mongoose returns
+    console.log('[PrivyProgress] RAW doc from MongoDB:', {
+      filterCycleIndex: doc?.filterCycleIndex,
+      completedStates: doc?.completedStates?.length,
+      processedCities: doc?.processedCities?.length,
+      currentState: doc?.currentState,
+    });
     if (doc) {
       // Convert MongoDB doc to our progress format
       const progress = {
         lastState: doc.lastState || null,
         lastCityIndex: doc.currentCityIndex ?? -1,
         currentState: doc.currentState || null,
-        completedStates: doc.processedCities || [], // Using processedCities to store completed states
+        completedStates: doc.completedStates || doc.processedCities || [], // Prefer completedStates, fallback to processedCities for migration
         lastUpdated: doc.updatedAt?.toISOString() || null,
         totalCitiesProcessed: doc.totalScraped || 0,
         totalStatesCompleted: doc.currentStateIndex || 0,
@@ -91,25 +98,53 @@ export function loadProgressSync() {
 
 /**
  * Save progress to MongoDB
+ *
+ * IMPORTANT: This function uses ATOMIC UPDATES with $set to only update specific fields.
+ * This prevents stale in-memory values from overwriting manually set DB values like filterCycleIndex.
+ *
+ * Fields that are ALWAYS preserved from DB (never overwritten by in-memory):
+ * - filterCycleIndex (only changed by startNewCycle)
+ *
+ * Fields that are updated from in-memory progress:
+ * - currentState, currentCityIndex, completedStates, totalScraped, cycleCount, lastState
  */
-export async function saveProgress(progress) {
+export async function saveProgress(progress, options = {}) {
   try {
-    await ScraperProgress.findOneAndUpdate(
+    // Build update object - only include fields we want to update
+    const updateFields = {
+      currentState: progress.currentState,
+      currentCityIndex: progress.lastCityIndex,
+      currentStateIndex: progress.totalStatesCompleted,
+      completedStates: progress.completedStates,
+      processedCities: progress.completedStates, // Keep for backward compatibility
+      totalScraped: progress.totalCitiesProcessed,
+      cycleCount: progress.cycleCount,
+      lastState: progress.lastState,
+      updatedAt: new Date(),
+    };
+
+    // Only update filterCycleIndex if explicitly requested (e.g., from startNewCycle)
+    if (options.updateFilterCycleIndex) {
+      updateFields.filterCycleIndex = progress.filterCycleIndex;
+      console.log('[PrivyProgress] Updating filterCycleIndex to:', progress.filterCycleIndex);
+    }
+
+    // DEBUG: Log what we're about to save
+    console.log('[PrivyProgress] SAVING to MongoDB:', {
+      currentState: progress.currentState,
+      completedStates: progress.completedStates?.length || 0,
+      totalCitiesProcessed: progress.totalCitiesProcessed,
+      updatingFilterCycleIndex: options.updateFilterCycleIndex || false,
+    });
+
+    const result = await ScraperProgress.findOneAndUpdate(
       { scraper: SCRAPER_NAME },
-      {
-        scraper: SCRAPER_NAME,
-        currentState: progress.currentState,
-        currentCityIndex: progress.lastCityIndex,
-        currentStateIndex: progress.totalStatesCompleted,
-        processedCities: progress.completedStates, // Store completed states here
-        totalScraped: progress.totalCitiesProcessed,
-        cycleCount: progress.cycleCount,
-        filterCycleIndex: progress.filterCycleIndex || 0,
-        lastState: progress.lastState,
-        updatedAt: new Date(),
-      },
+      { $set: updateFields },
       { upsert: true, new: true }
     );
+
+    // DEBUG: Log what was actually saved
+    console.log('[PrivyProgress] SAVED - filterCycleIndex in DB:', result?.filterCycleIndex);
   } catch (e) {
     console.warn('[PrivyProgress] Failed to save progress to MongoDB:', e.message);
   }
@@ -176,7 +211,8 @@ export async function startNewCycle(progress) {
   progress.lastCityIndex = -1;
   progress.lastUpdated = new Date().toISOString();
 
-  await saveProgress(progress);
+  // IMPORTANT: Pass updateFilterCycleIndex=true since startNewCycle is the ONLY place that should change it
+  await saveProgress(progress, { updateFilterCycleIndex: true });
   return progress;
 }
 

@@ -1671,9 +1671,13 @@ const scrapePropertiesV1 = async (page) => {
   // Load progress to resume from where we left off (async - uses MongoDB)
   const progress = await loadProgress();
 
+  // DEBUG: Log the exact filterCycleIndex we loaded
+  logPrivy.info(`[DEBUG] Loaded filterCycleIndex: ${progress.filterCycleIndex}`);
+
   // Get current filter configuration (privy, privy-Tear, or privy-flip)
   const filterConfig = getCurrentFilterConfig(progress);
   logPrivy.info(`Current filter cycle: ${filterConfig.source} (${filterConfig.project_type} + ${filterConfig.spread_type})`);
+  logPrivy.info(`[DEBUG] filterConfig.index: ${filterConfig.index}, source: ${filterConfig.source}`);
   logPrivy.info('Privy scraper starting with progress', getProgressSummary(progress));
 
   // Blocked states - excluded from scraping (match Redfin's BLOCKED_STATES)

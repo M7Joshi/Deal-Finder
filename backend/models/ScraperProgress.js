@@ -25,6 +25,12 @@ const scraperProgressSchema = new mongoose.Schema({
   // Cycle count (how many full cycles through all states)
   cycleCount: { type: Number, default: 0 },
 
+  // Filter cycle index (0=privy, 1=privy-Tear, 2=privy-flip)
+  filterCycleIndex: { type: Number, default: 0 },
+
+  // Completed states for the current filter cycle
+  completedStates: { type: [String], default: [] },
+
   // Last update timestamp
   updatedAt: { type: Date, default: Date.now },
 
