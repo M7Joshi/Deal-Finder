@@ -98,16 +98,26 @@ export function loadProgressSync() {
 
 /**
  * Save progress to MongoDB
+ * IMPORTANT: filterCycleIndex is READ from DB first to prevent stale in-memory values from overwriting it
  */
 export async function saveProgress(progress) {
-  // DEBUG: Log what we're about to save
-  console.log('[PrivyProgress] SAVING to MongoDB:', {
-    filterCycleIndex: progress.filterCycleIndex,
-    currentState: progress.currentState,
-    completedStates: progress.completedStates?.length || 0,
-    totalCitiesProcessed: progress.totalCitiesProcessed,
-  });
   try {
+    // CRITICAL: Read current filterCycleIndex from DB to prevent stale overwrites
+    const currentDoc = await ScraperProgress.findOne({ scraper: SCRAPER_NAME }).lean();
+    const dbFilterCycleIndex = currentDoc?.filterCycleIndex;
+
+    // Use DB value if it exists, otherwise use progress value
+    const filterCycleIndexToSave = dbFilterCycleIndex !== undefined ? dbFilterCycleIndex : (progress.filterCycleIndex || 0);
+
+    // DEBUG: Log what we're about to save
+    console.log('[PrivyProgress] SAVING to MongoDB:', {
+      filterCycleIndex: filterCycleIndexToSave,
+      fromDB: dbFilterCycleIndex,
+      fromMemory: progress.filterCycleIndex,
+      currentState: progress.currentState,
+      completedStates: progress.completedStates?.length || 0,
+    });
+
     const result = await ScraperProgress.findOneAndUpdate(
       { scraper: SCRAPER_NAME },
       {
@@ -119,7 +129,7 @@ export async function saveProgress(progress) {
         processedCities: progress.completedStates, // Keep for backward compatibility
         totalScraped: progress.totalCitiesProcessed,
         cycleCount: progress.cycleCount,
-        filterCycleIndex: progress.filterCycleIndex || 0,
+        filterCycleIndex: filterCycleIndexToSave, // Use DB value to prevent stale overwrites
         lastState: progress.lastState,
         updatedAt: new Date(),
       },
