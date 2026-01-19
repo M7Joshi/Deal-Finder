@@ -12,10 +12,11 @@ const SCRAPER_NAME = 'privy';
 
 // Filter cycle configurations
 // Each cycle uses different project_type and spread_type
+// ORDER: privy (all states) → privy-flip (all states) → privy-Tear (all states) → Repeat
 export const FILTER_CYCLES = [
   { index: 0, source: 'privy',       project_type: 'buy_hold', spread_type: 'umv' },
-  { index: 1, source: 'privy-Tear',  project_type: 'scrape',   spread_type: 'arv' },
-  { index: 2, source: 'privy-flip',  project_type: 'flip',     spread_type: 'arv' },
+  { index: 1, source: 'privy-flip',  project_type: 'flip',     spread_type: 'arv' },
+  { index: 2, source: 'privy-Tear',  project_type: 'scrape',   spread_type: 'arv' },
 ];
 
 // Default progress state
