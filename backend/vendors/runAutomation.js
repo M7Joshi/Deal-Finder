@@ -640,8 +640,8 @@ async function bootstrapScheduler() {
 const BREAK_MS = Number(process.env.BREAK_MS || 120000);
 const SCRAPER_LIMIT = Number(process.env.SCRAPER_LIMIT || 500);
 
-// SHARED BofA: 20 browsers for whichever source needs them
-const BOFA_TOTAL_CONCURRENCY = Number(process.env.BOFA_TOTAL_CONCURRENCY || 20);
+// SHARED BofA: 10 browsers for whichever source needs them (reduced to avoid rate limiting)
+const BOFA_TOTAL_CONCURRENCY = Number(process.env.BOFA_TOTAL_CONCURRENCY || 10);
 
 // Batch size before triggering BofA (500 addresses per scraper)
 const BOFA_TRIGGER_BATCH = Number(process.env.BOFA_TRIGGER_BATCH || 500);
