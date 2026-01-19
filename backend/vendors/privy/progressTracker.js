@@ -98,45 +98,53 @@ export function loadProgressSync() {
 
 /**
  * Save progress to MongoDB
- * IMPORTANT: filterCycleIndex is READ from DB first to prevent stale in-memory values from overwriting it
+ *
+ * IMPORTANT: This function uses ATOMIC UPDATES with $set to only update specific fields.
+ * This prevents stale in-memory values from overwriting manually set DB values like filterCycleIndex.
+ *
+ * Fields that are ALWAYS preserved from DB (never overwritten by in-memory):
+ * - filterCycleIndex (only changed by startNewCycle)
+ *
+ * Fields that are updated from in-memory progress:
+ * - currentState, currentCityIndex, completedStates, totalScraped, cycleCount, lastState
  */
-export async function saveProgress(progress) {
+export async function saveProgress(progress, options = {}) {
   try {
-    // CRITICAL: Read current filterCycleIndex from DB to prevent stale overwrites
-    const currentDoc = await ScraperProgress.findOne({ scraper: SCRAPER_NAME }).lean();
-    const dbFilterCycleIndex = currentDoc?.filterCycleIndex;
+    // Build update object - only include fields we want to update
+    const updateFields = {
+      currentState: progress.currentState,
+      currentCityIndex: progress.lastCityIndex,
+      currentStateIndex: progress.totalStatesCompleted,
+      completedStates: progress.completedStates,
+      processedCities: progress.completedStates, // Keep for backward compatibility
+      totalScraped: progress.totalCitiesProcessed,
+      cycleCount: progress.cycleCount,
+      lastState: progress.lastState,
+      updatedAt: new Date(),
+    };
 
-    // Use DB value if it exists, otherwise use progress value
-    const filterCycleIndexToSave = dbFilterCycleIndex !== undefined ? dbFilterCycleIndex : (progress.filterCycleIndex || 0);
+    // Only update filterCycleIndex if explicitly requested (e.g., from startNewCycle)
+    if (options.updateFilterCycleIndex) {
+      updateFields.filterCycleIndex = progress.filterCycleIndex;
+      console.log('[PrivyProgress] Updating filterCycleIndex to:', progress.filterCycleIndex);
+    }
 
     // DEBUG: Log what we're about to save
     console.log('[PrivyProgress] SAVING to MongoDB:', {
-      filterCycleIndex: filterCycleIndexToSave,
-      fromDB: dbFilterCycleIndex,
-      fromMemory: progress.filterCycleIndex,
       currentState: progress.currentState,
       completedStates: progress.completedStates?.length || 0,
+      totalCitiesProcessed: progress.totalCitiesProcessed,
+      updatingFilterCycleIndex: options.updateFilterCycleIndex || false,
     });
 
     const result = await ScraperProgress.findOneAndUpdate(
       { scraper: SCRAPER_NAME },
-      {
-        scraper: SCRAPER_NAME,
-        currentState: progress.currentState,
-        currentCityIndex: progress.lastCityIndex,
-        currentStateIndex: progress.totalStatesCompleted,
-        completedStates: progress.completedStates, // Store completed states directly
-        processedCities: progress.completedStates, // Keep for backward compatibility
-        totalScraped: progress.totalCitiesProcessed,
-        cycleCount: progress.cycleCount,
-        filterCycleIndex: filterCycleIndexToSave, // Use DB value to prevent stale overwrites
-        lastState: progress.lastState,
-        updatedAt: new Date(),
-      },
+      { $set: updateFields },
       { upsert: true, new: true }
     );
+
     // DEBUG: Log what was actually saved
-    console.log('[PrivyProgress] SAVED result filterCycleIndex:', result?.filterCycleIndex);
+    console.log('[PrivyProgress] SAVED - filterCycleIndex in DB:', result?.filterCycleIndex);
   } catch (e) {
     console.warn('[PrivyProgress] Failed to save progress to MongoDB:', e.message);
   }
@@ -203,7 +211,8 @@ export async function startNewCycle(progress) {
   progress.lastCityIndex = -1;
   progress.lastUpdated = new Date().toISOString();
 
-  await saveProgress(progress);
+  // IMPORTANT: Pass updateFilterCycleIndex=true since startNewCycle is the ONLY place that should change it
+  await saveProgress(progress, { updateFilterCycleIndex: true });
   return progress;
 }
 
