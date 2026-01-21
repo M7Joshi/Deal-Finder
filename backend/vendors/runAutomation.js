@@ -2096,9 +2096,9 @@ const selectedStates = stateList; // keep var for logs if needed
           log.info(`ScrapedDeal AMV: Found ${pendingCount} pending addresses (>= ${AMV_THRESHOLD}), starting AMV phase...`);
 
           // Use same batch size and concurrency as RedfinFetcher page
-          // Default to 20 parallel browsers for faster processing
+          // Default to 10 parallel browsers for more stable processing
           const BATCH_SIZE = Math.max(1, Number(process.env.SCRAPED_DEALS_AMV_BATCH || 500));
-          const CONCURRENCY = Math.max(1, Math.min(20, Number(process.env.SCRAPED_DEALS_AMV_CONCURRENCY || 20)));
+          const CONCURRENCY = Math.max(1, Math.min(10, Number(process.env.SCRAPED_DEALS_AMV_CONCURRENCY || 10)));
           log.info('ScrapedDeal AMV: Fetching AMV for deals without valuation...', { batchSize: BATCH_SIZE, concurrency: CONCURRENCY });
 
           // Find ScrapedDeal entries that don't have AMV yet
