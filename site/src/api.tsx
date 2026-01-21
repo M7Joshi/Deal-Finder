@@ -178,6 +178,31 @@ export async function updatePropertyBasic(id: string, payload: {
   return asJson(res);
 }
 
+// === ScrapedDeals: edit ===
+export async function updateScrapedDeal(id: string, payload: {
+  fullAddress?: string | null;
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  listingPrice?: number | null;
+  amv?: number | null;
+  beds?: number | null;
+  baths?: number | null;
+  sqft?: number | null;
+  agentName?: string | null;
+  agentPhone?: string | null;
+  agentEmail?: string | null;
+  brokerage?: string | null;
+}) {
+  const res = await fetch(`${BASE}/api/scraped-deals/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res);
+}
+
 export async function deletePropertyById(id: string) {
   const res = await fetch(`${BASE}/api/properties/${encodeURIComponent(id)}`, {
     method: 'DELETE',

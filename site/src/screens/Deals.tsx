@@ -1,7 +1,7 @@
 
 // src/screens/Deals.tsx
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
-import { getDeals, getDashboardSummary, updatePropertyBasic, deletePropertyById, sendAgentOffer } from '../api.tsx';
+import { getDeals, getDashboardSummary, updatePropertyBasic, deletePropertyById, sendAgentOffer, updateScrapedDeal } from '../api.tsx';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Button, Stack, Chip, Snackbar, Alert, TextField, Tabs, Tab,
@@ -1011,7 +1011,7 @@ const cleanAddress = (address?: string | null): string => {
           city: editDraft.city ?? null,
           state: editDraft.state ?? null,
           zip: editDraft.zip ?? null,
-      
+
           // pricing / valuation
           listingPrice: editDraft.listingPrice ?? (editDraft.price ?? null),
           amv: editDraft.amv ?? null,
@@ -1019,13 +1019,13 @@ const cleanAddress = (address?: string | null): string => {
           chase_value: editDraft.chase_value ?? null,
           movoto_adjusted: editDraft.movoto_adjusted ?? null,
           movoto_value: editDraft.movoto_value ?? null,
-      
+
           // details
           beds: editDraft.beds ?? null,
           baths: editDraft.baths ?? null,
           squareFeet: (editDraft.squareFeet ?? editDraft.sqft) ?? null,
           built: (editDraft as any).built ?? null,
-      
+
           // agent
           agentName: editDraft.agentName ?? null,
           agentPhone: editDraft.agentPhone ?? null,
@@ -1035,7 +1035,22 @@ const cleanAddress = (address?: string | null): string => {
     setRows(cur => cur.map(x => (getId(x) === id ? { ...x, ...payload } : x)));
 
     try {
-      await updatePropertyBasic(String(id), payload);
+      // Use updateScrapedDeal for ScrapedDeal collection (Deals page data)
+      await updateScrapedDeal(String(id), {
+        fullAddress: payload.fullAddress,
+        address: payload.address,
+        city: payload.city,
+        state: payload.state,
+        zip: payload.zip,
+        listingPrice: payload.listingPrice,
+        amv: payload.amv,
+        beds: payload.beds,
+        baths: payload.baths,
+        sqft: payload.squareFeet,
+        agentName: payload.agentName,
+        agentPhone: payload.agentPhone,
+        agentEmail: payload.agentEmail,
+      });
       setToast({ open: true, msg: 'Changes saved', sev: 'success' });
       closeEdit();
     } catch (e: any) {

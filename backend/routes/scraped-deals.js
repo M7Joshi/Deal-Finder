@@ -532,6 +532,60 @@ router.post('/save', async (req, res) => {
   }
 });
 
+// PUT /api/scraped-deals/:id - Update a single deal
+router.put('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const body = req.body || {};
+
+    // Build update object - only include fields that are provided
+    const updateData = {};
+
+    // Address fields
+    if (body.fullAddress != null) updateData.fullAddress = String(body.fullAddress);
+    if (body.address != null) updateData.address = String(body.address);
+    if (body.city != null) updateData.city = String(body.city);
+    if (body.state != null) updateData.state = String(body.state).toUpperCase();
+    if (body.zip != null) updateData.zip = String(body.zip);
+
+    // Pricing fields
+    if (body.listingPrice != null) updateData.listingPrice = Number(body.listingPrice) || null;
+    if (body.amv != null) updateData.amv = Number(body.amv) || null;
+
+    // Property details
+    if (body.beds != null) updateData.beds = Number(body.beds) || null;
+    if (body.baths != null) updateData.baths = Number(body.baths) || null;
+    if (body.sqft != null) updateData.sqft = Number(body.sqft) || null;
+
+    // Agent fields
+    if (body.agentName != null) updateData.agentName = body.agentName || null;
+    if (body.agentPhone != null) updateData.agentPhone = body.agentPhone || null;
+    if (body.agentEmail != null) updateData.agentEmail = body.agentEmail || null;
+    if (body.brokerage != null) updateData.brokerage = body.brokerage || null;
+
+    // Update fullAddress_ci if fullAddress changed
+    if (updateData.fullAddress) {
+      updateData.fullAddress_ci = updateData.fullAddress.toLowerCase();
+    }
+
+    const result = await ScrapedDeal.findByIdAndUpdate(
+      id,
+      { $set: updateData },
+      { new: true }
+    );
+
+    if (!result) {
+      return res.status(404).json({ ok: false, error: 'Deal not found' });
+    }
+
+    L.info('Updated scraped deal', { id, fields: Object.keys(updateData) });
+    res.json({ ok: true, deal: result });
+  } catch (err) {
+    L.error('Failed to update scraped deal', { error: err?.message });
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to update deal' });
+  }
+});
+
 // DELETE /api/scraped-deals/:id - Delete a single deal
 router.delete('/:id', async (req, res) => {
   try {
@@ -672,9 +726,15 @@ router.get('/stats', async (req, res) => {
     ]);
     const withAmv = await ScrapedDeal.countDocuments({ ...stateFilter, amv: { $ne: null, $gt: 0 } });
     // Exclude apartments from deals count (same filter as /deals endpoint)
+    // Only count deals in 'new' stage (not moved to email_sent, follow_up, deal_status)
     const dealsCount = await ScrapedDeal.countDocuments({
       ...stateFilter,
       isDeal: true,
+      $or: [
+        { dealStage: 'new' },
+        { dealStage: { $exists: false } },
+        { dealStage: null }
+      ],
       fullAddress: { $not: { $regex: /#\s*\d|apt\.?\s*\d|unit\s*\d|suite\s*\d|ste\.?\s*\d/i } }
     });
 
@@ -702,15 +762,23 @@ router.get('/stats', async (req, res) => {
 // Requirements: AMV >= 2x LP AND AMV > $200,000
 // Filtered by user's allowed states
 // Excludes apartments (addresses with #, Apt, Unit, Suite patterns)
+// Only shows deals in 'new' stage (excludes those moved to email_sent, follow_up, deal_status)
 router.get('/deals', async (req, res) => {
   try {
     const { source, state, limit = 100, skip = 0 } = req.query;
 
     // Start with user's state filter + isDeal requirement
     // isDeal already includes the AMV > $200,000 check
+    // Only show deals in 'new' stage - exclude deals moved to other pipeline stages
     const filter = {
       ...req.stateFilter,
       isDeal: true,
+      // Only show deals that haven't been moved to another stage
+      $or: [
+        { dealStage: 'new' },
+        { dealStage: { $exists: false } },
+        { dealStage: null }
+      ],
       // Exclude apartments - addresses containing unit/apt patterns
       // Matches: #3, #3b, Apt 1, Apt. 1, Unit 2, Suite 3, Ste 4, Ste. 5
       fullAddress: { $not: { $regex: /#\s*\d|apt\.?\s*\d|unit\s*\d|suite\s*\d|ste\.?\s*\d/i } }
@@ -777,14 +845,22 @@ router.post('/recalculate', async (_req, res) => {
 // GET /api/scraped-deals/deals-with-agents - Get deals with agent information
 // Agent details are now stored directly in ScrapedDeal, with fallback to Property collection
 // Excludes apartments (addresses with #, Apt, Unit, Suite patterns)
+// Only shows deals in 'new' stage (excludes those moved to email_sent, follow_up, deal_status)
 router.get('/deals-with-agents', async (req, res) => {
   try {
     const { source, state, limit = 100, skip = 0 } = req.query;
 
     // Start with user's state filter + isDeal requirement
+    // Only show deals in 'new' stage - exclude deals moved to other pipeline stages
     const matchFilter = {
       ...req.stateFilter,
       isDeal: true,
+      // Only show deals that haven't been moved to another stage
+      $or: [
+        { dealStage: 'new' },
+        { dealStage: { $exists: false } },
+        { dealStage: null }
+      ],
       // Exclude apartments - addresses containing unit/apt patterns
       fullAddress: { $not: { $regex: /#\s*\d|apt\.?\s*\d|unit\s*\d|suite\s*\d|ste\.?\s*\d/i } }
     };

@@ -404,10 +404,16 @@ export async function lookupSingleAddressInternal(address, forceDirect = false) 
     return result;
   } catch (proxyError) {
     // Check if error is proxy-related (selector not found = page blocked/didn't load)
+    // Also include tunnel/connection errors which indicate proxy failure
     const isProxyBlockError = proxyError.message.includes('#address') ||
                               proxyError.message.includes('selector') ||
                               proxyError.message.includes('timeout') ||
-                              proxyError.message.includes('Navigation');
+                              proxyError.message.includes('Navigation') ||
+                              proxyError.message.includes('ERR_TUNNEL_CONNECTION_FAILED') ||
+                              proxyError.message.includes('ERR_PROXY_CONNECTION_FAILED') ||
+                              proxyError.message.includes('ERR_CONNECTION_REFUSED') ||
+                              proxyError.message.includes('ECONNREFUSED') ||
+                              proxyError.message.includes('net::ERR_');
 
     if (isProxyBlockError) {
       L.warn('Proxy attempt failed, retrying with direct connection', {
