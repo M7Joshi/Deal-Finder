@@ -40,7 +40,7 @@ const ScrapedDealSchema = new mongoose.Schema({
   // Deal Pipeline Tracking
   dealStage: {
     type: String,
-    enum: ['new', 'email_sent', 'follow_up', 'deal_status'],
+    enum: ['new', 'email_sent', 'follow_up', 'deal_status', 'rejected'],
     default: 'new'
   },
   dealStatus: {

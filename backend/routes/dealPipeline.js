@@ -59,12 +59,19 @@ router.put('/move/:id', async (req, res) => {
     const { id } = req.params;
     const { toStage, dealStatus, followUpDate, note } = req.body;
 
-    const validStages = ['new', 'email_sent', 'follow_up', 'deal_status'];
+    console.log('[dealPipeline] Move request:', { id, toStage });
+
+    const validStages = ['new', 'email_sent', 'follow_up', 'deal_status', 'rejected'];
     if (!validStages.includes(toStage)) {
       return res.status(400).json({ error: 'Invalid stage' });
     }
 
     const updateData = { dealStage: toStage };
+
+    // Set timestamp for rejected deals
+    if (toStage === 'rejected') {
+      updateData.rejectedAt = new Date();
+    }
 
     // Set timestamp for when moved to each stage
     if (toStage === 'email_sent') {
@@ -81,36 +88,46 @@ router.put('/move/:id', async (req, res) => {
       }
     }
 
-    // Add note if provided
-    if (note) {
-      const deal = await ScrapedDeal.findById(id);
-      if (deal) {
-        deal.followUpNotes = deal.followUpNotes || [];
-        deal.followUpNotes.push({
-          note,
-          createdAt: new Date(),
-          createdBy: null
-        });
-        Object.assign(deal, updateData);
-        await deal.save();
-        return res.json({ success: true, deal });
-      }
+    // Try to find the deal - support both ObjectId and fullAddress lookup
+    let deal = null;
+    const mongoose = await import('mongoose');
+    const isValidObjectId = mongoose.default.Types.ObjectId.isValid(id);
+
+    if (isValidObjectId) {
+      // Try by ObjectId first
+      deal = await ScrapedDeal.findById(id);
     }
 
-    const deal = await ScrapedDeal.findByIdAndUpdate(
-      id,
-      { $set: updateData },
-      { new: true }
-    );
+    if (!deal) {
+      // Fallback: try to find by fullAddress_ci (case-insensitive address match)
+      const addressLower = String(id).toLowerCase().trim();
+      deal = await ScrapedDeal.findOne({ fullAddress_ci: addressLower });
+    }
 
     if (!deal) {
+      console.log('[dealPipeline] Deal not found:', { id, isValidObjectId });
       return res.status(404).json({ error: 'Deal not found' });
     }
 
+    // Add note if provided
+    if (note) {
+      deal.followUpNotes = deal.followUpNotes || [];
+      deal.followUpNotes.push({
+        note,
+        createdAt: new Date(),
+        createdBy: null
+      });
+    }
+
+    // Apply updates
+    Object.assign(deal, updateData);
+    await deal.save();
+
+    console.log('[dealPipeline] Deal moved successfully:', { id: deal._id, toStage });
     res.json({ success: true, deal });
   } catch (error) {
-    console.error('Error moving deal:', error);
-    res.status(500).json({ error: 'Failed to move deal' });
+    console.error('Error moving deal:', error?.message || error);
+    res.status(500).json({ error: error?.message || 'Failed to move deal' });
   }
 });
 

@@ -519,7 +519,7 @@ console.debug('[Deals:onSaveAgentOnly] fallback UI values', { finalName, finalPh
     }
     try {
       setEdit(id, { busy: true });
-      await updatePropertyBasic(id, { agentName: finalName, agentPhone: finalPhone, agentEmail: finalEmail });
+      await updateScrapedDeal(id, { agentName: finalName, agentPhone: finalPhone, agentEmail: finalEmail });
       setRows(cur => cur.map(x => (getId(x) === id ? { ...x, agentName: finalName, agentPhone: finalPhone, agentEmail: finalEmail } : x)));
       setEdit(id, { busy: false });
       setToast({ open: true, msg: 'Agent saved', sev: 'success' });
@@ -914,14 +914,17 @@ const cleanAddress = (address?: string | null): string => {
     setDeleteDialog({ open: true, deal: r });
   };
 
-  // Confirm delete from dialog
+  // Confirm delete from dialog - moves to 'rejected' stage instead of deleting
+  // This prevents the automation from re-creating the deal on next scrape
   const confirmDelete = async () => {
     const r = deleteDialog.deal;
     if (!r) return;
 
     const id = getId(r);
+    console.log('[Deals] confirmDelete (reject):', { id, deal_id: r?._id, fullAddress: r?.fullAddress });
+
     if (!id) {
-      setToast({ open: true, msg: 'Cannot delete: missing id', sev: 'error' });
+      setToast({ open: true, msg: 'Cannot reject: missing id', sev: 'error' });
       setDeleteDialog({ open: false, deal: null });
       return;
     }
@@ -930,18 +933,25 @@ const cleanAddress = (address?: string | null): string => {
     const prev = rows;
     setRows(cur => cur.filter(x => getId(x) !== id));
     try {
-      const res = await apiFetch(`/api/scraped-deals/${id}`, {
-        method: 'DELETE',
+      // Move to 'rejected' stage instead of deleting
+      // This keeps the record in DB but hidden from all pages
+      // URL encode the ID in case it's an address string with special characters
+      const res = await apiFetch(`/api/deal-pipeline/move/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toStage: 'rejected' })
       });
       const data = await res.json();
-      if (data.ok || res.ok) {
-        setToast({ open: true, msg: 'Deal deleted', sev: 'success' });
+      if (data.success || data.deal) {
+        setToast({ open: true, msg: 'Deal rejected', sev: 'success' });
       } else {
-        setToast({ open: true, msg: data.error || 'Failed to delete', sev: 'error' });
+        console.error('[Deals] Reject failed:', data);
+        setToast({ open: true, msg: data.error || 'Failed to reject deal', sev: 'error' });
       }
     } catch (e: any) {
+      console.error('[Deals] Reject exception:', e);
       setRows(prev);
-      setToast({ open: true, msg: `Delete failed: ${e?.message || 'unknown error'}`, sev: 'error' });
+      setToast({ open: true, msg: `Reject failed: ${e?.message || 'unknown error'}`, sev: 'error' });
     } finally {
       setDeleting(false);
       setDeleteDialog({ open: false, deal: null });
@@ -959,6 +969,8 @@ const cleanAddress = (address?: string | null): string => {
     if (!deal || !toStage) return;
 
     const id = getId(deal);
+    console.log('[Deals] confirmMove:', { id, toStage, deal_id: deal?._id, fullAddress: deal?.fullAddress });
+
     if (!id) {
       setToast({ open: true, msg: 'Cannot move: missing id', sev: 'error' });
       setMoveDialog({ open: false, deal: null, toStage: '' });
@@ -967,7 +979,8 @@ const cleanAddress = (address?: string | null): string => {
 
     setMoving(true);
     try {
-      const res = await apiFetch(`/api/deal-pipeline/move/${id}`, {
+      // URL encode the ID in case it's an address string with special characters
+      const res = await apiFetch(`/api/deal-pipeline/move/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ toStage })
@@ -980,13 +993,16 @@ const cleanAddress = (address?: string | null): string => {
         const stageLabels: Record<string, string> = {
           'email_sent': 'Email Sent',
           'follow_up': 'Follow Up',
-          'deal_status': 'Deal Status'
+          'deal_status': 'Deal Status',
+          'rejected': 'Rejected'
         };
         setToast({ open: true, msg: `Moved to ${stageLabels[toStage] || toStage}`, sev: 'success' });
       } else {
+        console.error('[Deals] Move failed:', data);
         setToast({ open: true, msg: data.error || 'Failed to move deal', sev: 'error' });
       }
     } catch (e: any) {
+      console.error('[Deals] Move exception:', e);
       setToast({ open: true, msg: `Move failed: ${e?.message || 'unknown error'}`, sev: 'error' });
     } finally {
       setMoving(false);

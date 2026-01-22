@@ -4,6 +4,7 @@ import AgentSend from '../models/AgentSend.js';
 import connectDB from '../db/db.js';
 import runAgentOffers from '../vendors/agent_offers.js';
 import { sendOffer } from '../services/emailService.js';
+import ScrapedDeal from '../models/ScrapedDeal.js';
 
 // --- unified money parsing + UI-matching offer calc ---
 const toNum = (v) => {
@@ -185,6 +186,27 @@ export async function sendNow(req, res) {
         },
       }
     );
+
+    // Also update ScrapedDeal collection to move deal to 'email_sent' stage
+    // This ensures the deal is removed from the Deals page after sending email
+    if (prop.fullAddress) {
+      const fullAddress_ci = prop.fullAddress.trim().toLowerCase();
+      await ScrapedDeal.updateOne(
+        { fullAddress_ci },
+        {
+          $set: {
+            agentEmailSent: true,
+            emailSentAt: new Date(),
+            emailMessageId: result?.messageId || null,
+            dealStage: 'email_sent',
+            movedToEmailSentAt: new Date(),
+            agentName: agentName || undefined,
+            agentPhone: agentPhone || undefined,
+            agentEmail: agentEmail || undefined,
+          }
+        }
+      );
+    }
 
     res.json({ ok: true, messageId: result?.messageId || null, propertyId: String(prop._id) });
   } catch (err) {
