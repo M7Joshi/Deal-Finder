@@ -54,9 +54,9 @@ const deadProxies = new Set();
 const PROXY_COOLDOWN_MS = 120000;
 
 function isDirectMode() {
-  // Default to direct mode (skip proxy) since proxy is failing with timeouts
-  // Set BOFA_PROXY_MODE=paid to re-enable proxy
-  const mode = (process.env.BOFA_PROXY_MODE || 'direct').toLowerCase();
+  // Default to using proxy (same as bofa.js)
+  // Set BOFA_PROXY_MODE=direct to disable proxy
+  const mode = (process.env.BOFA_PROXY_MODE || '').toLowerCase();
   const usePaid = process.env.BOFA_USE_PAID;
   return mode === 'direct' || mode === 'off' || mode === 'none' || usePaid === '0' || usePaid === 'false';
 }
