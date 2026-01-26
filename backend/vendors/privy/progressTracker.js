@@ -61,14 +61,21 @@ export async function loadProgress() {
     });
     if (doc) {
       // Convert MongoDB doc to our progress format
+      // Ensure completedStates is always a valid array
+      let completedStates = doc.completedStates || doc.processedCities || [];
+      if (!Array.isArray(completedStates)) {
+        console.warn('[PrivyProgress] completedStates was not an array, resetting to []');
+        completedStates = [];
+      }
+
       const progress = {
         lastState: doc.lastState || null,
         lastCityIndex: doc.currentCityIndex ?? -1,
         currentState: doc.currentState || null,
-        completedStates: doc.completedStates || doc.processedCities || [], // Prefer completedStates, fallback to processedCities for migration
+        completedStates: completedStates,
         lastUpdated: doc.updatedAt?.toISOString() || null,
         totalCitiesProcessed: doc.totalScraped || 0,
-        totalStatesCompleted: doc.currentStateIndex || 0,
+        totalStatesCompleted: completedStates.length, // Use actual array length
         cycleCount: doc.cycleCount || 0,
         filterCycleIndex: doc.filterCycleIndex || 0,
       };
@@ -110,45 +117,77 @@ export function loadProgressSync() {
  * - currentState, currentCityIndex, completedStates, totalScraped, cycleCount, lastState
  */
 export async function saveProgress(progress, options = {}) {
-  try {
-    // Build update object - only include fields we want to update
-    const updateFields = {
-      currentState: progress.currentState,
-      currentCityIndex: progress.lastCityIndex,
-      currentStateIndex: progress.totalStatesCompleted,
-      completedStates: progress.completedStates,
-      processedCities: progress.completedStates, // Keep for backward compatibility
-      totalScraped: progress.totalCitiesProcessed,
-      cycleCount: progress.cycleCount,
-      lastState: progress.lastState,
-      updatedAt: new Date(),
-    };
+  const maxRetries = 3;
+  let lastError = null;
 
-    // Only update filterCycleIndex if explicitly requested (e.g., from startNewCycle)
-    if (options.updateFilterCycleIndex) {
-      updateFields.filterCycleIndex = progress.filterCycleIndex;
-      console.log('[PrivyProgress] Updating filterCycleIndex to:', progress.filterCycleIndex);
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      // Build update object - only include fields we want to update
+      const updateFields = {
+        currentState: progress.currentState,
+        currentCityIndex: progress.lastCityIndex,
+        currentStateIndex: progress.totalStatesCompleted,
+        completedStates: Array.isArray(progress.completedStates) ? [...progress.completedStates] : [],
+        processedCities: Array.isArray(progress.completedStates) ? [...progress.completedStates] : [],
+        totalScraped: progress.totalCitiesProcessed,
+        cycleCount: progress.cycleCount,
+        lastState: progress.lastState,
+        updatedAt: new Date(),
+      };
+
+      // Only update filterCycleIndex if explicitly requested (e.g., from startNewCycle)
+      if (options.updateFilterCycleIndex) {
+        updateFields.filterCycleIndex = progress.filterCycleIndex;
+        console.log('[PrivyProgress] Updating filterCycleIndex to:', progress.filterCycleIndex);
+      }
+
+      const result = await ScraperProgress.findOneAndUpdate(
+        { scraper: SCRAPER_NAME },
+        { $set: updateFields },
+        { upsert: true, new: true }
+      );
+
+      // VERIFY the save worked
+      if (!result) {
+        throw new Error('findOneAndUpdate returned null');
+      }
+
+      // Verify completedStates was actually saved
+      const savedStatesCount = result.completedStates?.length || 0;
+      const expectedStatesCount = progress.completedStates?.length || 0;
+
+      if (savedStatesCount !== expectedStatesCount) {
+        console.warn(`[PrivyProgress] WARNING: completedStates mismatch! Expected ${expectedStatesCount}, got ${savedStatesCount}`);
+      }
+
+      // Success - log summary (reduced verbosity)
+      if (options.updateFilterCycleIndex || progress.completedStates?.length > 0) {
+        console.log('[PrivyProgress] Saved:', {
+          completedStates: savedStatesCount,
+          filterCycleIndex: result.filterCycleIndex,
+          currentState: progress.currentState,
+        });
+      }
+
+      return; // Success, exit function
+    } catch (e) {
+      lastError = e;
+      console.error(`[PrivyProgress] Save attempt ${attempt}/${maxRetries} failed:`, e.message);
+
+      if (attempt < maxRetries) {
+        // Wait before retry (exponential backoff)
+        await new Promise(r => setTimeout(r, 1000 * attempt));
+      }
     }
-
-    // DEBUG: Log what we're about to save
-    console.log('[PrivyProgress] SAVING to MongoDB:', {
-      currentState: progress.currentState,
-      completedStates: progress.completedStates?.length || 0,
-      totalCitiesProcessed: progress.totalCitiesProcessed,
-      updatingFilterCycleIndex: options.updateFilterCycleIndex || false,
-    });
-
-    const result = await ScraperProgress.findOneAndUpdate(
-      { scraper: SCRAPER_NAME },
-      { $set: updateFields },
-      { upsert: true, new: true }
-    );
-
-    // DEBUG: Log what was actually saved
-    console.log('[PrivyProgress] SAVED - filterCycleIndex in DB:', result?.filterCycleIndex);
-  } catch (e) {
-    console.warn('[PrivyProgress] Failed to save progress to MongoDB:', e.message);
   }
+
+  // All retries failed - log critical error
+  console.error('[PrivyProgress] CRITICAL: Failed to save progress after all retries!', lastError?.message);
+  console.error('[PrivyProgress] Progress data that failed to save:', {
+    completedStates: progress.completedStates,
+    currentState: progress.currentState,
+    filterCycleIndex: progress.filterCycleIndex,
+  });
 }
 
 /**
@@ -170,6 +209,11 @@ export async function markCityComplete(progress, state, cityIndex, cityUrl) {
  * Mark a state as fully completed
  */
 export async function markStateComplete(progress, state) {
+  // Ensure completedStates is an array
+  if (!Array.isArray(progress.completedStates)) {
+    progress.completedStates = [];
+  }
+
   if (!progress.completedStates.includes(state)) {
     progress.completedStates.push(state);
     progress.completedStates.sort(); // Keep alphabetical
@@ -181,6 +225,7 @@ export async function markStateComplete(progress, state) {
   progress.lastUpdated = new Date().toISOString();
 
   console.log(`[PrivyProgress] Completed state: ${state} (${progress.totalStatesCompleted} total states completed)`);
+  console.log(`[PrivyProgress] All completed states: ${progress.completedStates.join(', ')}`);
   await saveProgress(progress);
   return progress;
 }
