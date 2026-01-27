@@ -155,7 +155,7 @@ async function waitForResultsAny(page, { timeout = 40000 } = {}) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
     const seen = await page.evaluate(() => {
-      const sel = '#section-comparables .hvt-comparables__avg-est, .hvt-estimate__value';
+      const sel = '#section-comparables .hvt-comparables__avg-est, .hvt-estimate__value, [data-testid="estimated-home-value"]';
       if (document.querySelector(sel)) return true;
       const textHit = !!Array.from(document.querySelectorAll('body *'))
         .slice(0, 5000)
