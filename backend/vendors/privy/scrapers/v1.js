@@ -2636,7 +2636,15 @@ await page.evaluate(() => {
     // This prevents stale data from previous state appearing in next state's search results
     LState.info('🔄 Restarting browser to clear SPA cache before next state...');
     try {
-      const { initSharedBrowser, ensureVendorPageSetup, closeSharedBrowser } = await import('../../../utils/browser.js');
+      const { initSharedBrowser, ensureVendorPageSetup, closeSharedBrowser, clearBrowserCache } = await import('../../../utils/browser.js');
+
+      // Clear browser cache via CDP before closing to free /tmp space
+      try {
+        await clearBrowserCache(page);
+        LState.info('Browser cache cleared via CDP');
+      } catch (cacheErr) {
+        LState.warn('Cache clear error (non-fatal)', { error: cacheErr?.message });
+      }
 
       // Close old browser completely
       try {

@@ -14,7 +14,7 @@ const ScrapedDealSchema = new mongoose.Schema({
   amv: { type: Number, default: null },          // BofA AMV
 
   // Source tracking
-  source: { type: String, enum: ['privy', 'redfin'], required: true },
+  source: { type: String, enum: ['privy', 'privy-flip', 'privy-Tear', 'redfin'], required: true },
 
   // Optional property details
   beds: { type: Number, default: null },

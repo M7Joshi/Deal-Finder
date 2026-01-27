@@ -49,33 +49,65 @@ function cleanupChromeCache() {
     const tmpDir = os.tmpdir();
     const entries = fs.readdirSync(tmpDir);
     let cleaned = 0;
+    let totalFreed = 0;
     for (const entry of entries) {
       // Clean up old Chrome profile directories and puppeteer temp files
       if (entry.startsWith('df-shared-') ||
           entry.startsWith('deal-finder-') ||
           entry.startsWith('puppeteer_') ||
           entry.startsWith('.org.chromium.') ||
-          entry.startsWith('chrome_')) {
+          entry.startsWith('chrome_') ||
+          entry.startsWith('Crashpad') ||
+          entry.startsWith('.com.google.Chrome') ||
+          entry.startsWith('snap.chromium')) {
         const fullPath = path.join(tmpDir, entry);
         try {
           const stat = fs.statSync(fullPath);
-          // Only clean if older than 30 minutes
-          if (Date.now() - stat.mtimeMs > 30 * 60 * 1000) {
+          // Clean if older than 10 minutes (was 30)
+          if (Date.now() - stat.mtimeMs > 10 * 60 * 1000) {
             fs.rmSync(fullPath, { recursive: true, force: true });
             cleaned++;
           }
         } catch {}
       }
     }
-    if (cleaned > 0) console.log(`[browser] Cleaned ${cleaned} old temp directories`);
+    // Also clean browser cache directories inside the shared profile
+    try {
+      const cacheDir = path.join(SHARED_USER_DATA_DIR, 'Default', 'Cache');
+      if (fs.existsSync(cacheDir)) {
+        fs.rmSync(cacheDir, { recursive: true, force: true });
+        fs.mkdirSync(cacheDir, { recursive: true });
+        cleaned++;
+      }
+    } catch {}
+    if (cleaned > 0) console.log(`[browser] Cleaned ${cleaned} temp directories/caches`);
   } catch (e) {
     console.log('[browser] Cache cleanup error:', e?.message);
   }
 }
 
-// Run cleanup on startup and periodically (every 10 minutes)
+// Run cleanup on startup and periodically (every 5 minutes - was 10)
 cleanupChromeCache();
-setInterval(cleanupChromeCache, 10 * 60 * 1000);
+setInterval(cleanupChromeCache, 5 * 60 * 1000);
+
+/**
+ * Clear browser cache via CDP (call this between scraping batches to prevent /tmp overflow)
+ * @param {import('puppeteer').Page} page - Any active page from the browser
+ */
+export async function clearBrowserCache(page) {
+  if (!page) return;
+  try {
+    const client = await page.createCDPSession();
+    // Only clear browser cache (images, scripts, etc.) - NOT cookies to preserve login
+    await client.send('Network.clearBrowserCache');
+    // Note: NOT clearing cookies or storage to preserve Privy login session
+    console.log('[browser] Browser cache cleared via CDP (cookies preserved)');
+  } catch (e) {
+    console.log('[browser] Cache clear error (non-fatal):', e?.message);
+  }
+  // Also run filesystem cleanup
+  cleanupChromeCache();
+}
 // ---- Shared browser guard (singleton) ----
 function isOpen(b) { try { return !!b && b.isConnected(); } catch { return false; } }
 
