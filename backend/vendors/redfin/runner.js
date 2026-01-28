@@ -12,6 +12,10 @@ import { control } from '../runAutomation.js';
 // Track URLs already processed to avoid duplicate processing entirely
 const processedPropertyUrls = new Set();
 
+// Track city failures to skip problematic cities
+const cityFailures = new Map(); // cityKey -> failure count
+const MAX_CITY_FAILURES = 3; // Skip city after this many failures
+
 // Close all shared browsers
 async function closeSharedBrowser() {
   await Promise.all([
@@ -73,6 +77,27 @@ export async function resetProgress() {
 
 // Whether to use deep scraping for agent details (default ON to get phone/email)
 const USE_AGENT_ENRICHMENT = String(process.env.REDFIN_ENRICH_AGENTS || '1') === '1';
+
+// Timeout wrapper for agent extraction (prevents hanging)
+const AGENT_EXTRACTION_TIMEOUT = 45000; // 45 seconds max per property
+async function withTimeout(promise, ms, fallback = null) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('TIMEOUT')), ms);
+  });
+  try {
+    const result = await Promise.race([promise, timeout]);
+    clearTimeout(timer);
+    return result;
+  } catch (e) {
+    clearTimeout(timer);
+    if (e.message === 'TIMEOUT') {
+      console.log('[Redfin] Agent extraction timed out, skipping...');
+      return fallback;
+    }
+    throw e;
+  }
+}
 
 // State -> Cities mapping with Redfin city IDs - EXPANDED to match Privy's city list (654 cities!)
 const STATE_CITIES = {
@@ -151,11 +176,24 @@ function filterHome(home, stateCode) {
 
 // Process a single city using the API
 async function runCity(stateCode, city) {
+  const cityKey = `${stateCode}-${city.id}`;
   console.log(`\n[Redfin] === City: ${city.name}, ${stateCode} ===`);
+
+  // Check if city has failed too many times - skip it
+  const failures = cityFailures.get(cityKey) || 0;
+  if (failures >= MAX_CITY_FAILURES) {
+    console.log(`[Redfin] ⚠️ Skipping ${city.name} - failed ${failures} times previously`);
+    return 0;
+  }
 
   try {
     // Use high limit to get ALL available homes from each city (API supports up to ~5000)
-    const homes = await fetchListingsFromApi(city.id, stateCode, { limit: 5000 });
+    // Add timeout to prevent API hanging
+    const homes = await withTimeout(
+      fetchListingsFromApi(city.id, stateCode, { limit: 5000 }),
+      60000, // 60 second timeout for API call
+      []
+    );
     console.log(`[Redfin] API returned ${homes.length} homes for ${city.name}`);
 
     let saved = 0;
@@ -202,10 +240,10 @@ async function runCity(stateCode, city) {
       let agentEmail = null;
       let brokerage = home.brokerName || null;
 
-      // Optional: Deep scrape for agent details (slower)
+      // Optional: Deep scrape for agent details (with timeout to prevent hanging)
       if (USE_AGENT_ENRICHMENT && url) {
         try {
-          const enriched = await extractAgentDetails(url);
+          const enriched = await withTimeout(extractAgentDetails(url), AGENT_EXTRACTION_TIMEOUT, null);
           if (enriched) {
             agentName = enriched.agentName || agentName;
             agentPhone = enriched.agentPhone || agentPhone;
@@ -213,7 +251,7 @@ async function runCity(stateCode, city) {
             brokerage = enriched.brokerage || brokerage;
           }
         } catch (e) {
-          // Silent fail
+          // Silent fail - continue to next property
         }
       }
 
@@ -259,9 +297,14 @@ async function runCity(stateCode, city) {
     }
 
     console.log(`[Redfin] City ${city.name} done: ${saved} saved, ${filtered} filtered`);
+    // Reset failure count on success
+    cityFailures.delete(cityKey);
     return saved;
   } catch (err) {
-    console.error(`[Redfin] Error processing ${city.name}: ${err.message}`);
+    // Track failures to skip problematic cities
+    const prevFailures = cityFailures.get(cityKey) || 0;
+    cityFailures.set(cityKey, prevFailures + 1);
+    console.error(`[Redfin] Error processing ${city.name} (failure #${prevFailures + 1}): ${err.message}`);
     return 0;
   }
 }
