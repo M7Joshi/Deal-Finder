@@ -1112,23 +1112,15 @@ async function runPrivyWithBofA() {
           await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
           continue;
         } else {
-          // BofA is busy - use this idle time to run agent lookup
-          log.info(`PRIVY: BofA busy (${bofaCurrentSource}). Running agent lookup while waiting...`);
+          // BofA is busy - run agent lookup while waiting, then CONTINUE SCRAPING (don't wait)
+          log.info(`PRIVY: BofA busy (${bofaCurrentSource}). Running agent lookup, then continuing to scrape...`);
           await runPrivyAgentLookup();
-          // Small break after agent lookup before retrying BofA
-          await new Promise(r => setTimeout(r, 10000));
-          continue;
+          // Fall through to scrape more addresses (don't pause!)
         }
       }
 
-      // CHECK PAUSE THRESHOLD: If pending AMV is too high, WAIT instead of scraping more
-      if (pendingPrivyAMV >= SCRAPER_PAUSE_THRESHOLD) {
-        log.warn(`PRIVY: PAUSED - Pending AMV (${pendingPrivyAMV}) exceeds threshold (${SCRAPER_PAUSE_THRESHOLD}). Waiting for BofA to catch up...`);
-        // Run agent lookup while waiting
-        await runPrivyAgentLookup();
-        await new Promise(r => setTimeout(r, 30000)); // Wait 30s before rechecking
-        continue;
-      }
+      // REMOVED: SCRAPER_PAUSE_THRESHOLD check - scrapers now run continuously
+      // BofA will catch up while we keep scraping
 
       // Scrape more addresses (will stop when batch limit reached)
       log.info(`PRIVY: Scraping addresses...`);
@@ -1248,18 +1240,14 @@ async function runRedfinWithBofA() {
           await new Promise(r => setTimeout(r, BREAK_AFTER_CYCLE_MS));
           continue;
         } else {
-          // BofA is busy with Privy - check if we should pause or continue
-          log.info(`REDFIN: BofA busy (${bofaCurrentSource}).`);
-          // Fall through to check pause threshold below
+          // BofA is busy with Privy - CONTINUE SCRAPING (don't pause!)
+          log.info(`REDFIN: BofA busy (${bofaCurrentSource}). Continuing to scrape...`);
+          // Fall through to scrape more addresses
         }
       }
 
-      // CHECK PAUSE THRESHOLD: If pending AMV is too high, WAIT instead of scraping more
-      if (pendingRedfinAMV >= SCRAPER_PAUSE_THRESHOLD) {
-        log.warn(`REDFIN: PAUSED - Pending AMV (${pendingRedfinAMV}) exceeds threshold (${SCRAPER_PAUSE_THRESHOLD}). Waiting for BofA to catch up...`);
-        await new Promise(r => setTimeout(r, 30000)); // Wait 30s before rechecking
-        continue;
-      }
+      // REMOVED: SCRAPER_PAUSE_THRESHOLD check - scrapers now run continuously
+      // BofA will catch up while we keep scraping
 
       // Scrape more addresses (will stop when batch limit reached)
       log.info(`REDFIN: Scraping addresses...`);
@@ -1659,7 +1647,70 @@ async function guard(label, fn) {
   }
 }
 
-let isRunning = false;
+// SMART JOB TRACKING: Replace single isRunning flag with per-category tracking
+// This allows BofA to run in parallel with scrapers (they don't conflict)
+const runningJobCategories = new Map(); // category -> { startTime, jobs }
+const JOB_STUCK_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes - auto-reset if stuck
+
+// Job categories that CAN run in parallel with each other
+function getJobCategory(jobs) {
+  const jobSet = jobs instanceof Set ? jobs : new Set(Array.isArray(jobs) ? jobs : [jobs]);
+  // BofA/AMV jobs
+  if (jobSet.has('bofa') || jobSet.has('scraped_deals_amv')) return 'bofa_amv';
+  // Scraper jobs
+  if (jobSet.has('privy')) return 'privy_scraper';
+  if (jobSet.has('redfin')) return 'redfin_scraper';
+  // Other jobs
+  return 'other';
+}
+
+function isJobCategoryRunning(jobs) {
+  const category = getJobCategory(jobs);
+  const running = runningJobCategories.get(category);
+
+  if (!running) return false;
+
+  // Auto-reset if stuck for too long
+  const elapsed = Date.now() - running.startTime;
+  if (elapsed > JOB_STUCK_TIMEOUT_MS) {
+    log.warn(`Job category "${category}" was stuck for ${Math.round(elapsed / 60000)} minutes. Auto-resetting.`, {
+      category,
+      stuckJobs: running.jobs,
+      elapsedMs: elapsed
+    });
+    runningJobCategories.delete(category);
+    return false;
+  }
+
+  return true;
+}
+
+function markJobCategoryRunning(jobs) {
+  const category = getJobCategory(jobs);
+  runningJobCategories.set(category, {
+    startTime: Date.now(),
+    jobs: Array.from(jobs instanceof Set ? jobs : new Set([jobs]))
+  });
+}
+
+function markJobCategoryDone(jobs) {
+  const category = getJobCategory(jobs);
+  runningJobCategories.delete(category);
+}
+
+// Legacy compatibility - check if ANY job is running (for backward compat)
+function isAnyJobRunning() {
+  // Clean up any stuck jobs first
+  for (const [category, running] of runningJobCategories.entries()) {
+    const elapsed = Date.now() - running.startTime;
+    if (elapsed > JOB_STUCK_TIMEOUT_MS) {
+      log.warn(`Auto-clearing stuck job category: ${category}`, { elapsedMs: elapsed });
+      runningJobCategories.delete(category);
+    }
+  }
+  return runningJobCategories.size > 0;
+}
+
 let maintainPoolHandle = null;
 
 let __healthyPaidIPs = 0;
@@ -1718,8 +1769,14 @@ async function runAutomation(jobsInput = SELECTED_JOBS) {
     hasBofa: jobs.has('bofa')
   });
 
-  if (isRunning) {
-    log.warn('runAutomation is already running. Skipping this execution.');
+  // SMART CHECK: Only block if the SAME job category is already running
+  // This allows BofA to run while scrapers are running (they're different categories)
+  if (isJobCategoryRunning(jobs)) {
+    const category = getJobCategory(jobs);
+    log.warn(`runAutomation: Job category "${category}" is already running. Skipping.`, {
+      category,
+      requestedJobs: Array.from(jobs)
+    });
     return;
   }
 
@@ -1763,7 +1820,7 @@ async function runAutomation(jobsInput = SELECTED_JOBS) {
     }, 7 * 60 * 1000);
   }
 
-  isRunning = true; // Set the flag to true when the function starts
+  markJobCategoryRunning(jobs); // Mark this job category as running
   const reqMeta = getRequestedJobsRaw();
   log.start('Starting automations…', {
     requestedJobs: reqMeta.raw,
@@ -2446,8 +2503,8 @@ if (jobs.has('home_valuations')) {
   } finally {
     // stop maintenance loop
     try { if (maintainPoolHandle) clearInterval(maintainPoolHandle); } catch {}
-    isRunning = false;
-    progressTracker.isRunning = false;
+    markJobCategoryDone(jobs); // Mark this job category as done
+    progressTracker.isRunning = isAnyJobRunning(); // Update based on any remaining jobs
     homeValuationsQueue = null;
     currentListingsQueue = null;
     currentGlobalLimiter = null;
@@ -2538,7 +2595,9 @@ progressTracker._requestStop = async function requestStop() {
   // Set abort flag immediately - this is checked by all scrapers
   control.abort = true;
   schedulerEnabled = false;
-  isRunning = false;
+
+  // Clear ALL running job categories on force stop
+  runningJobCategories.clear();
 
   // Update status immediately so UI shows stopped
   progressTracker.isRunning = false;
