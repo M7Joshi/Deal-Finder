@@ -14,6 +14,7 @@ async function getSharedBrowser() {
   if (!sharedBrowser || !sharedBrowser.isConnected()) {
     sharedBrowser = await puppeteer.launch({
       headless: 'new',
+      protocolTimeout: 180000, // 3 minutes to prevent Network.enable timeout
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
     });
   }
