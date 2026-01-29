@@ -1797,13 +1797,18 @@ async function runAutomation(jobsInput = SELECTED_JOBS) {
     try {
       logProxy.pool('Warming proxy pool… (preferring paid when configured)');
       const minWarm = parsePositiveInt(process.env.PROXY_WARM_MIN_HEALTHY, 12);
-      count = await ensureHealthyPool({
+      // Add 30s overall timeout to prevent hanging
+      const warmupPromise = ensureHealthyPool({
         min: minWarm,
         sample: 800,
         concurrency: 60,
         timeout: 5000,
         preferPaidFirst: true
       });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Proxy warmup timeout (30s)')), 30000)
+      );
+      count = await Promise.race([warmupPromise, timeoutPromise]);
       __healthyPaidIPs = typeof count === 'number' ? count : 0;
       logProxy.pool('Proxy pool warm', { healthy: count, preferPaidFirst: true });
       recomputeGlobalConcurrency({ jobsCount: 1, needProxies: true });
